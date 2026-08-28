@@ -1,0 +1,656 @@
+<title>SERP Console Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&family=Source+Sans+3:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F5F6FB;
+    --surface: #FFFFFF;
+    --surface-2: #FBFBFE;
+    --border: #E2E4F0;
+    --border-strong: #CBCEE3;
+    --ink: #171A2E;
+    --ink-muted: #5B5F7A;
+    --ink-faint: #8A8EAC;
+    --accent: #4338CA;
+    --accent-ink: #FFFFFF;
+    --accent-tint: #ECEBFB;
+    --data-backend: #2563EB;
+    --data-backend-tint: #E7EFFE;
+    --data-claude: #8B3FE0;
+    --data-claude-tint: #F3E9FE;
+    --approval: #B45309;
+    --approval-tint: #FCEEDA;
+    --shadow: 0 1px 2px rgba(23,26,46,0.04), 0 8px 24px rgba(23,26,46,0.06);
+    --font-display: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --font-body: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10111C;
+      --surface: #181A29;
+      --surface-2: #1D2033;
+      --border: #2C2F45;
+      --border-strong: #3B3F5C;
+      --ink: #E9E9F3;
+      --ink-muted: #A2A5C2;
+      --ink-faint: #6D7093;
+      --accent: #A79EF5;
+      --accent-ink: #14152A;
+      --accent-tint: #232345;
+      --data-backend: #7CA6FF;
+      --data-backend-tint: #1B2740;
+      --data-claude: #CDA6FF;
+      --data-claude-tint: #2A2040;
+      --approval: #F0B860;
+      --approval-tint: #332612;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10111C;
+    --surface: #181A29;
+    --surface-2: #1D2033;
+    --border: #2C2F45;
+    --border-strong: #3B3F5C;
+    --ink: #E9E9F3;
+    --ink-muted: #A2A5C2;
+    --ink-faint: #6D7093;
+    --accent: #A79EF5;
+    --accent-ink: #14152A;
+    --accent-tint: #232345;
+    --data-backend: #7CA6FF;
+    --data-backend-tint: #1B2740;
+    --data-claude: #CDA6FF;
+    --data-claude-tint: #2A2040;
+    --approval: #F0B860;
+    --approval-tint: #332612;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 15.5px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 272px minmax(0,1fr);
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+
+  /* ---- Sidebar / TOC ---- */
+  .toc {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 20px 40px 28px;
+    border-right: 1px solid var(--border);
+  }
+  .toc-brand {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin: 0 0 2px;
+  }
+  .toc-sub {
+    font-size: 0.76rem;
+    color: var(--ink-faint);
+    margin: 0 0 22px;
+    letter-spacing: 0.02em;
+  }
+  .toc-group-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    margin: 20px 0 8px;
+  }
+  .toc-group-label:first-of-type { margin-top: 0; }
+  .toc nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+  .toc nav a {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    color: var(--ink-muted);
+    font-size: 0.86rem;
+    padding: 5px 8px;
+    border-radius: 6px;
+    text-decoration: none;
+  }
+  .toc nav a:hover { background: var(--surface-2); color: var(--ink); }
+  .toc nav a.active { background: var(--accent-tint); color: var(--accent); font-weight: 600; }
+  .toc nav a .num {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+    min-width: 1.4em;
+  }
+  .toc nav a.active .num { color: var(--accent); }
+
+  /* ---- Main content ---- */
+  main { padding: 48px 56px 120px; min-width: 0; }
+  header.page-head { max-width: 640px; margin-bottom: 56px; }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1.title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 2.5rem;
+    line-height: 1.12;
+    margin: 0 0 16px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  .lede { font-size: 1.05rem; color: var(--ink-muted); max-width: 58ch; margin: 0; }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 28px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 4px 10px 4px 8px;
+    border-radius: 100px;
+    white-space: nowrap;
+  }
+  .badge .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .badge.backend { background: var(--data-backend-tint); color: var(--data-backend); }
+  .badge.backend .dot { background: var(--data-backend); }
+  .badge.claude { background: var(--data-claude-tint); color: var(--data-claude); }
+  .badge.claude .dot { background: var(--data-claude); }
+  .badge.approval { background: var(--approval-tint); color: var(--approval); }
+  .badge.approval .dot { background: var(--approval); }
+
+  section.block { max-width: 900px; margin-bottom: 64px; }
+  h2.block-title {
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0 0 6px;
+    text-wrap: balance;
+  }
+  .block-sub { color: var(--ink-muted); margin: 0 0 28px; max-width: 60ch; }
+
+  /* ---- Overview: screen list ---- */
+  .screen-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 900px) { .screen-grid { grid-template-columns: 1fr; } }
+  .screen-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .screen-card .name { font-weight: 600; font-size: 0.92rem; margin: 0 0 3px; }
+  .screen-card .desc { font-size: 0.83rem; color: var(--ink-muted); margin: 0; }
+  .screen-card .tag {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* ---- Nav structure diagram ---- */
+  .navmap {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .navmap-sidebar {
+    background: var(--surface-2);
+    border-right: 1px solid var(--border);
+    padding: 18px 16px;
+  }
+  .navmap-sidebar .client-switch {
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .navmap-sidebar .client-switch::after { content: "▾"; color: var(--ink-faint); }
+  .navmap-item {
+    font-size: 0.82rem;
+    padding: 7px 10px;
+    border-radius: 7px;
+    color: var(--ink-muted);
+    margin-bottom: 2px;
+  }
+  .navmap-item.on { background: var(--accent-tint); color: var(--accent); font-weight: 600; }
+  .navmap-body { padding: 18px 22px; }
+  .navmap-crumb { font-size: 0.75rem; color: var(--ink-faint); font-family: var(--font-mono); margin-bottom: 10px; }
+  .navmap-body h3 { font-family: var(--font-display); font-size: 1.15rem; margin: 0 0 8px; }
+  .navmap-body p { font-size: 0.85rem; color: var(--ink-muted); margin: 0; max-width: 44ch; }
+
+  /* ---- Step cards ---- */
+  .step-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 28px 32px 26px;
+    scroll-margin-top: 24px;
+  }
+  .step-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; }
+  .step-num {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    color: var(--accent);
+    background: var(--accent-tint);
+    border-radius: 6px;
+    padding: 1px 8px;
+    flex: none;
+  }
+  .step-head h2 { font-family: var(--font-display); font-size: 1.35rem; font-weight: 600; margin: 0; }
+  .step-purpose { color: var(--ink-muted); margin: 10px 0 24px; max-width: 68ch; }
+
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 32px; margin-bottom: 6px; }
+  @media (max-width: 760px) { .field-grid { grid-template-columns: 1fr; } }
+  .field { min-width: 0; }
+  .field-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--ink-faint);
+    margin: 0 0 6px;
+  }
+  .field p, .field ul { margin: 0; font-size: 0.88rem; color: var(--ink); }
+  .field ul { padding-left: 1.1em; }
+  .field li { margin-bottom: 3px; }
+  .field .mono-inline { font-family: var(--font-mono); font-size: 0.82em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+
+  .states-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .state-pill {
+    font-size: 0.76rem;
+    padding: 3px 9px;
+    border-radius: 100px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--ink-muted);
+  }
+
+  .step-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+  }
+
+  .steps-list { display: flex; flex-direction: column; gap: 22px; }
+
+  footer.colophon {
+    max-width: 900px;
+    color: var(--ink-faint);
+    font-size: 0.82rem;
+    padding-top: 8px;
+  }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; }
+    .toc { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    main { padding: 32px 20px 100px; }
+  }
+</style>
+
+<div class="shell">
+  <aside class="toc">
+    <p class="toc-brand">SERP Console</p>
+    <p class="toc-sub">Walkthrough for Figma</p>
+    <nav id="toc-nav"></nav>
+  </aside>
+
+  <main>
+    <header class="page-head">
+      <p class="eyebrow">UX walkthrough · v1</p>
+      <h1 class="title">Every screen, state, and approval gate</h1>
+      <p class="lede">A step-by-step tour of the ranking &amp; reporting console, from login to a sent client email — for designing the Figma file, not for engineering. Each step below is annotated by where its data actually comes from.</p>
+      <div class="legend">
+        <span class="badge backend"><span class="dot"></span>Backend data</span>
+        <span class="badge claude"><span class="dot"></span>Claude-generated</span>
+        <span class="badge approval"><span class="dot"></span>Human approval required</span>
+      </div>
+    </header>
+
+    <section class="block" id="overview-screens">
+      <h2 class="block-title">Screen &amp; page list</h2>
+      <p class="block-sub">The 18 flow steps map onto roughly ten distinct screens — several steps are just state changes on the same screen, not separate pages. Build these as artboards; treat the flow steps as their states.</p>
+      <div class="screen-grid" id="screen-grid"></div>
+    </section>
+
+    <section class="block" id="overview-nav">
+      <h2 class="block-title">Navigation &amp; sidebar structure</h2>
+      <p class="block-sub">The whole console is scoped to one client at a time. The client switcher lives above the nav, not inside it — everything below it re-scopes when it changes.</p>
+      <div class="navmap">
+        <div class="navmap-sidebar">
+          <div class="client-switch">Cash For Cars Perth</div>
+          <div class="navmap-item on">Runs</div>
+          <div class="navmap-item">Reports</div>
+          <div class="navmap-item">Client settings</div>
+        </div>
+        <div class="navmap-body">
+          <p class="navmap-crumb">Cash For Cars Perth / Runs / Run #1f446f67</p>
+          <h3>Run Detail</h3>
+          <p>Breadcrumb + contextual primary action in the top bar (e.g. "Start Run", "Generate Report") change per screen; the sidebar itself never does.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="steps" style="max-width:900px;">
+      <h2 class="block-title">The 18-step walkthrough</h2>
+      <p class="block-sub">In sequence, as a user actually experiences it.</p>
+      <div class="steps-list" id="steps-list"></div>
+    </section>
+
+    <footer class="colophon">
+      Reflects the current backend implementation (Excel upload → DataForSEO Live Regular → Postgres → export) and the designed-but-unbuilt reporting layer (analytics → Claude → report → email → approval). Nothing on this page required a Claude or API call to produce.
+    </footer>
+  </main>
+</div>
+
+<script>
+const SCREENS = [
+  { name: "Login", tag: "Auth · not yet built", desc: "Email/password, redirects into the last-used client." },
+  { name: "Dashboard / Runs", tag: "Landing", desc: "Client-scoped list of past runs, “New Run” action." },
+  { name: "New Run", tag: "Modal or page", desc: "Excel dropzone + validation summary + create." },
+  { name: "Run Detail", tag: "4 states", desc: "Uploaded → Processing → Completed / Completed with errors." },
+  { name: "Reports", tag: "List", desc: "Per-client report history: Draft, Pending Approval, Sent, Rejected." },
+  { name: "Generate Report", tag: "Setup step", desc: "Pick a previous run to compare against, or none." },
+  { name: "Analytics Preview", tag: "Pre-Claude", desc: "Totals + movements, computed, shown before any AI call." },
+  { name: "Analyst Insights", tag: "Claude step", desc: "Narrative, wins, losses, focus areas — labeled AI-generated." },
+  { name: "Report Preview", tag: "Editable", desc: "Rendered client-facing report; text editable, table is not." },
+  { name: "Email Draft", tag: "Editable", desc: "Subject/body from Claude, recipients from client settings." },
+  { name: "Send Confirmation", tag: "Modal", desc: "The one irreversible action in the whole flow." },
+  { name: "Report Detail (Sent)", tag: "Read-only", desc: "Frozen record of what was actually delivered, and to whom." },
+  { name: "Client Report Settings", tag: "Config · implied", desc: "Tone, sections, recipients, frequency — not in the 18 steps but required for them to work." },
+];
+
+const STEPS = [
+  {
+    n: 1, title: "Login / dashboard landing",
+    purpose: "Authenticate the user before any client data is reachable. Not implemented in the current build — described here for completeness.",
+    sections: "Centered card: workspace mark, email, password, “Sign in.”",
+    info: "Just the form — no ranking data is visible pre-auth.",
+    actions: ["Sign in"],
+    after: "Success → Dashboard, last-used client pre-selected. Failure → inline error under the password field.",
+    states: ["Empty", "Loading", "Error", "Success (redirecting)"],
+    badges: ["backend"],
+  },
+  {
+    n: 2, title: "Select client",
+    purpose: "Scope the entire workspace to one client — every run and report belongs to exactly one, and the backend never mixes them.",
+    sections: "A switcher pinned above the sidebar nav; opens a searchable list from <span class=\"mono-inline\">GET /api/clients</span>.",
+    info: "Client names; optionally each one’s most recent run date.",
+    actions: ["Open switcher", "Search", "Select a client"],
+    after: "Runs and Reports re-scope instantly to the chosen client — no full page reload.",
+    states: ["Loading (skeleton rows)", "Empty (no clients yet)", "Error (toast, retry)"],
+    badges: ["backend"],
+  },
+  {
+    n: 3, title: "Upload Excel",
+    purpose: "Turn a client’s keyword sheet into a ranking run.",
+    sections: "New Run panel: client shown read-only (already scoped), drag-and-drop zone, a validation summary that appears once a file lands.",
+    info: "Required columns reminder (Keywords, Full URL, URL, Concatenate, Location, Domain, Language, Status, Ranks, Ranking URL); after drop — filename, size, “23 rows ready · 2 skipped.”",
+    actions: ["Drag & drop or browse", "Upload & Create Run"],
+    after: "Backend parses the file. Rows failing validation are never silently dropped — listed with their reason. Success routes straight to Run Detail.",
+    states: ["Empty (dropzone only)", "Parsing", "Validation warning", "Error (wrong type / missing columns)", "Success"],
+    badges: ["backend"],
+  },
+  {
+    n: 4, title: "Run creation — what the user sees",
+    purpose: "Confirm the run looks right before committing to Start, which is where real DataForSEO spend begins.",
+    sections: "Run Detail in its <span class=\"mono-inline\">Uploaded</span> state: header (filename, client, created time, row count), “Start Run,” results table pre-filled with every row Pending.",
+    info: "Per-row Keyword / Target / Location / Domain / Language, straight from the parsed sheet.",
+    actions: ["Start Run", "Cancel Run"],
+    after: "Start → Processing state (step 6). Cancel → run becomes read-only, status Cancelled.",
+    states: ["Ready (this is the state itself)"],
+    badges: ["backend", "approval"],
+  },
+  {
+    n: 5, title: "Start ranking run",
+    purpose: "The literal moment the user commits to spending — each row is a real, billed DataForSEO call.",
+    sections: "Same screen; the button itself, ideally with a cost-aware confirmation on larger runs (“This will process 240 rows. Start?”).",
+    info: "The row count about to be committed.",
+    actions: ["Start Run", "Confirm"],
+    after: "Button disables immediately (never double-clickable) → run flips to Processing → live polling begins.",
+    states: ["Idle", "Starting (spinner)", "Error (already started elsewhere)"],
+    badges: ["backend", "approval"],
+  },
+  {
+    n: 6, title: "Live progress",
+    purpose: "Let the user watch a run that can take minutes without wondering if it’s stuck — rows process sequentially, one real API call at a time.",
+    sections: "Stat tiles (Total / Pending / Processing / Completed / Error-Retry / Failed), a progress bar, and the results table updating row by row.",
+    info: "Live counts; per-row status pills moving Pending → Processing → Completed / Error-Retry / Failed; rank + URL appearing the instant each row resolves.",
+    actions: ["None — designed to be watched, not operated"],
+    after: "Passive polling (~1.5s). No user action changes anything here.",
+    states: ["Processing (whole screen)", "Row: Pending / Processing / Completed / Error-Retry / Failed", "Connection lost (banner, keeps last-known data)"],
+    badges: ["backend"],
+  },
+  {
+    n: 7, title: "Run completion",
+    purpose: "Make the terminal state unambiguous and surface what to do next.",
+    sections: "Header pill flips to Completed (green) or Completed with errors (amber); new actions appear.",
+    info: "Final counts, e.g. “20 completed, 0 failed”; a called-out failure count if any, linking into the filtered table.",
+    actions: ["Download Excel", "Generate Report", "Retry Errors (if any Error-Retry/Failed rows)"],
+    after: "Download streams the corrected file. Generate Report opens the reporting flow — only ever enabled once terminal.",
+    states: ["Completed", "Completed with errors (amber banner)"],
+    badges: ["backend"],
+  },
+  {
+    n: 8, title: "View ranking results",
+    purpose: "Let the user actually read the per-keyword outcome, not just aggregate counts.",
+    sections: "A data table — Keyword, Target, Location, Domain, Language, Status, Rank, Ranking URL — sortable and filterable by status.",
+    info: "Every row’s final Status/Rank/Ranking URL. Rank shows a number or the literal text “Not in 100.”",
+    actions: ["Sort columns", "Filter by status", "Click a row for detail"],
+    after: "Client-side only — nothing here ever writes back to the backend.",
+    states: ["Populated", "Empty filter result (“No rows match Failed”)"],
+    badges: ["backend"],
+  },
+  {
+    n: 9, title: "Download corrected/result Excel",
+    purpose: "Return the exact uploaded file with only Status/Ranks/Ranking URL updated — everything else byte-identical.",
+    sections: "A single button on the Run Detail header once terminal, not a separate page.",
+    info: "Optional note: “Only Status, Ranks, and Ranking URL were changed.”",
+    actions: ["Download Excel"],
+    after: "Browser downloads the file. No state change on the run.",
+    states: ["Enabled (terminal run)", "Disabled with tooltip (still processing)"],
+    badges: ["backend"],
+  },
+  {
+    n: 10, title: "Create SEO report from a completed run",
+    purpose: "The single entry point into the whole Claude-assisted flow — reachable only from a finished run.",
+    sections: "“Generate Report” from step 7 opens a short setup step: choose a previous run to compare against.",
+    info: "Client name, current run date, dropdown of the client’s prior completed runs (or “no previous run — first-time report”).",
+    actions: ["Continue", "Cancel"],
+    after: "Creates a report record in PENDING_ANALYSIS, navigates to Analytics Preview.",
+    states: ["Has previous runs", "No previous runs", "Guarded (run not yet terminal — shouldn’t be reachable)"],
+    badges: ["backend"],
+  },
+  {
+    n: 11, title: "Analytics/metrics shown before Claude",
+    purpose: "Show the real computed numbers before any AI narrative exists, so the split is visible — these numbers are never touched by Claude.",
+    sections: "Metrics panel: Total keywords, Average rank, Top 3, Top 10, Not in 100; if a previous run was chosen, Improved / Declined / Unchanged / Newly-tracked with per-keyword deltas.",
+    info: "Exactly the output of the backend’s analytics function — nothing hidden, nothing pre-interpreted.",
+    actions: ["Generate Insights with Claude", "Back"],
+    after: "Triggers the one Claude call for analysis; screen moves to a generating state.",
+    states: ["Computed", "No comparison available"],
+    badges: ["backend"],
+  },
+  {
+    n: 12, title: "Claude-generated insights/report",
+    purpose: "Claude’s narrative read on the numbers from step 11 — visually marked as AI commentary, not additional data.",
+    sections: "“Analyst Insights” panel: overall narrative, key insights, notable wins/losses tied to specific keywords, recommended focus areas.",
+    info: "Every keyword Claude names is cross-checked against the real input list server-side before display — an invented keyword is rejected and regenerated, never shown.",
+    actions: ["Build Report", "Regenerate Insights", "Back"],
+    after: "Build Report hands this narrative to the deterministic Report Generator, which merges it with the (Claude-untouched) metrics table.",
+    states: ["Generating (shimmer, ~5–15s)", "Ready", "Failed (schema validation or model error — Regenerate only, never a guessed fallback)"],
+    badges: ["claude"],
+  },
+  {
+    n: 13, title: "Report preview",
+    purpose: "Show the client-facing document exactly as it would be delivered, before anything is sent.",
+    sections: "Rendered preview: header, Claude’s narrative sections, the deterministic keyword/rank table, wins/losses callouts, with an Edit toggle.",
+    info: "The full assembled report — text from Claude, tables from code.",
+    actions: ["Edit (narrative text only)", "Continue to Email", "Regenerate", "Reject"],
+    after: "Edits save with an “Edited” marker; Regenerate warns before discarding them.",
+    states: ["Ready", "Editing", "Edited", "Unsaved changes on navigate-away"],
+    badges: ["backend", "claude"],
+  },
+  {
+    n: 14, title: "Email draft — subject, body, recipients",
+    purpose: "Prepare the actual message — recipients always come from client configuration, never from Claude’s judgment.",
+    sections: "Subject field, body editor (Claude-drafted), recipient chips pre-filled from client settings and editable, a compact report preview.",
+    info: "A visible note: “Recipients come from this client’s settings, not from AI.”",
+    actions: ["Edit subject/body", "Add/remove recipient", "Preview Send", "Back to Report"],
+    after: "Saves to the draft record; nothing sends yet.",
+    states: ["Ready", "Editing", "Missing recipients (blocks proceeding)", "Regenerating"],
+    badges: ["backend", "claude"],
+  },
+  {
+    n: 15, title: "Human editing of report/email",
+    purpose: "Not a separate screen — the editing capability layered onto steps 13 and 14. Every Claude-authored block needs an edit affordance; every backend-sourced value (the metrics table, recipient source) does not.",
+    sections: "Inline click-to-edit on Claude text; a “AI-drafted” vs “edited by …” distinction once touched.",
+    info: "Same content as 13/14, with edit state visible.",
+    actions: ["Click to edit inline"],
+    after: "Saves in place — no separate save screen.",
+    states: ["Pristine", "Edited"],
+    badges: ["claude"],
+  },
+  {
+    n: 16, title: "Approve & Send",
+    purpose: "The final, explicit gate — the only action anywhere in this flow that actually sends an email.",
+    sections: "Confirmation modal: recipients, subject line, a plain warning that this can’t be undone.",
+    info: "“Send to: [recipients]” · subject · “This report will be emailed and marked Sent.”",
+    actions: ["Approve & Send", "Cancel"],
+    after: "Backend sends the email, marks the report Sent, records who and when.",
+    states: ["Confirming", "Sending (modal locked)", "Sent", "Send failed (stays Pending Approval, nothing lost)"],
+    badges: ["backend", "approval"],
+  },
+  {
+    n: 17, title: "Reject / Regenerate flow",
+    purpose: "Let a human stop a bad draft from reaching Send, without losing the underlying ranking data.",
+    sections: "“Reject” and “Regenerate” actions on the Report Preview and Email Draft screens.",
+    info: "An optional reason field on reject — useful history, not required.",
+    actions: ["Reject", "Regenerate"],
+    after: "Reject ends this report’s lifecycle (a new one starts fresh from the run). Regenerate re-runs only the relevant Claude step against the same analytics.",
+    states: ["Confirming reject", "Rejected (terminal)", "Regenerating"],
+    badges: ["backend", "claude", "approval"],
+  },
+  {
+    n: 18, title: "Sent/completed state",
+    purpose: "A durable, frozen record that this report was actually delivered — for audit and reference.",
+    sections: "Report Detail (read-only), stamped “Sent on [date] to [recipients] by [user].” Appears in the Reports list with a Sent pill.",
+    info: "Full report content as it was when sent, the email that went out, recipients, sender, timestamp.",
+    actions: ["View", "Download PDF (nice-to-have)"],
+    after: "Terminal — nothing else reaches this screen. Doesn’t re-fetch or change if client settings change later.",
+    states: ["Sent (only state)"],
+    badges: ["backend"],
+  },
+];
+
+const BADGE_HTML = {
+  backend: '<span class="badge backend"><span class="dot"></span>Backend data</span>',
+  claude: '<span class="badge claude"><span class="dot"></span>Claude-generated</span>',
+  approval: '<span class="badge approval"><span class="dot"></span>Human approval required</span>',
+};
+
+document.getElementById('screen-grid').innerHTML = SCREENS.map(s => `
+  <div class="screen-card">
+    <p class="tag">${s.tag}</p>
+    <p class="name">${s.name}</p>
+    <p class="desc">${s.desc}</p>
+  </div>
+`).join('');
+
+document.getElementById('steps-list').innerHTML = STEPS.map(s => `
+  <article class="step-card" id="step-${s.n}">
+    <div class="step-head">
+      <span class="step-num">${String(s.n).padStart(2,'0')}</span>
+      <h2>${s.title}</h2>
+    </div>
+    <p class="step-purpose">${s.purpose}</p>
+    <div class="field-grid">
+      <div class="field"><p class="field-label">Main sections</p><p>${s.sections}</p></div>
+      <div class="field"><p class="field-label">Information displayed</p><p>${s.info}</p></div>
+      <div class="field"><p class="field-label">Buttons / actions</p><ul>${s.actions.map(a=>`<li>${a}</li>`).join('')}</ul></div>
+      <div class="field"><p class="field-label">After each action</p><p>${s.after}</p></div>
+      <div class="field" style="grid-column:1/-1"><p class="field-label">Loading / empty / error / success states</p><div class="states-row">${s.states.map(st=>`<span class="state-pill">${st}</span>`).join('')}</div></div>
+    </div>
+    <div class="step-footer">${s.badges.map(b=>BADGE_HTML[b]).join('')}</div>
+  </article>
+`).join('');
+
+document.getElementById('toc-nav').innerHTML = `
+  <p class="toc-group-label">Overview</p>
+  <ul>
+    <li><a href="#overview-screens" data-target="overview-screens"><span class="num">–</span>Screen list</a></li>
+    <li><a href="#overview-nav" data-target="overview-nav"><span class="num">–</span>Navigation map</a></li>
+  </ul>
+  <p class="toc-group-label">Walkthrough</p>
+  <ul>
+    ${STEPS.map(s => `<li><a href="#step-${s.n}" data-target="step-${s.n}"><span class="num">${String(s.n).padStart(2,'0')}</span>${s.title}</a></li>`).join('')}
+  </ul>
+`;
+
+const links = Array.from(document.querySelectorAll('.toc nav a'));
+const targets = links.map(l => document.getElementById(l.dataset.target)).filter(Boolean);
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    const link = links.find(l => l.dataset.target === entry.target.id);
+    if (!link) return;
+    if (entry.isIntersecting) {
+      links.forEach(l => l.classList.remove('active'));
+      link.classList.add('active');
+    }
+  });
+}, { rootMargin: '-10% 0px -75% 0px', threshold: 0 });
+targets.forEach(t => observer.observe(t));
+</script>

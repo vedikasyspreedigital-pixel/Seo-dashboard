@@ -1,0 +1,15 @@
+{
+  "name": "clickup-feasibility-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Throwaway, fully isolated spike proving ClickUp's task Comment->Email composer can be driven with Playwright. NOT part of the production app -- nothing here is imported by backend/ or frontend/, and this package's dependencies are not part of the root project.",
+  "scripts": {
+    "setup-session": "node setupSession.mjs",
+    "test": "node feasibilityTest.mjs",
+    "diagnose": "node diagnoseEmailComposer.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

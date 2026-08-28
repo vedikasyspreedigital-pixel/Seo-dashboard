@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+
+  /* Premium dark-enterprise violet accent -- restrained, not dominant.
+     brand-400/600 are the exact gradient stops used for primary buttons
+     and glow accents (linear-gradient(135deg, brand-400, brand-600)). */
+  --color-brand-50: #f3eeff;
+  --color-brand-100: #e4d9ff;
+  --color-brand-200: #cbb3ff;
+  --color-brand-300: #c4a6ff;
+  --color-brand-400: #9b5cff;
+  --color-brand-500: #7c3aed;
+  --color-brand-600: #6330c9;
+  --color-brand-700: #5227a3;
+  --color-brand-800: #3d1d7a;
+  --color-brand-900: #291352;
+
+  /* Reserved specifically for "this content came from Claude" badges
+     (AI-drafted, Analyst Insights) -- a brighter, pinker highlight-violet
+     distinct from the primary brand gradient, so AI-originated content
+     stays visually distinguishable from deterministic backend output even
+     though both live in the same violet family now. */
+  --color-ai-300: #d4bbff;
+  --color-ai-400: #c79bff;
+  --color-ai-500: #b57cff;
+
+  --color-ink: #f5f5f7;
+  --color-ink-muted: #a1a1aa;
+  --color-ink-faint: #6f6b78;
+
+  --color-surface: #0d0c11;
+  --color-surface-2: #121117;
+  --color-surface-3: #18171e;
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(255, 255, 255, 0.1);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #050507;
+  color: var(--color-ink);
+  font-weight: 400;
+}
+
+/* Deep, dimensional backdrop for the whole app shell: near-black base with
+   extremely subtle layered violet radial gradients for atmospheric depth,
+   plus a barely-visible grid texture -- never a flat solid color, never a
+   full-screen purple wash. */
+.app-backdrop {
+  background-color: #050507;
+  background-image:
+    radial-gradient(900px 500px at 15% -10%, rgba(124, 58, 237, 0.1), transparent 60%),
+    radial-gradient(700px 600px at 100% 10%, rgba(139, 92, 246, 0.06), transparent 55%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    auto,
+    48px 48px,
+    48px 48px;
+}
+
+/* Ambient violet glow -- used sparingly, behind hero/header areas only. */
+.ambient-glow {
+  background: radial-gradient(600px 300px at 20% -10%, rgba(124, 58, 237, 0.12), transparent 55%);
+}
+
+.glass-surface {
+  background: rgba(18, 17, 23, 0.7);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+/* Soft ambient violet glow -- diffused, never sharp/neon. Apply to
+   important interactive or highlighted elements only. */
+.glow-soft {
+  box-shadow:
+    0 0 20px rgba(139, 92, 246, 0.15),
+    0 0 40px rgba(139, 92, 246, 0.08);
+}
+
+.glow-accent {
+  box-shadow:
+    0 0 15px rgba(139, 92, 246, 0.3),
+    0 0 35px rgba(139, 92, 246, 0.12);
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0) 100%);
+  background-size: 400px 100%;
+  animation: shimmer 1.6s infinite;
+}

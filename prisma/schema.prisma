@@ -1,0 +1,216 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RunStatus {
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  CANCELLED
+}
+
+enum RowStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  ERROR_RETRY
+  FAILED
+}
+
+enum AttemptOutcome {
+  SUCCESS
+  API_ERROR
+  MAPPING_ERROR
+}
+
+// Reporting-layer state machine only -- completely separate from
+// RunStatus/RowStatus. Nothing here can transition a ranking_run/ranking_row,
+// and nothing in backend/statemachine or backend/worker references it.
+enum ReportStatus {
+  PENDING_ANALYSIS
+  ANALYSIS_FAILED
+  ANALYSIS_READY
+  REPORT_READY
+  EMAIL_DRAFT_FAILED
+  EMAIL_DRAFTED
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  SENT
+}
+
+model Client {
+  id        String   @id @default(uuid())
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  runs          RankingRun[]
+  reportConfigs ClientReportConfig[]
+  reports       RankingReport[]
+
+  @@map("clients")
+}
+
+// Reporting-layer config only -- deliberately isolated from the ranking
+// pipeline. No RankingRun/RankingRow/RankingRowAttempt model references or
+// is referenced by this model, and nothing in backend/statemachine or
+// backend/worker reads from this table.
+model ClientReportConfig {
+  id       String @id @default(uuid())
+  clientId String @map("client_id")
+  client   Client @relation(fields: [clientId], references: [id])
+
+  reportTone         String  @map("report_tone") // e.g. "professional" | "casual" | "technical" -- free text, not an enum, so new tones don't need a migration
+  sectionsEnabled    Json    @map("sections_enabled") // e.g. ["summary","wins","losses","recommendations","full_table"]
+  metricsEnabled     Json    @map("metrics_enabled") // e.g. ["averageRank","top3","top10","notIn100"]
+  customInstructions String? @map("custom_instructions")
+  recipients         Json // email addresses -- resolved by the backend only; Claude never sees or decides this
+  clickupTaskUrl     String? @map("clickup_task_url") // the ClickUp task whose Email composer delivers this client's reports -- resolved by the backend only, same as recipients
+  reportingFrequency String  @map("reporting_frequency") // "weekly" | "biweekly" | "monthly" | "manual"
+  templateId         String  @map("template_id") // selects a deterministic report renderer, not a Claude choice
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([clientId, isActive])
+  @@map("client_report_configs")
+}
+
+model RankingRun {
+  id             String    @id @default(uuid())
+  clientId       String    @map("client_id")
+  client         Client    @relation(fields: [clientId], references: [id])
+  sourceFilename String    @map("source_filename")
+  sourceFilePath String    @map("source_file_path")
+  resultFilePath String?   @map("result_file_path")
+  status         RunStatus @default(UPLOADED)
+  totalRows      Int       @map("total_rows")
+  createdBy      String?   @map("created_by")
+  startedAt      DateTime? @map("started_at")
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  rows RankingRow[]
+
+  // Reverse sides of RankingReport's two FKs into ranking_runs, required by
+  // Prisma's relation validation. Purely a schema-level back-reference --
+  // no new column on ranking_runs, no behavioral change to the ranking
+  // pipeline, and RankingRun never reads/writes RankingReport itself.
+  reportsAsCurrentRun  RankingReport[] @relation("ReportRun")
+  reportsAsPreviousRun RankingReport[] @relation("ReportPreviousRun")
+
+  @@map("ranking_runs")
+}
+
+model RankingRow {
+  id               String    @id @default(uuid())
+  runId            String    @map("run_id")
+  run              RankingRun @relation(fields: [runId], references: [id])
+  rowUid           String    @map("row_uid")
+  sourceRowNumber  Int       @map("source_row_number")
+
+  keyword       String
+  fullUrl       String?  @map("full_url")
+  targetUrl     String   @map("target_url")
+  concatenate   String?
+  locationName  String   @map("location_name")
+  seDomain      String   @map("se_domain")
+  languageName  String   @map("language_name")
+
+  status          RowStatus @default(PENDING)
+  rankValue       Int?      @map("rank_value")
+  rankDisplay     String?   @map("rank_display")
+  rankingUrl      String?   @map("ranking_url")
+
+  retryCount       Int     @default(0) @map("retry_count")
+  maxRetries       Int     @default(3) @map("max_retries")
+  lastErrorMessage String? @map("last_error_message")
+
+  lastAttemptId String?           @unique @map("last_attempt_id")
+  lastAttempt   RankingRowAttempt? @relation("LastAttempt", fields: [lastAttemptId], references: [id])
+
+  attempts RankingRowAttempt[] @relation("RowAttempts")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([runId, status])
+  @@index([rowUid])
+  @@map("ranking_rows")
+}
+
+model RankingRowAttempt {
+  id            String  @id @default(uuid())
+  rankingRowId  String  @map("ranking_row_id")
+  rankingRow    RankingRow @relation("RowAttempts", fields: [rankingRowId], references: [id])
+  attemptNumber Int     @map("attempt_number")
+
+  requestPayload          Json    @map("request_payload")
+  httpStatus              Int?    @map("http_status")
+  dataforseoStatusCode    Int?    @map("dataforseo_status_code")
+  dataforseoStatusMessage String? @map("dataforseo_status_message")
+  rawResponse             Json?   @map("raw_response")
+
+  mappedRankValue  Int?    @map("mapped_rank_value")
+  mappedRankingUrl String? @map("mapped_ranking_url")
+
+  outcome      AttemptOutcome
+  errorMessage String?        @map("error_message")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  lastAttemptOf RankingRow? @relation("LastAttempt")
+
+  @@index([rankingRowId])
+  @@map("ranking_row_attempts")
+}
+
+// Reporting-layer only -- isolated from the ranking worker/state machine.
+// Reads a completed RankingRun's data via computeRunAnalytics (backend
+// code), then Claude fills analysisJson/emailSubject/emailBody. Nothing
+// here ever writes to ranking_runs/ranking_rows/ranking_row_attempts, and
+// nothing in backend/statemachine or backend/worker reads this table.
+model RankingReport {
+  id             String       @id @default(uuid())
+  runId          String       @map("run_id")
+  run            RankingRun   @relation("ReportRun", fields: [runId], references: [id])
+  previousRunId  String?      @map("previous_run_id")
+  previousRun    RankingRun?  @relation("ReportPreviousRun", fields: [previousRunId], references: [id])
+  clientId       String       @map("client_id")
+  client         Client       @relation(fields: [clientId], references: [id])
+
+  status ReportStatus @default(PENDING_ANALYSIS)
+
+  analyticsJson      Json?   @map("analytics_json") // computeRunAnalytics output -- pure code, no Claude
+  analysisJson       Json?   @map("analysis_json") // Claude Report Analyst's schema-validated output
+  reportHtml         String? @map("report_html") // deterministic Report Generator output
+  emailSubject       String? @map("email_subject") // Claude Email Draft Generator's output (subject)
+  emailBody          String? @map("email_body") // Claude Email Draft Generator's output (bodyText)
+  emailBodyHtml      String? @map("email_body_html") // Claude Email Draft Generator's output (bodyHtml)
+  resolvedRecipients Json?   @map("resolved_recipients") // copied from ClientReportConfig.recipients, human-editable, never Claude-decided
+  resolvedClickupTaskUrl String? @map("resolved_clickup_task_url") // copied from ClientReportConfig.clickupTaskUrl, human-editable, never Claude-decided
+
+  lastErrorMessage String? @map("last_error_message")
+
+  approvedBy String?   @map("approved_by")
+  approvedAt DateTime? @map("approved_at")
+  sentAt     DateTime? @map("sent_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([clientId, status])
+  @@index([runId])
+  @@map("ranking_reports")
+}

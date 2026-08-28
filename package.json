@@ -1,0 +1,38 @@
+{
+  "name": "serp-interpreter",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic replacement for the Make.com ranking scenario: Excel upload -> DB-backed ranking runs -> DataForSEO (wildcard target) -> deterministic response mapping -> Excel export. No LLM in the ranking pipeline.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "backend": "tsx backend/server.ts",
+    "backend:dev": "tsx watch backend/server.ts",
+    "frontend": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:preview": "npm --prefix frontend run preview",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:generate": "prisma generate",
+    "prisma:studio": "prisma studio",
+    "test": "node --import tsx --test test/*.test.mjs test/api.test.ts test/reporting.test.ts test/clientReportConfig.test.ts test/reportTransitions.test.ts test/reportAnalyst.test.ts test/reportGenerator.test.ts test/generateReport.test.ts test/emailDraft.test.ts test/generateEmailDraft.test.ts test/approveAndSend.test.ts test/editReportDraft.test.ts test/regenerateEmailDraft.test.ts test/reportsApi.test.ts test/overviewApi.test.ts frontend/test/reportStatus.test.ts frontend/test/reportsApiClient.test.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "multer": "^2.2.0",
+    "playwright": "^1.48.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^26.2.0",
+    "@types/supertest": "^7.2.1",
+    "prisma": "^5.20.0",
+    "supertest": "^7.2.2",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}

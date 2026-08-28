@@ -1,0 +1,168 @@
+export type RunStatus = 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'COMPLETED_WITH_ERRORS' | 'CANCELLED';
+export type RowStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'ERROR_RETRY' | 'FAILED';
+
+export interface ClientRecord {
+  id: string;
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface RankingRun {
+  id: string;
+  clientId: string;
+  sourceFilename: string;
+  status: RunStatus;
+  totalRows: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
+export interface OverviewRecentRun {
+  id: string;
+  clientName: string;
+  sourceFilename: string;
+  status: RunStatus;
+  totalRows: number;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface OverviewData {
+  totalClients: number;
+  totalRuns: number;
+  totalSuccessfulRuns: number;
+  totalKeywordsTracked: number;
+  top3Count: number;
+  top10Count: number;
+  notIn100Count: number;
+  averageRank: number | null;
+  rankingMovements: { improved: number; declined: number; unchanged: number };
+  dailyMovements: { date: string; improved: number; declined: number; unchanged: number }[];
+  recentRuns: OverviewRecentRun[];
+}
+
+export interface RunRow {
+  id: string;
+  sourceRowNumber: number;
+  keyword: string;
+  locationName: string;
+  languageName: string;
+  status: RowStatus;
+  rankDisplay: string | null;
+  rankingUrl: string | null;
+}
+
+export interface ValidateRunFileResult {
+  insertedRowCount: number;
+  rowErrorCount: number;
+  rowErrors: RowError[];
+  detectedColumns: string[];
+  fileSizeBytes: number;
+}
+
+export interface RunProgress {
+  runStatus: RunStatus;
+  total: number;
+  pending: number;
+  processing: number;
+  completed: number;
+  errorRetry: number;
+  failed: number;
+}
+
+export interface RowError {
+  sourceRowNumber: number;
+  reason: string;
+}
+
+export interface CreateRunResult {
+  run: RankingRun;
+  insertedRowCount: number;
+  rowErrors: RowError[];
+}
+
+export type ReportStatus =
+  | 'PENDING_ANALYSIS'
+  | 'ANALYSIS_FAILED'
+  | 'ANALYSIS_READY'
+  | 'REPORT_READY'
+  | 'EMAIL_DRAFT_FAILED'
+  | 'EMAIL_DRAFTED'
+  | 'PENDING_APPROVAL'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'SENT';
+
+// Mirrors backend/reporting/computeRunAnalytics.ts's RunAnalytics exactly --
+// pure backend output, never touched by Claude.
+export interface RunAnalyticsTotals {
+  totalKeywords: number;
+  averageRank: number | null;
+  top3Count: number;
+  top10Count: number;
+  notIn100Count: number;
+}
+
+export interface KeywordMovement {
+  keyword: string;
+  rowUid: string;
+  previousRank: number | null;
+  currentRank: number | null;
+  delta: number | null;
+}
+
+export interface NewlyTrackedKeyword {
+  keyword: string;
+  rowUid: string;
+  currentRank: number | null;
+}
+
+export interface RunAnalytics {
+  runId: string;
+  previousRunId: string | null;
+  totals: RunAnalyticsTotals;
+  movements: {
+    improved: KeywordMovement[];
+    declined: KeywordMovement[];
+    unchanged: KeywordMovement[];
+    newlyTracked: NewlyTrackedKeyword[];
+  };
+}
+
+// Mirrors backend/reporting/reportAnalyst.ts's AnalystOutput -- Claude's
+// schema-validated narrative output, never containing numbers Claude invented.
+export interface AnalystOutput {
+  overallNarrative: string;
+  keyInsights: string[];
+  notableWins: { keyword: string; note: string }[];
+  notableLosses: { keyword: string; note: string }[];
+  recommendedFocusAreas: string[];
+}
+
+export interface RankingReport {
+  id: string;
+  runId: string;
+  previousRunId: string | null;
+  clientId: string;
+  status: ReportStatus;
+  analyticsJson: RunAnalytics | null;
+  analysisJson: AnalystOutput | null;
+  reportHtml: string | null;
+  emailSubject: string | null;
+  emailBody: string | null;
+  emailBodyHtml: string | null;
+  resolvedRecipients: string[] | null;
+  resolvedClickupTaskUrl: string | null;
+  lastErrorMessage: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RankingReportListItem extends RankingReport {
+  run: Pick<RankingRun, 'id' | 'sourceFilename' | 'createdAt'>;
+}

@@ -1,0 +1,7 @@
+node_modules
+.vercel
+.env
+.env.local
+uploads
+frontend/dist
+frontend/node_modules
