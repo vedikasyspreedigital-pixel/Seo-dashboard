@@ -38,6 +38,13 @@ test("buildEmailDraftInput carries only headline metrics + key insights + tone -
   assert.deepEqual(Object.keys(input).sort(), ["client", "keyInsights", "reportSummary", "tone"]);
 });
 
+test("buildEmailDraftInput: analysis === null (Build Report shortcut skipped Claude Insights) still produces a valid input, with empty keyInsights", () => {
+  const input = buildEmailDraftInput({ clientName: "Cash For Cars Perth", analytics: ANALYTICS, analysis: null, tone: "casual" });
+
+  assert.deepEqual(input.reportSummary, { totalKeywords: 5, averageRank: 14.3, top3: 0, top10: 2, notIn100: 3 });
+  assert.deepEqual(input.keyInsights, []);
+});
+
 function validOutput() {
   return {
     subject: "Your weekly ranking update",

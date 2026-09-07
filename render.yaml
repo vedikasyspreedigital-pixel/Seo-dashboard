@@ -1,0 +1,52 @@
+services:
+  - type: web
+    name: serp-console-backend
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: npm install && npx playwright install --with-deps chromium && npx prisma generate
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm run backend
+    healthCheckPath: /api/health
+    disk:
+      name: uploads
+      mountPath: /var/data/uploads
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: serp-console-db
+          property: connectionString
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      # Comma-separated list of origins allowed to call this API cross-origin
+      # -- update this if the frontend's Vercel URL changes, or add a custom
+      # domain here once one exists.
+      - key: CORS_ORIGINS
+        value: https://frontend-azure-pi-30.vercel.app,http://localhost:5173
+      # Same safety gates as local dev -- both default to mock/off. Flip to
+      # "true" in Render's dashboard only once you're ready for real spend /
+      # real ClickUp sends (the latter also needs a session file uploaded to
+      # the disk separately -- CLICKUP_EMAIL_LIVE alone isn't enough).
+      - key: DATAFORSEO_LIVE
+        value: "false"
+      - key: CLICKUP_EMAIL_LIVE
+        value: "false"
+      - key: CLICKUP_SESSION_PATH
+        value: /var/data/uploads/clickup-storage-state.json
+      # Secrets -- left blank here on purpose (sync: false) so Render
+      # prompts for them in the dashboard instead of committing plaintext.
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+
+databases:
+  - name: serp-console-db
+    plan: starter
+    region: oregon
+    databaseName: ranking
+    user: serp_console

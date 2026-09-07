@@ -12,7 +12,10 @@ import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOADS_DIR = path.resolve(__dirname, '../../../uploads');
+// Configurable so a persistent disk (e.g. Render) can be mounted somewhere
+// other than the repo checkout -- defaults to the existing local-dev path
+// when UPLOADS_DIR isn't set, so nothing changes for local development.
+const UPLOADS_DIR = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.resolve(__dirname, '../../../uploads');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 

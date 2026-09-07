@@ -10,7 +10,11 @@ import type {
   ValidateRunFileResult,
 } from './types';
 
-const BASE = '/api';
+// Local dev: Vite proxies /api to the local backend (same origin), so this
+// stays relative. Once the frontend and backend are hosted separately (e.g.
+// Vercel + Render), VITE_API_BASE_URL points this at the real backend URL --
+// set at build time, baked into the deployed bundle.
+const BASE = `${import.meta.env?.VITE_API_BASE_URL ?? ''}/api`;
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -137,21 +141,24 @@ export interface DraftGenerationResult {
   errorMessage?: string;
 }
 
-/** Step 2 of the report wizard: PENDING_ANALYSIS -> ANALYSIS_READY, via the (mocked) Claude analyst. */
-export async function generateInsights(reportId: string): Promise<DraftGenerationResult> {
-  const res = await fetch(`${BASE}/reports/${reportId}/generate-insights`, { method: 'POST' });
-  return handle<DraftGenerationResult>(res);
-}
-
 export interface BuildReportResult {
   outcome: 'SUCCESS';
-  reportHtml: string;
+  clientPdfPath: string;
 }
 
-/** Step 3 of the report wizard: ANALYSIS_READY -> REPORT_READY. Deterministic, no Claude. */
+/**
+ * "Build Report" wizard step: PENDING_ANALYSIS|ANALYSIS_READY -> REPORT_READY.
+ * Deterministic, no Claude. Generates the client-facing PDF once and stores
+ * it server-side -- fetch it via getReportPdfUrl, never regenerate it.
+ */
 export async function buildReport(reportId: string): Promise<BuildReportResult> {
   const res = await fetch(`${BASE}/reports/${reportId}/build-report`, { method: 'POST' });
   return handle<BuildReportResult>(res);
+}
+
+/** URL for the stored PDF artifact -- the SAME file previewed and later attached to the email. */
+export function getReportPdfUrl(reportId: string): string {
+  return `${BASE}/reports/${reportId}/pdf`;
 }
 
 export async function generateEmailDraft(reportId: string): Promise<DraftGenerationResult> {

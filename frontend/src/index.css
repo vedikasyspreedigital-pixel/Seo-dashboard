@@ -1,8 +1,8 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
 
   /* Premium dark-enterprise violet accent -- restrained, not dominant.
      brand-400/600 are the exact gradient stops used for primary buttons
@@ -52,8 +52,16 @@ body {
 .app-backdrop {
   background-color: #050507;
   background-image:
-    radial-gradient(900px 500px at 15% -10%, rgba(124, 58, 237, 0.1), transparent 60%),
-    radial-gradient(700px 600px at 100% 10%, rgba(139, 92, 246, 0.06), transparent 55%),
+    radial-gradient(
+      900px 500px at 15% -10%,
+      rgba(124, 58, 237, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(
+      700px 600px at 100% 10%,
+      rgba(139, 92, 246, 0.06),
+      transparent 55%
+    ),
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
   background-size:
@@ -65,13 +73,26 @@ body {
 
 /* Ambient violet glow -- used sparingly, behind hero/header areas only. */
 .ambient-glow {
-  background: radial-gradient(600px 300px at 20% -10%, rgba(124, 58, 237, 0.12), transparent 55%);
+  background: radial-gradient(
+    600px 300px at 20% -10%,
+    rgba(124, 58, 237, 0.12),
+    transparent 55%
+  );
 }
 
 .glass-surface {
   background: rgba(18, 17, 23, 0.7);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
+}
+
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
 }
 
 /* Soft ambient violet glow -- diffused, never sharp/neon. Apply to
@@ -98,7 +119,12 @@ body {
 }
 
 .animate-shimmer {
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
   background-size: 400px 100%;
   animation: shimmer 1.6s infinite;
 }

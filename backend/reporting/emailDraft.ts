@@ -43,7 +43,11 @@ export function buildEmailDraftInput({
 }: {
   clientName: string;
   analytics: RunAnalytics;
-  analysis: AnalystOutput;
+  // null when the report reached REPORT_READY via the Build Report shortcut
+  // (PENDING_ANALYSIS -> REPORT_READY), skipping the optional Claude
+  // Insights step -- the email draft still gets the deterministic summary,
+  // just no keyInsights bullets to work from.
+  analysis: AnalystOutput | null;
   tone: string;
 }): EmailDraftInput {
   return {
@@ -55,7 +59,7 @@ export function buildEmailDraftInput({
       top10: analytics.totals.top10Count,
       notIn100: analytics.totals.notIn100Count,
     },
-    keyInsights: analysis.keyInsights,
+    keyInsights: analysis?.keyInsights ?? [],
     tone,
   };
 }

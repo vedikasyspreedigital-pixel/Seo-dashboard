@@ -1,16 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AppShell } from '../../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../../components/layout/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
+import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
 import { approveAndSendReport, getReport } from '../../api/client';
 import type { RankingReport } from '../../api/types';
 
+const SEND_PAGE_STATUSES: RankingReport['status'][] = ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SENT'];
+
 export function SendConfirmationPage() {
   const { reportId } = useParams<{ reportId: string }>();
+  const navigate = useNavigate();
   const [report, setReport] = useState<RankingReport | null>(null);
   const [approvedBy, setApprovedBy] = useState('Admin');
   const [sending, setSending] = useState(false);
@@ -19,11 +23,19 @@ export function SendConfirmationPage() {
 
   useEffect(() => {
     if (!reportId) return;
-    getReport(reportId).then(setReport);
+    // Guarded on the initial fetch only -- an email draft must have been
+    // submitted for approval before this page has anything to show.
+    getReport(reportId).then((r) => {
+      if (!SEND_PAGE_STATUSES.includes(r.status)) {
+        navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
+        return;
+      }
+      setReport(r);
+    });
   }, [reportId]);
 
   async function handleApproveAndSend() {
-    if (!reportId) return;
+    if (!reportId || sending) return; // guard against double-clicks/duplicate requests
     setSending(true);
     setError(null);
     try {
@@ -33,6 +45,9 @@ export function SendConfirmationPage() {
         setSending(false);
         return;
       }
+      // Refresh from the backend rather than relying on local state alone,
+      // so e.g. sentAt below reflects what was actually persisted.
+      await getReport(reportId).then(setReport);
       setSent(true);
     } catch (err) {
       setError((err as Error).message);
@@ -81,7 +96,7 @@ export function SendConfirmationPage() {
 
   return (
     <AppShell>
-      <PageHeader breadcrumbs={[{ label: 'Email Draft', to: `/reports/${reportId}/email` }, { label: 'Send Confirmation' }]} />
+      <PageHeader breadcrumbs={[{ label: '← Back to Email Draft', to: `/reports/${reportId}/email` }, { label: 'Send Confirmation' }]} />
       <PageTitle title="Approve & Send" subtitle="This is the only action in this flow that actually sends an email." />
 
       <Card className="mt-6 p-6">

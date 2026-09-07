@@ -115,7 +115,7 @@ test("GET /api/reports/:id returns 404 for an unknown report", async () => {
   assert.equal(res.status, 404);
 });
 
-test("PATCH /api/reports/:id edits the draft while PENDING_APPROVAL", async () => {
+test("PATCH /api/reports/:id edits the draft while PENDING_APPROVAL: subject, body, and recipients all persist, and the response reflects them", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Reports API Test - patch ${randomUUID()}`);
   try {
@@ -124,11 +124,29 @@ test("PATCH /api/reports/:id edits the draft while PENDING_APPROVAL", async () =
 
     const res = await request(app)
       .patch(`/api/reports/${report.id}`)
-      .send({ emailSubject: "Edited via API", resolvedRecipients: ["a@example.com", "b@example.com"] });
+      .send({
+        emailSubject: "Edited via API",
+        emailBody: "Edited body text via API",
+        resolvedRecipients: ["a@example.com", "b@example.com"],
+      });
 
     assert.equal(res.status, 200);
+    // Response contains the updated values -- the frontend doesn't have to
+    // guess or re-fetch to know what was actually saved.
     assert.equal(res.body.emailSubject, "Edited via API");
+    assert.equal(res.body.emailBody, "Edited body text via API");
     assert.deepEqual(res.body.resolvedRecipients, ["a@example.com", "b@example.com"]);
+    assert.equal(res.body.status, "PENDING_APPROVAL", "editing must never move the report's state");
+
+    // FIX #4 section 3's refresh test, at the API layer: a completely
+    // separate GET (simulating a page refresh / re-navigation) must read
+    // back the exact same persisted values, not whatever the PATCH request
+    // merely echoed.
+    const refetched = await request(app).get(`/api/reports/${report.id}`);
+    assert.equal(refetched.status, 200);
+    assert.equal(refetched.body.emailSubject, "Edited via API");
+    assert.equal(refetched.body.emailBody, "Edited body text via API");
+    assert.deepEqual(refetched.body.resolvedRecipients, ["a@example.com", "b@example.com"]);
   } finally {
     await cleanupClient(client.id);
   }
@@ -143,6 +161,26 @@ test("PATCH /api/reports/:id rejects a non-array resolvedRecipients with 400", a
 
     const res = await request(app).patch(`/api/reports/${report.id}`).send({ resolvedRecipients: "not-an-array@example.com" });
     assert.equal(res.status, 400);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("PATCH /api/reports/:id rejects a malformed email address in resolvedRecipients with 400, and does not persist any of it", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Reports API Test - patch invalid email ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id, ["original@example.com"]);
+
+    const res = await request(app)
+      .patch(`/api/reports/${report.id}`)
+      .send({ resolvedRecipients: ["valid@example.com", "not-an-email"] });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /not-an-email/);
+
+    const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.deepEqual(unchanged.resolvedRecipients, ["original@example.com"], "a rejected PATCH must not partially apply");
   } finally {
     await cleanupClient(client.id);
   }
@@ -350,6 +388,35 @@ test("POST /api/reports/:id/generate-email-draft drives REPORT_READY -> PENDING_
   }
 });
 
+test("POST /api/reports/:id/generate-email-draft works for a report built via the Build Report shortcut (no Claude Insights, analysisJson is null)", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Reports API Test - email draft without insights ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, "COMPLETED");
+    const report = await prisma.rankingReport.create({
+      data: {
+        clientId: client.id,
+        runId: run.id,
+        status: ReportStatus.REPORT_READY,
+        analyticsJson: { totals: { totalKeywords: 1, averageRank: 5, top3Count: 1, top10Count: 1, notIn100Count: 0 }, movements: { improved: [], declined: [], unchanged: [], newlyTracked: [] } },
+        clientPdfPath: "/reports/fake.pdf",
+        // analysisJson intentionally left null -- this is what the report
+        // looks like when Build Report ran directly off PENDING_ANALYSIS.
+      },
+    });
+
+    const res = await request(app).post(`/api/reports/${report.id}/generate-email-draft`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.outcome, "SUCCESS");
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.status, "PENDING_APPROVAL");
+    assert.ok(persisted.emailSubject);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test("POST /api/reports/:id/generate-email-draft rejects a report that isn't REPORT_READY with 409", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Reports API Test - generate email draft wrong state ${randomUUID()}`);
@@ -398,9 +465,36 @@ test("POST /api/reports/:id/generate-insights rejects a report that isn't PENDIN
   }
 });
 
-test("POST /api/reports/:id/build-report drives ANALYSIS_READY -> REPORT_READY deterministically", async () => {
+test("POST /api/reports/:id/build-report drives PENDING_ANALYSIS -> REPORT_READY directly, generating one PDF artifact, no Claude Insights step required", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
-  const client = await makeClient(`Reports API Test - build report ${randomUUID()}`);
+  const client = await makeClient(`Reports API Test - build report from pending analysis ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, "COMPLETED");
+    const report = await makePendingAnalysisReport(client.id, run.id);
+
+    const res = await request(app).post(`/api/reports/${report.id}/build-report`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.outcome, "SUCCESS");
+    assert.ok(res.body.clientPdfPath);
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.status, "REPORT_READY");
+    assert.ok(persisted.clientPdfPath, "the generated PDF path must be stored on the report");
+    assert.equal(persisted.reportHtml, null, "the deterministic PDF path replaces the old HTML report -- no narrative HTML is generated");
+
+    const pdfRes = await request(app).get(`/api/reports/${report.id}/pdf`);
+    assert.equal(pdfRes.status, 200);
+    assert.equal(pdfRes.headers["content-type"], "application/pdf");
+    assert.ok(pdfRes.body.length > 0, "the streamed PDF must be non-empty");
+    assert.equal(pdfRes.body.slice(0, 4).toString("latin1"), "%PDF", "response body must be a real PDF file");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("POST /api/reports/:id/build-report also works from ANALYSIS_READY (reports that already went through Insights)", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Reports API Test - build report from analysis ready ${randomUUID()}`);
   try {
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makeAnalysisReadyReport(client.id, run.id);
@@ -408,25 +502,117 @@ test("POST /api/reports/:id/build-report drives ANALYSIS_READY -> REPORT_READY d
     const res = await request(app).post(`/api/reports/${report.id}/build-report`);
     assert.equal(res.status, 200);
     assert.equal(res.body.outcome, "SUCCESS");
-    assert.ok(res.body.reportHtml.includes(client.name));
 
     const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(persisted.status, "REPORT_READY");
-    assert.ok(persisted.reportHtml);
+    assert.ok(persisted.clientPdfPath);
   } finally {
     await cleanupClient(client.id);
   }
 });
 
-test("POST /api/reports/:id/build-report rejects a report that isn't ANALYSIS_READY with 409", async () => {
+test("POST /api/reports/:id/build-report rejects a report that's already past REPORT_READY (PENDING_APPROVAL) with 409", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Reports API Test - build report wrong state ${randomUUID()}`);
   try {
     const run = await makeRun(client.id, "COMPLETED");
-    const report = await makePendingAnalysisReport(client.id, run.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
 
     const res = await request(app).post(`/api/reports/${report.id}/build-report`);
     assert.equal(res.status, 409);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// FIX #2 regression test: Run Completed -> Analytics Preview -> Build
+// Report -> (user navigates Back) -> Analytics Preview -> Build Report
+// again. Must NOT produce an invalid-state error (e.g. the old
+// "PENDING_ANALYSIS -> ANALYSIS_READY -- not in a valid current state"
+// class of bug) -- Build Report is safe to re-enter, regenerates the PDF in
+// place, and never creates a second RankingReport for the same run.
+test("POST /api/reports/:id/build-report is safe to click again after Back: re-entering Analytics Preview and building again succeeds with no state error", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Reports API Test - build report re-entry ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, "COMPLETED");
+
+    // 1. Run Completed -> creating the report is itself idempotent per run
+    // (createReportForRun reuses an existing report for the same runId).
+    const created = await request(app).post("/api/reports").send({ runId: run.id });
+    assert.equal(created.status, 201);
+    const reportId = created.body.report.id;
+
+    // 2. Analytics Preview -> Build Report (first time).
+    const first = await request(app).post(`/api/reports/${reportId}/build-report`);
+    assert.equal(first.status, 200);
+    assert.equal(first.body.outcome, "SUCCESS");
+    const afterFirst = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId } });
+    assert.equal(afterFirst.status, "REPORT_READY");
+    const firstPdfPath = afterFirst.clientPdfPath;
+    assert.ok(firstPdfPath);
+
+    // 3. User navigates Back to Analytics Preview (pure client-side nav --
+    // nothing to simulate server-side; the report is untouched).
+    const stillThere = await request(app).get(`/api/reports/${reportId}`);
+    assert.equal(stillThere.status, 200);
+    assert.equal(stillThere.body.status, "REPORT_READY");
+
+    // 4. Re-creating a report for the same run must NOT create a duplicate.
+    const againCreated = await request(app).post("/api/reports").send({ runId: run.id });
+    assert.equal(againCreated.status, 409);
+    assert.equal(againCreated.body.existingReportId, reportId);
+    const allReportsForRun = await prisma.rankingReport.findMany({ where: { runId: run.id } });
+    assert.equal(allReportsForRun.length, 1, "no duplicate RankingReport was created");
+
+    // 5. Click Build Report again -- must succeed, not throw an invalid
+    // state-transition error, and must not touch analyticsJson (no re-run
+    // of analytics/Claude/DataForSEO).
+    const second = await request(app).post(`/api/reports/${reportId}/build-report`);
+    assert.equal(second.status, 200);
+    assert.equal(second.body.outcome, "SUCCESS");
+
+    const afterSecond = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId } });
+    assert.equal(afterSecond.status, "REPORT_READY");
+    assert.deepEqual(afterSecond.analyticsJson, afterFirst.analyticsJson, "analytics were not recomputed");
+    assert.equal(afterSecond.clientPdfPath, firstPdfPath, "same stored path -- the artifact was regenerated in place, not duplicated");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("POST /api/reports/:id/build-report double-click / concurrent race: both requests succeed, no duplicate-transition error", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Reports API Test - build report concurrent ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, "COMPLETED");
+    const report = await makePendingAnalysisReport(client.id, run.id);
+
+    const [first, second] = await Promise.all([
+      request(app).post(`/api/reports/${report.id}/build-report`),
+      request(app).post(`/api/reports/${report.id}/build-report`),
+    ]);
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.status, "REPORT_READY");
+    assert.ok(persisted.clientPdfPath);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("GET /api/reports/:id/pdf returns 404 before the report has been built", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Reports API Test - pdf not built yet ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, "COMPLETED");
+    const report = await makePendingAnalysisReport(client.id, run.id);
+
+    const res = await request(app).get(`/api/reports/${report.id}/pdf`);
+    assert.equal(res.status, 404);
   } finally {
     await cleanupClient(client.id);
   }

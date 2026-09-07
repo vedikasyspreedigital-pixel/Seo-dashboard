@@ -150,6 +150,7 @@ export interface RankingReport {
   analyticsJson: RunAnalytics | null;
   analysisJson: AnalystOutput | null;
   reportHtml: string | null;
+  clientPdfPath: string | null;
   emailSubject: string | null;
   emailBody: string | null;
   emailBodyHtml: string | null;

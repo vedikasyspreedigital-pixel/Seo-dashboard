@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
 import { approveAndSendReport } from "../backend/reporting/approveAndSend.js";
+import { updateReportDraft } from "../backend/reporting/editReportDraft.js";
 import { createMockEmailSender, createFailingMockEmailSender } from "../backend/reporting/mockEmailSender.js";
 import { ReportStatus } from "@prisma/client";
 
@@ -85,7 +86,46 @@ test("approval: PENDING_APPROVAL -> SENT, sender receives exactly the resolved r
   }
 });
 
-test("approval: when generateExcelAttachment is injected, its result is resolved for the run and passed through to sendEmail", async () => {
+// FIX #4, section 5/6/10: the entire point of persisting Save Changes edits
+// is that the eventual send uses them -- never a fallback to whatever the
+// report originally had. This traces the exact flow: Save Changes (PATCH /
+// updateReportDraft) -> approve-and-send -> the values sendEmail actually
+// receives, proving the EDITED values win, not the original ones.
+test("Save Changes -> Approve & Send: the send uses the edited To/Subject/Body, never the report's original values", async () => {
+  const client = await makeClient(`Approve Send Test - uses edited values ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id, ["old@example.com"]);
+    // Sanity: confirm the "before" state so the assertion below is a real
+    // change, not a no-op.
+    assert.deepEqual(report.resolvedRecipients, ["old@example.com"]);
+    assert.equal(report.emailSubject, "Your ranking update");
+
+    // The user opens Email Draft, edits every field, and clicks Save
+    // Changes -- this is exactly what EmailDraftPage.tsx's handleSave calls
+    // via PATCH /api/reports/:id.
+    await updateReportDraft(report.id, {
+      emailSubject: "EDITED subject after Save Changes",
+      emailBody: "EDITED body after Save Changes",
+      resolvedRecipients: ["new@example.com"],
+    });
+
+    const sentCalls: unknown[] = [];
+    const sendEmail = createMockEmailSender((params) => sentCalls.push(params));
+    const result = await approveAndSendReport(report.id, { approvedBy: "om@syspreedigital.com", sendEmail });
+    assert.equal(result.outcome, "SENT");
+
+    assert.equal(sentCalls.length, 1);
+    const sent = sentCalls[0] as { to: string[]; subject: string; bodyText: string };
+    assert.deepEqual(sent.to, ["new@example.com"], "must use the edited recipient, not old@example.com");
+    assert.equal(sent.subject, "EDITED subject after Save Changes");
+    assert.equal(sent.bodyText, "EDITED body after Save Changes");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("approval: when generateExcelAttachment is injected, it's resolved for the REPORT (not the run) and passed through to sendEmail", async () => {
   const client = await makeClient(`Approve Send Test - excel attachment ${randomUUID()}`);
   try {
     const run = await makeRun(client.id);
@@ -94,15 +134,18 @@ test("approval: when generateExcelAttachment is injected, its result is resolved
     const sentCalls: unknown[] = [];
     const sendEmail = createMockEmailSender((params) => sentCalls.push(params));
     const excelCalls: string[] = [];
-    const generateExcelAttachment = async (runId: string) => {
-      excelCalls.push(runId);
+    const generateExcelAttachment = async (reportId: string) => {
+      excelCalls.push(reportId);
       return { buffer: Buffer.from("fake-pdf-bytes"), filename: "ranking-export.pdf" };
     };
 
     const result = await approveAndSendReport(report.id, { approvedBy: "om@syspreedigital.com", sendEmail, generateExcelAttachment });
     assert.equal(result.outcome, "SENT");
 
-    assert.deepEqual(excelCalls, [run.id]);
+    // Resolved by reportId, not runId -- the real implementation needs the
+    // report's analyticsJson/client/previousRun, none of which are
+    // reachable from a bare runId.
+    assert.deepEqual(excelCalls, [report.id]);
     assert.equal(sentCalls.length, 1);
     const sent = sentCalls[0] as { excelPdfBuffer?: Buffer; excelPdfFilename?: string };
     assert.equal(sent.excelPdfFilename, "ranking-export.pdf");

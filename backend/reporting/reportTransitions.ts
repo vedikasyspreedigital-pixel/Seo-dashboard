@@ -3,13 +3,19 @@ import { ReportStatus, Prisma } from "@prisma/client";
 import { InvalidReportTransitionError } from "./errors.js";
 
 // PENDING_ANALYSIS ──▶ ANALYSIS_READY ──▶ REPORT_READY ──▶ EMAIL_DRAFTED ──▶ PENDING_APPROVAL
-//        │                                    │       ▲                          │        │
-//   ANALYSIS_FAILED                     EMAIL_DRAFT_FAILED                  APPROVED   REJECTED
-//        │  (retry)                            │  (retry)                       │
-//        └──▶ PENDING_ANALYSIS                 └──▶ REPORT_READY               SENT
-//                                                        ▲
-//                                     PENDING_APPROVAL ──┘  (Regenerate: sends a stale
-//                                                            draft back for a fresh one)
+//        │        │                           │       ▲                          │        │
+//        │   ANALYSIS_FAILED            EMAIL_DRAFT_FAILED                  APPROVED   REJECTED
+//        │        │  (retry)                   │  (retry)                       │
+//        │        └──▶ PENDING_ANALYSIS        └──▶ REPORT_READY               SENT
+//        │                                                ▲
+//        └───────────────────────────────────▶ REPORT_READY (Build Report skips the
+//                                                            optional Claude Insights
+//                                                            step entirely)
+//
+// The PENDING_ANALYSIS -> REPORT_READY edge lets "Build Report" run directly
+// off the deterministic analyticsJson computed at report-creation time,
+// without ever calling Claude -- ANALYSIS_READY -> REPORT_READY still works
+// unchanged for reports that did go through Insights first.
 //
 // The PENDING_APPROVAL -> REPORT_READY edge is an addition made specifically
 // to support the "Regenerate" action on the approval screen -- the original
@@ -19,7 +25,7 @@ import { InvalidReportTransitionError } from "./errors.js";
 // Isolated from RunStatus/RowStatus -- this module never imports from
 // backend/statemachine or backend/worker, and nothing there imports this.
 export const REPORT_TRANSITIONS: Record<ReportStatus, ReportStatus[]> = {
-  PENDING_ANALYSIS: [ReportStatus.ANALYSIS_READY, ReportStatus.ANALYSIS_FAILED],
+  PENDING_ANALYSIS: [ReportStatus.ANALYSIS_READY, ReportStatus.ANALYSIS_FAILED, ReportStatus.REPORT_READY],
   ANALYSIS_FAILED: [ReportStatus.PENDING_ANALYSIS],
   ANALYSIS_READY: [ReportStatus.REPORT_READY],
   REPORT_READY: [ReportStatus.EMAIL_DRAFTED, ReportStatus.EMAIL_DRAFT_FAILED],
@@ -88,13 +94,29 @@ export async function retryAnalysis(reportId: string) {
   );
 }
 
-/** ANALYSIS_READY -> REPORT_READY. Deterministic Report Generator output -- not a Claude step, no failure state. */
-export async function markReportReady(reportId: string, { reportHtml }: { reportHtml: string }) {
+/**
+ * ANALYSIS_READY -> REPORT_READY, or PENDING_ANALYSIS -> REPORT_READY
+ * directly (the "Build Report" step no longer requires the Claude Insights
+ * step to have run first -- analyticsJson alone, already present at
+ * PENDING_ANALYSIS, is everything the deterministic client PDF needs).
+ * Deterministic -- not a Claude step, no failure state.
+ *
+ * Also callable from REPORT_READY itself: an idempotent self-transition
+ * (status doesn't move) that lets Build Report be re-entered safely --
+ * clicking it again after going Back, or a double-click/race, regenerates
+ * the PDF in place instead of hitting an invalid-transition error. This is
+ * NOT a new edge in the state graph (REPORT_READY never reaches back to an
+ * earlier state); it's the same status before and after.
+ */
+export async function markReportReady(
+  reportId: string,
+  { reportHtml, clientPdfPath }: { reportHtml?: string; clientPdfPath?: string },
+) {
   return guardedUpdate(
     reportId,
-    [ReportStatus.ANALYSIS_READY],
-    { status: ReportStatus.REPORT_READY, reportHtml },
-    "mark report ready (ANALYSIS_READY -> REPORT_READY)",
+    [ReportStatus.ANALYSIS_READY, ReportStatus.PENDING_ANALYSIS, ReportStatus.REPORT_READY],
+    { status: ReportStatus.REPORT_READY, ...(reportHtml !== undefined ? { reportHtml } : {}), ...(clientPdfPath !== undefined ? { clientPdfPath } : {}) },
+    "mark report ready (ANALYSIS_READY|PENDING_ANALYSIS|REPORT_READY -> REPORT_READY)",
   );
 }
 

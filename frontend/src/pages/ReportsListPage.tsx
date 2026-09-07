@@ -6,25 +6,8 @@ import { Card } from '../components/ui/Card';
 import { ReportStatusBadge } from '../components/report/ReportStatusBadge';
 import { useActiveClient } from '../context/ClientContext';
 import { getReports } from '../api/client';
-import type { RankingReportListItem, ReportStatus } from '../api/types';
-
-function resumeRoute(report: RankingReportListItem): string {
-  switch (report.status as ReportStatus) {
-    case 'PENDING_ANALYSIS':
-    case 'ANALYSIS_FAILED':
-      return `/reports/${report.id}/analytics`;
-    case 'ANALYSIS_READY':
-      return `/reports/${report.id}/insights`;
-    case 'REPORT_READY':
-      return `/reports/${report.id}/preview`;
-    case 'EMAIL_DRAFT_FAILED':
-    case 'EMAIL_DRAFTED':
-    case 'PENDING_APPROVAL':
-      return `/reports/${report.id}/email`;
-    default:
-      return `/reports/${report.id}/send`;
-  }
-}
+import { resumeRouteForStatus } from '../components/report/reportFlowRoute';
+import type { RankingReportListItem } from '../api/types';
 
 function formatDateTime(iso: string) {
   return new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -84,7 +67,7 @@ export function ReportsListPage() {
                     <ReportStatusBadge status={report.status} />
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <Link to={resumeRoute(report)} className="font-semibold text-brand-300 hover:text-brand-200">
+                    <Link to={resumeRouteForStatus(report.id, report.status)} className="font-semibold text-brand-300 hover:text-brand-200">
                       View &rarr;
                     </Link>
                   </td>

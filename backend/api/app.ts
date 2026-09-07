@@ -7,10 +7,18 @@ import { createMockClaudeAnalyst, createMockClaudeEmailDrafter } from "../report
 import { createMockEmailSender } from "../reporting/mockEmailSender.js";
 import type { CallDataForSeoFn } from "../worker/processRun.js";
 
-// No CORS middleware: the Vite dev server proxies /api to this server
-// (see frontend/vite.config.ts), so requests are same-origin from the
-// browser's perspective.
-//
+// CORS: in local dev, the Vite dev server proxies /api to this server (see
+// frontend/vite.config.ts), so requests are same-origin and no CORS is
+// needed. Once the frontend and backend are hosted separately (e.g.
+// frontend on Vercel, backend on Render), the browser calls this server
+// cross-origin, so allowed origins are explicit and env-driven -- never a
+// blanket "*", since responses can include real client data. No `cors`
+// package dependency for something this small.
+const allowedOrigins = (process.env.CORS_ORIGINS ?? "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 // reportingDeps defaults to mocks: no ANTHROPIC_API_KEY and no email
 // provider are configured anywhere in this codebase yet, so /api/reports
 // always runs against mocks unless a caller explicitly injects real
@@ -27,6 +35,21 @@ export function createApp(
 ) {
   const app = express();
   app.use(express.json());
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
 
   app.use("/api/clients", clientsRouter);
   app.use("/api/overview", overviewRouter);

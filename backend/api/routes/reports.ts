@@ -13,6 +13,13 @@ import type { CallClaudeFn } from "../../reporting/reportAnalyst.js";
 import type { SendEmailFn } from "../../reporting/emailSender.js";
 import type { GenerateExcelAttachmentFn } from "../../reporting/generateExcelAttachment.js";
 
+// Mirrors frontend/src/components/report/reportStatus.ts's isValidEmailAddress
+// exactly -- the frontend already blocks invalid entries before Save Changes
+// is even clickable, this is the backend-side enforcement of that same rule
+// so a malformed address can't reach the database (and therefore the
+// eventual send) via a direct API call that skips the UI.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export interface ReportsRouterDeps {
   callClaudeAnalyst: CallClaudeFn;
   callClaudeEmailDraft: CallClaudeEmailDraftFn;
@@ -87,8 +94,9 @@ export function createReportsRouter({ callClaudeAnalyst, callClaudeEmailDraft, s
     }
   });
 
-  // The "Build Report" wizard step: ANALYSIS_READY -> REPORT_READY.
-  // Deterministic -- no Claude call.
+  // The "Build Report" wizard step: PENDING_ANALYSIS|ANALYSIS_READY ->
+  // REPORT_READY. Deterministic -- no Claude call. Generates the
+  // client-facing PDF once and stores it; does not send anything.
   router.post("/:id/build-report", async (req, res) => {
     try {
       const result = await buildReport(req.params.id);
@@ -100,6 +108,23 @@ export function createReportsRouter({ callClaudeAnalyst, callClaudeEmailDraft, s
       }
       throw err;
     }
+  });
+
+  // Streams the exact PDF artifact written by buildReport -- backs the PDF
+  // Preview page's viewer AND is the same file generateExcelPdfAttachment
+  // reads at send time. One generated file, read twice, never regenerated.
+  router.get("/:id/pdf", async (req, res) => {
+    const report = await prisma.rankingReport.findUnique({ where: { id: req.params.id } });
+    if (!report) {
+      res.status(404).json({ error: "Report not found" });
+      return;
+    }
+    if (!report.clientPdfPath) {
+      res.status(404).json({ error: "Report has no generated PDF yet -- build the report first." });
+      return;
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.sendFile(report.clientPdfPath);
   });
 
   // Preview: the full report -- analytics, analysis, rendered HTML, and
@@ -118,11 +143,21 @@ export function createReportsRouter({ callClaudeAnalyst, callClaudeEmailDraft, s
 
   // Edit recipients/subject/body -- only while the report is sitting in
   // the approval queue (PENDING_APPROVAL). Human editing, never Claude.
+  // These are the exact values approveAndSendReport reads at send time
+  // (see approveAndSend.ts) -- there is no separate "confirmed" copy, so
+  // validating and persisting here IS what the eventual send uses.
   router.patch("/:id", async (req, res) => {
     const { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedClickupTaskUrl } = req.body ?? {};
-    if (resolvedRecipients !== undefined && !Array.isArray(resolvedRecipients)) {
-      res.status(400).json({ error: "resolvedRecipients must be an array of email addresses" });
-      return;
+    if (resolvedRecipients !== undefined) {
+      if (!Array.isArray(resolvedRecipients)) {
+        res.status(400).json({ error: "resolvedRecipients must be an array of email addresses" });
+        return;
+      }
+      const invalidRecipients = resolvedRecipients.filter((r: unknown) => typeof r !== "string" || !EMAIL_PATTERN.test(r));
+      if (invalidRecipients.length > 0) {
+        res.status(400).json({ error: `resolvedRecipients contains invalid email address(es): ${invalidRecipients.join(", ")}` });
+        return;
+      }
     }
     if (resolvedClickupTaskUrl !== undefined && resolvedClickupTaskUrl !== null && typeof resolvedClickupTaskUrl !== "string") {
       res.status(400).json({ error: "resolvedClickupTaskUrl must be a string or null" });

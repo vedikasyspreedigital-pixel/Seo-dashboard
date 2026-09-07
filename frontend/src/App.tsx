@@ -6,7 +6,6 @@ import { RunDetailPage } from './pages/RunDetailPage';
 import { ReportsListPage } from './pages/ReportsListPage';
 import { GenerateReportPage } from './pages/report-wizard/GenerateReportPage';
 import { AnalyticsPreviewPage } from './pages/report-wizard/AnalyticsPreviewPage';
-import { AnalystInsightsPage } from './pages/report-wizard/AnalystInsightsPage';
 import { ReportPreviewWizardPage } from './pages/report-wizard/ReportPreviewWizardPage';
 import { EmailDraftPage } from './pages/report-wizard/EmailDraftPage';
 import { SendConfirmationPage } from './pages/report-wizard/SendConfirmationPage';
@@ -22,7 +21,6 @@ export default function App() {
       <Route path="/runs/:runId/report/new" element={<GenerateReportPage />} />
       <Route path="/reports" element={<ReportsListPage />} />
       <Route path="/reports/:reportId/analytics" element={<AnalyticsPreviewPage />} />
-      <Route path="/reports/:reportId/insights" element={<AnalystInsightsPage />} />
       <Route path="/reports/:reportId/preview" element={<ReportPreviewWizardPage />} />
       <Route path="/reports/:reportId/email" element={<EmailDraftPage />} />
       <Route path="/reports/:reportId/send" element={<SendConfirmationPage />} />

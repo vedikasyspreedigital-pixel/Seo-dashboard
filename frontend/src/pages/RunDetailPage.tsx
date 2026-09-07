@@ -11,11 +11,11 @@ import { ProcessingSummary } from '../components/run/ProcessingSummary';
 import { CompletedSummary } from '../components/run/CompletedSummary';
 import { useRunProgress } from '../hooks/useRunProgress';
 import { useActiveClient } from '../context/ClientContext';
+import { isRunReportable } from '../components/run/runStatus';
 import { cancelRun, getExportUrl, getRun, getRunRows, startRun } from '../api/client';
 import type { RankingRun, RunRow } from '../api/types';
 
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS', 'CANCELLED']);
-const REPORTABLE_STATUSES = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS']);
 const FILTERS = ['All', 'Completed', 'Error-Retry', 'Failed'] as const;
 type Filter = (typeof FILTERS)[number];
 
@@ -62,7 +62,7 @@ export function RunDetailPage() {
 
   const status = progress?.runStatus ?? run?.status;
   const isTerminal = status ? TERMINAL_STATUSES.has(status) : false;
-  const isReportable = status ? REPORTABLE_STATUSES.has(status) : false;
+  const isReportable = status ? isRunReportable(status) : false;
 
   async function handleStart() {
     if (!runId) return;
@@ -105,37 +105,66 @@ export function RunDetailPage() {
       <PageHeader
         breadcrumbs={[{ label: 'Runs', to: '/runs' }, { label: run ? `#${run.id.slice(0, 8)}` : '...' }]}
         action={
-          (run?.status === 'UPLOADED' || run?.status === 'PROCESSING') && !confirmingStart ? (
+          run?.status === 'UPLOADED' || run?.status === 'PROCESSING' ? (
+            // Cancel Run stays mounted here regardless of confirmingStart
+            // (just disabled while confirming, same as it being absent
+            // before -- neither is clickable) so this action slot never
+            // collapses to empty when "Start Run" is clicked. That collapse
+            // was the other source of the page-load-position jump: with
+            // nothing here, the header row shrinks to the breadcrumb's
+            // height alone and everything below shifts up.
             <div className="flex items-center gap-3">
-              <Button variant="ghost" disabled={cancelling} onClick={handleCancel}>
+              <Button variant="ghost" disabled={cancelling || confirmingStart} onClick={handleCancel}>
                 {cancelling && <Spinner />}
                 Cancel Run
               </Button>
-              {run.status === 'UPLOADED' && <Button onClick={() => setConfirmingStart(true)}>Start Run</Button>}
+              {run.status === 'UPLOADED' && !confirmingStart && <Button onClick={() => setConfirmingStart(true)}>Start Run</Button>}
             </div>
           ) : (
-            isTerminal && (
+            // Generate Report and Download Excel only appear once the run
+            // is genuinely reportable (COMPLETED | COMPLETED_WITH_ERRORS) --
+            // the same existing definition already used elsewhere in this
+            // app, not the broader "isTerminal" (which also includes
+            // CANCELLED, a run that was never completed and has nothing to
+            // report or download). Cancel stays in the same action area,
+            // disabled -- it's the same button/API as above, just inert
+            // here since cancelRun only ever accepts UPLOADED/PROCESSING.
+            isReportable && (
               <div className="flex items-center gap-3">
+                <Button onClick={() => navigate(`/runs/${runId}/report/new`)}>Generate Report</Button>
                 <a href={getExportUrl(runId)}>
                   <Button variant="secondary">Download Excel</Button>
                 </a>
-                {isReportable && <Button onClick={() => navigate(`/runs/${runId}/report/new`)}>Generate Report</Button>}
+                <Button variant="ghost" disabled title="This run has already finished -- nothing to cancel">
+                  Cancel Run
+                </Button>
               </div>
             )
           )
         }
       />
 
-      {confirmingStart && run && (
-        <div className="mt-3 flex items-center justify-end gap-3 text-sm">
+      {/*
+        Always mounted (not just while confirmingStart is true) so this row's
+        space is reserved from the moment a Start-Run-eligible run loads --
+        toggling confirmingStart only flips visibility, never
+        mounts/unmounts the element, so the page never jumps when "Start
+        Run" is clicked. Only rendered at all while the run is UPLOADED,
+        since that's the only status this control is ever relevant for.
+      */}
+      {run?.status === 'UPLOADED' && (
+        <div
+          className={`mt-3 flex items-center justify-end gap-3 text-sm ${confirmingStart ? '' : 'invisible'}`}
+          aria-hidden={!confirmingStart}
+        >
           <span className="font-medium text-amber-300">
             Process {run.totalRows} row{run.totalRows === 1 ? '' : 's'} &mdash; confirm?
           </span>
-          <Button disabled={starting} onClick={handleStart}>
+          <Button disabled={!confirmingStart || starting} onClick={handleStart}>
             {starting && <Spinner />}
             Confirm
           </Button>
-          <Button variant="ghost" disabled={starting} onClick={() => setConfirmingStart(false)}>
+          <Button variant="ghost" disabled={!confirmingStart || starting} onClick={() => setConfirmingStart(false)}>
             Cancel
           </Button>
         </div>

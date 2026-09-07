@@ -29,7 +29,7 @@ export async function generateEmailDraft(reportId: string, callClaude: CallClaud
   });
 
   const analytics = report.analyticsJson as unknown as RunAnalytics;
-  const analysis = report.analysisJson as unknown as AnalystOutput;
+  const analysis = report.analysisJson as unknown as AnalystOutput | null;
 
   const input = buildEmailDraftInput({
     clientName: report.client.name,

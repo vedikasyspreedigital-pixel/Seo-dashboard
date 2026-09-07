@@ -59,6 +59,9 @@ test("report transition graph matches the locked design", () => {
   assert.equal(isValidReportTransition(ReportStatus.PENDING_ANALYSIS, ReportStatus.ANALYSIS_FAILED), true);
   assert.equal(isValidReportTransition(ReportStatus.ANALYSIS_FAILED, ReportStatus.PENDING_ANALYSIS), true);
   assert.equal(isValidReportTransition(ReportStatus.ANALYSIS_READY, ReportStatus.REPORT_READY), true);
+  // Build Report can also run directly off PENDING_ANALYSIS, skipping the
+  // optional Claude Insights step entirely.
+  assert.equal(isValidReportTransition(ReportStatus.PENDING_ANALYSIS, ReportStatus.REPORT_READY), true);
   assert.equal(isValidReportTransition(ReportStatus.REPORT_READY, ReportStatus.EMAIL_DRAFTED), true);
   assert.equal(isValidReportTransition(ReportStatus.REPORT_READY, ReportStatus.EMAIL_DRAFT_FAILED), true);
   assert.equal(isValidReportTransition(ReportStatus.EMAIL_DRAFT_FAILED, ReportStatus.REPORT_READY), true);
@@ -111,6 +114,36 @@ test("happy path: PENDING_ANALYSIS -> ... -> SENT, every field set at the right 
     const sent = await markSent(report.id);
     assert.equal(sent.status, ReportStatus.SENT);
     assert.ok(sent.sentAt);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("Build Report shortcut: PENDING_ANALYSIS -> REPORT_READY directly via markReportReady, storing clientPdfPath (no Claude Insights step)", async () => {
+  const client = await makeClient(`Report Transitions - build report shortcut ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id);
+    assert.equal(report.status, ReportStatus.PENDING_ANALYSIS);
+
+    const reportReady = await markReportReady(report.id, { clientPdfPath: "/reports/fake.pdf" });
+    assert.equal(reportReady.status, ReportStatus.REPORT_READY);
+    assert.equal(reportReady.clientPdfPath, "/reports/fake.pdf");
+    assert.equal(reportReady.reportHtml, null, "no HTML narrative is generated on this path");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("Build Report re-entry: markReportReady is callable again from REPORT_READY itself (idempotent regenerate-in-place, not a backward transition)", async () => {
+  const client = await makeClient(`Report Transitions - build report re-entry ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id, { status: ReportStatus.REPORT_READY });
+
+    const regenerated = await markReportReady(report.id, { clientPdfPath: "/reports/regenerated.pdf" });
+    assert.equal(regenerated.status, ReportStatus.REPORT_READY, "status does not move backward or forward -- it's the same state before and after");
+    assert.equal(regenerated.clientPdfPath, "/reports/regenerated.pdf");
   } finally {
     await cleanupClient(client.id);
   }
@@ -183,8 +216,11 @@ test("invalid transitions are rejected: can't skip states, can't act on terminal
   try {
     const run = await makeRun(client.id);
 
+    // PENDING_ANALYSIS -> REPORT_READY (Build Report's shortcut) is now
+    // valid -- see the dedicated "Build Report shortcut" test above. What's
+    // still illegal from PENDING_ANALYSIS is skipping straight into the
+    // approval/send stages.
     const freshReport = await makeReport(client.id, run.id); // PENDING_ANALYSIS
-    await assert.rejects(() => markReportReady(freshReport.id, { reportHtml: "x" }), InvalidReportTransitionError);
     await assert.rejects(() => submitForApproval(freshReport.id), InvalidReportTransitionError);
     await assert.rejects(() => approveReport(freshReport.id, { approvedBy: "x" }), InvalidReportTransitionError);
 
@@ -192,6 +228,7 @@ test("invalid transitions are rejected: can't skip states, can't act on terminal
     await assert.rejects(() => markSent(sentReport.id), InvalidReportTransitionError);
     await assert.rejects(() => rejectReport(sentReport.id), InvalidReportTransitionError);
     await assert.rejects(() => retryAnalysis(sentReport.id), InvalidReportTransitionError);
+    await assert.rejects(() => markReportReady(sentReport.id, { clientPdfPath: "x" }), InvalidReportTransitionError);
 
     const rejectedReport = await makeReport(client.id, run.id, { status: ReportStatus.REJECTED });
     await assert.rejects(() => submitForApproval(rejectedReport.id), InvalidReportTransitionError);

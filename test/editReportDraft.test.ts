@@ -62,6 +62,25 @@ test("recipient editing: subject, body, recipients, and ClickUp task URL can be 
   }
 });
 
+test("emailBody persists on its own, independent of the other fields", async () => {
+  const client = await makeClient(`Edit Draft Test - body only ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id, ReportStatus.PENDING_APPROVAL);
+
+    const updated = await updateReportDraft(report.id, { emailBody: "Edited body only" });
+    assert.equal(updated.emailBody, "Edited body only");
+    assert.equal(updated.emailSubject, "Original subject"); // untouched
+
+    // Refetch as a completely separate read, proving this isn't just the
+    // update call echoing its own input back.
+    const refetched = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(refetched.emailBody, "Edited body only");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 for (const otherStatus of [ReportStatus.REPORT_READY, ReportStatus.EMAIL_DRAFTED, ReportStatus.SENT, ReportStatus.REJECTED]) {
   test(`recipient editing is refused when the report is ${otherStatus}, not silently applied`, async () => {
     const client = await makeClient(`Edit Draft Test - refused ${otherStatus} ${randomUUID()}`);

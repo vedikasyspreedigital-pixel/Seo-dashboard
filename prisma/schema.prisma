@@ -45,17 +45,83 @@ enum ReportStatus {
   SENT
 }
 
-model Client {
+// Access/workspace layer -- additive on top of the existing ranking/
+// reporting pipeline, which keys off Client.id only and is otherwise
+// unaffected. A Workspace is a data row (not an enum) deliberately, matching
+// this schema's existing convention (see reportTone/reportingFrequency/
+// templateId below) of free-text values over enums for anything that might
+// grow, since "SEO" / "Advanced SEO" today is exactly the kind of set that
+// gains a third member later.
+model Workspace {
   id        String   @id @default(uuid())
-  name      String
+  slug      String   @unique // "seo" | "advanced-seo" -- stable, URL/code-safe key
+  name      String   // display label, e.g. "SEO", "Advanced SEO"
   isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
+
+  clients     Client[]
+  memberships WorkspaceMembership[]
+
+  @@map("workspaces")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String?
+  role         String   @default("member") @map("role") // free text: "member" | "admin" -- orthogonal to workspace visibility, see WorkspaceMembership
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  memberships WorkspaceMembership[]
+
+  @@map("users")
+}
+
+// Which user can see which workspace(s) -- a visibility list, not a
+// privilege-escalation mechanism. A single-workspace user gets exactly one
+// row here; an admin who legitimately oversees both workspaces gets two.
+// This is what lets the clients-list query treat "sees one" and "sees both"
+// as the same shape, with no admin-specific branch anywhere.
+model WorkspaceMembership {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id])
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@unique([userId, workspaceId])
+  @@map("workspace_memberships")
+}
+
+model Client {
+  id          String     @id @default(uuid())
+  name        String
+  // Nullable deliberately, not backfilled to a default workspace: an
+  // existing real client silently mis-assigned to the wrong workspace at
+  // migration time would be worse than it being invisible (in neither
+  // workspace's dropdown) until a human explicitly triages it.
+  workspaceId String?    @map("workspace_id")
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+  // True for rows created by test suites / manual spike testing (the
+  // existing "API Test ...", "Reports API Test ..." naming convention),
+  // backfilled once at migration time. Kept as an explicit flag rather than
+  // inferred from workspaceId being null, since null alone is ambiguous
+  // between "test data" and "real client not yet triaged into a workspace."
+  isTestData Boolean  @default(false) @map("is_test_data")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   runs          RankingRun[]
   reportConfigs ClientReportConfig[]
   reports       RankingReport[]
 
+  @@index([workspaceId, isActive])
   @@map("clients")
 }
 
@@ -73,7 +139,8 @@ model ClientReportConfig {
   metricsEnabled     Json    @map("metrics_enabled") // e.g. ["averageRank","top3","top10","notIn100"]
   customInstructions String? @map("custom_instructions")
   recipients         Json // email addresses -- resolved by the backend only; Claude never sees or decides this
-  clickupTaskUrl     String? @map("clickup_task_url") // the ClickUp task whose Email composer delivers this client's reports -- resolved by the backend only, same as recipients
+  clickupTaskId      String? @map("clickup_task_id") // primary: bare ClickUp task id (e.g. "86d45e14k") -- resolved into a full URL as https://app.clickup.com/t/{id} when set
+  clickupTaskUrl     String? @map("clickup_task_url") // fallback: the ClickUp task whose Email composer delivers this client's reports, used verbatim when clickupTaskId is unset -- resolved by the backend only, same as recipients
   reportingFrequency String  @map("reporting_frequency") // "weekly" | "biweekly" | "monthly" | "manual"
   templateId         String  @map("template_id") // selects a deterministic report renderer, not a Claude choice
 
@@ -194,7 +261,8 @@ model RankingReport {
 
   analyticsJson      Json?   @map("analytics_json") // computeRunAnalytics output -- pure code, no Claude
   analysisJson       Json?   @map("analysis_json") // Claude Report Analyst's schema-validated output
-  reportHtml         String? @map("report_html") // deterministic Report Generator output
+  reportHtml         String? @map("report_html") // deterministic Report Generator output (legacy full-narrative report path)
+  clientPdfPath      String? @map("client_pdf_path") // deterministic client-facing PDF (Summary + Keyword Table) written to disk by buildReport -- the SAME file streamed by GET /:id/pdf and attached to the email; generated once, never regenerated
   emailSubject       String? @map("email_subject") // Claude Email Draft Generator's output (subject)
   emailBody          String? @map("email_body") // Claude Email Draft Generator's output (bodyText)
   emailBodyHtml      String? @map("email_body_html") // Claude Email Draft Generator's output (bodyHtml)

@@ -2,17 +2,22 @@ import { useEffect, useState } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Spinner } from '../ui/Spinner';
-import { isDraftEditable, parseRecipientsInput } from './reportStatus';
+import { isDraftEditable, parseRecipientsInput, resolveSaveButtonLabel } from './reportStatus';
 import type { RankingReport } from '../../api/types';
 import type { UpdateReportDraftInput } from '../../api/client';
 
 interface Props {
   report: RankingReport;
   onSave: (edits: UpdateReportDraftInput) => void;
+  /** True specifically while THIS save request is in flight -- drives the button's own "Saving..." label, never set by a sibling action (Regenerate/Reject). */
   saving: boolean;
+  /** True while ANY report action is in flight (this save, or Regenerate/Reject) -- prevents firing a save concurrently with a different in-flight action. */
+  disabled: boolean;
+  /** True right after a successful Save Changes call, until the user edits anything else. */
+  justSaved: boolean;
 }
 
-export function EmailDraftEditor({ report, onSave, saving }: Props) {
+export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }: Props) {
   const [subject, setSubject] = useState(report.emailSubject ?? '');
   const [body, setBody] = useState(report.emailBody ?? '');
   const [recipientsInput, setRecipientsInput] = useState((report.resolvedRecipients ?? []).join(', '));
@@ -20,7 +25,9 @@ export function EmailDraftEditor({ report, onSave, saving }: Props) {
 
   // Reset local form state whenever the server-side draft actually changes
   // (Regenerate, a prior Save) -- not on every keystroke, since those never
-  // touch `report`.
+  // touch `report`. A successful save updates `report` with exactly what
+  // was just persisted, so this also re-syncs the form to the confirmed
+  // saved values (not merely whatever was typed) right after Save Changes.
   useEffect(() => {
     setSubject(report.emailSubject ?? '');
     setBody(report.emailBody ?? '');
@@ -30,7 +37,18 @@ export function EmailDraftEditor({ report, onSave, saving }: Props) {
 
   const editable = isDraftEditable(report.status);
   const { recipients, invalid } = parseRecipientsInput(recipientsInput);
-  const canSave = editable && !saving && subject.trim().length > 0 && body.trim().length > 0 && invalid.length === 0;
+  const canSave = editable && !disabled && subject.trim().length > 0 && body.trim().length > 0 && invalid.length === 0;
+
+  // Unsaved-changes tracking (FIX #4 section 8): purely derived from
+  // comparing the live form to the last-known-persisted `report` -- no
+  // extra state to keep in sync. Becomes false the instant a save succeeds,
+  // since `report` (and therefore this comparison) updates to match.
+  const isDirty =
+    subject !== (report.emailSubject ?? '') ||
+    body !== (report.emailBody ?? '') ||
+    recipientsInput !== (report.resolvedRecipients ?? []).join(', ') ||
+    clickupTaskUrl !== (report.resolvedClickupTaskUrl ?? '');
+  const saveLabel = resolveSaveButtonLabel({ saving, justSaved, isDirty });
 
   return (
     <Card className="p-6">
@@ -97,7 +115,7 @@ export function EmailDraftEditor({ report, onSave, saving }: Props) {
         </div>
 
         {editable && (
-          <div>
+          <div className="flex items-center gap-3">
             <Button
               variant="secondary"
               disabled={!canSave}
@@ -111,8 +129,10 @@ export function EmailDraftEditor({ report, onSave, saving }: Props) {
               }
             >
               {saving && <Spinner />}
-              Save Changes
+              {saveLabel}
             </Button>
+            {!saving && isDirty && <span className="text-xs font-medium text-amber-300">Unsaved changes</span>}
+            {!saving && !isDirty && justSaved && <span className="text-xs font-medium text-brand-300">Changes saved</span>}
           </div>
         )}
       </div>

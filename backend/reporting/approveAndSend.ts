@@ -57,16 +57,16 @@ export async function approveAndSendReport(
   // step only; approval is not repeated.
 
   try {
-    // The actual ranking Excel (re-patched with current row state -- the
-    // same file "Download Excel" produces), converted to PDF, sent
-    // alongside the deterministic HTML report -- not instead of it.
+    // The client-facing PDF (Report Summary + one Keyword Ranking Table,
+    // built straight from the report's own deterministic analyticsJson),
+    // sent alongside the deterministic HTML report -- not instead of it.
     // generateExcelAttachment is optional (like sendEmail/callClaudeAnalyst
-    // elsewhere) so tests with fixture runs that have no real file on disk
-    // aren't forced to exercise real file I/O or a real Playwright browser.
+    // elsewhere) so tests with fixture reports aren't forced to launch a
+    // real Playwright browser just to approve a report.
     let excelPdfBuffer: Buffer | undefined;
     let excelPdfFilename: string | undefined;
     if (generateExcelAttachment) {
-      const excelAttachment = await generateExcelAttachment(current.runId);
+      const excelAttachment = await generateExcelAttachment(current.id);
       excelPdfBuffer = excelAttachment.buffer;
       excelPdfFilename = excelAttachment.filename;
     }

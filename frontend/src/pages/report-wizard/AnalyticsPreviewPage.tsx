@@ -8,7 +8,8 @@ import { Spinner } from '../../components/ui/Spinner';
 import { StatTile } from '../../components/ui/StatTile';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
-import { generateInsights, getReport } from '../../api/client';
+import { isReportAlreadyBuilt } from '../../components/report/reportStatus';
+import { buildReport, getReport } from '../../api/client';
 import type { RankingReport } from '../../api/types';
 
 export function AnalyticsPreviewPage() {
@@ -23,18 +24,13 @@ export function AnalyticsPreviewPage() {
     getReport(reportId).then(setReport);
   }, [reportId]);
 
-  async function handleGenerateInsights() {
-    if (!reportId) return;
+  async function handleBuildReport() {
+    if (!reportId || generating) return; // guard against double-clicks/duplicate requests
     setGenerating(true);
     setError(null);
     try {
-      const result = await generateInsights(reportId);
-      if (result.outcome !== 'SUCCESS') {
-        setError(result.errorMessage ?? `Analysis failed (${result.outcome}).`);
-        setGenerating(false);
-        return;
-      }
-      navigate(`/reports/${reportId}/insights`);
+      await buildReport(reportId);
+      navigate(`/reports/${reportId}/preview`);
     } catch (err) {
       setError((err as Error).message);
       setGenerating(false);
@@ -50,16 +46,21 @@ export function AnalyticsPreviewPage() {
   }
 
   const analytics = report.analyticsJson;
+  const alreadyBuilt = isReportAlreadyBuilt(report.status);
 
   return (
     <AppShell>
       <PageHeader
-        breadcrumbs={[{ label: 'Generate Report', to: `/runs/${report.runId}/report/new` }, { label: 'Analytics Preview' }]}
+        breadcrumbs={[{ label: '← Back to Run', to: `/runs/${report.runId}` }, { label: 'Analytics Preview' }]}
         action={
-          <Button disabled={generating} onClick={handleGenerateInsights}>
-            {generating && <Spinner />}
-            Generate Insights with Claude &rarr;
-          </Button>
+          alreadyBuilt ? (
+            <Button onClick={() => navigate(`/reports/${reportId}/preview`)}>View Report Preview &rarr;</Button>
+          ) : (
+            <Button disabled={generating} onClick={handleBuildReport}>
+              {generating && <Spinner />}
+              Build Report &rarr;
+            </Button>
+          )
         }
       />
 

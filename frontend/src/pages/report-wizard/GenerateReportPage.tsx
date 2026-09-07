@@ -7,7 +7,8 @@ import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Select';
 import { Spinner } from '../../components/ui/Spinner';
 import { useActiveClient } from '../../context/ClientContext';
-import { createReport, getRuns } from '../../api/client';
+import { createReport, getReport, getRuns } from '../../api/client';
+import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
 import type { RankingRun } from '../../api/types';
 
 const REPORTABLE = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS']);
@@ -46,7 +47,12 @@ export function GenerateReportPage() {
         return;
       }
       if (result.outcome === 'DUPLICATE') {
-        navigate(`/reports/${result.existingReportId}/analytics`);
+        // A report already exists for this run -- resume from wherever it
+        // actually is (it may already be past Analytics Preview), instead
+        // of dumping the user back at the start and inviting them to
+        // re-trigger a step that's already done.
+        const existing = await getReport(result.existingReportId);
+        navigate(resumeRouteForStatus(existing.id, existing.status));
         return;
       }
       setError(result.outcome === 'RUN_NOT_FOUND' ? 'Run not found.' : result.message);
@@ -59,7 +65,7 @@ export function GenerateReportPage() {
 
   return (
     <AppShell>
-      <PageHeader breadcrumbs={[{ label: 'Run', to: `/runs/${runId}` }, { label: 'Generate Report' }]} />
+      <PageHeader breadcrumbs={[{ label: '← Back to Run', to: `/runs/${runId}` }, { label: 'Generate Report' }]} />
       <PageTitle title="Generate SEO Report" subtitle={runId ? `Run #${runId.slice(0, 8)}` : undefined} />
 
       <Card className="mt-6 p-6">
@@ -76,7 +82,7 @@ export function GenerateReportPage() {
 
         <div className="mt-5 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
           <p className="text-sm text-[var(--color-ink-muted)]">
-            This creates a report record and takes you to analytics. The Claude call happens only when you generate insights.
+            This creates a report record and takes you to analytics. No Claude call happens until you draft the email later.
           </p>
         </div>
 

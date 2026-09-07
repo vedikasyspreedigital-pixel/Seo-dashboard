@@ -7,6 +7,8 @@ import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { EmailDraftEditor } from '../../components/report/EmailDraftEditor';
+import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
+import { canRegenerate, canApproveOrReject } from '../../components/report/reportStatus';
 import { getReport, regenerateEmailDraft, rejectReport, updateReportDraft, type UpdateReportDraftInput } from '../../api/client';
 import type { RankingReport } from '../../api/types';
 
@@ -15,11 +17,28 @@ export function EmailDraftPage() {
   const navigate = useNavigate();
   const [report, setReport] = useState<RankingReport | null>(null);
   const [busy, setBusy] = useState(false);
+  // Save Changes gets its own in-flight flag (in addition to the shared
+  // `busy` used to keep Save/Regenerate/Reject mutually exclusive) so its
+  // button label reflects THIS action specifically, not whichever of the
+  // three happens to be running.
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!reportId) return;
-    getReport(reportId).then(setReport);
+    // Guarded on the initial fetch only -- not re-run on every local state
+    // update from Save/Regenerate/Reject below, so a Regenerate failure
+    // (which leaves emailSubject null, same as "no draft yet") never yanks
+    // the user off the page they're actively looking at.
+    getReport(reportId).then((r) => {
+      const hasDraft = Boolean(r.clientPdfPath) && (Boolean(r.emailSubject) || r.status === 'EMAIL_DRAFT_FAILED');
+      if (!hasDraft) {
+        navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
+        return;
+      }
+      setReport(r);
+    });
   }, [reportId]);
 
   async function refresh() {
@@ -30,23 +49,38 @@ export function EmailDraftPage() {
   }
 
   async function handleSave(edits: UpdateReportDraftInput) {
-    if (!reportId) return;
+    if (!reportId || busy) return; // guard against double-clicks/duplicate requests
     setBusy(true);
+    setSavingDraft(true);
     setError(null);
+    setJustSaved(false);
     try {
+      // The actual persistence: PATCH /api/reports/:id -> updateReportDraft
+      // -> prisma.rankingReport.update. setReport(updated) below replaces
+      // local state with exactly what the backend just confirmed it wrote
+      // -- not merely echoing back the form values -- so a refresh or
+      // re-navigation to this page reads the same persisted values back
+      // from GET /api/reports/:id.
       const updated = await updateReportDraft(reportId, edits);
       setReport(updated);
+      setJustSaved(true);
     } catch (err) {
+      // Deliberately do NOT touch `report` here -- EmailDraftEditor's form
+      // state stays exactly as the user left it (it only resyncs from
+      // `report`, which is untouched on failure), so a failed save never
+      // loses the user's edits and never shows a false "Saved".
       setError((err as Error).message);
     } finally {
       setBusy(false);
+      setSavingDraft(false);
     }
   }
 
   async function handleRegenerate() {
-    if (!reportId) return;
+    if (!reportId || busy || !report || !canRegenerate(report.status)) return;
     setBusy(true);
     setError(null);
+    setJustSaved(false); // a different action ran -- any prior "Saved" label is stale
     try {
       const result = await regenerateEmailDraft(reportId);
       await refresh();
@@ -61,9 +95,10 @@ export function EmailDraftPage() {
   }
 
   async function handleReject() {
-    if (!reportId) return;
+    if (!reportId || busy || !report || !canApproveOrReject(report.status)) return;
     setBusy(true);
     setError(null);
+    setJustSaved(false);
     try {
       await rejectReport(reportId);
       navigate(`/reports/${reportId}/send`);
@@ -84,9 +119,9 @@ export function EmailDraftPage() {
   return (
     <AppShell>
       <PageHeader
-        breadcrumbs={[{ label: 'Report Preview', to: `/reports/${reportId}/preview` }, { label: 'Email Draft' }]}
+        breadcrumbs={[{ label: '← Back to Report Preview', to: `/reports/${reportId}/preview` }, { label: 'Email Draft' }]}
         action={
-          <Button disabled={busy} onClick={() => navigate(`/reports/${reportId}/send`)}>
+          <Button disabled={busy} onClick={() => !busy && navigate(`/reports/${reportId}/send`)}>
             Preview Send &rarr;
           </Button>
         }
@@ -106,18 +141,24 @@ export function EmailDraftPage() {
       )}
 
       <div className="mt-6">
-        <EmailDraftEditor report={report} onSave={handleSave} saving={busy} />
+        <EmailDraftEditor report={report} onSave={handleSave} saving={savingDraft} disabled={busy} justSaved={justSaved} />
       </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <Button variant="secondary" disabled={busy} onClick={handleRegenerate}>
-          {busy && <Spinner />}
-          Regenerate Draft
-        </Button>
-        <Button variant="danger" disabled={busy} onClick={handleReject}>
-          Reject
-        </Button>
-      </div>
+      {(canRegenerate(report.status) || canApproveOrReject(report.status)) && (
+        <div className="mt-4 flex items-center gap-3">
+          {canRegenerate(report.status) && (
+            <Button variant="secondary" disabled={busy} onClick={handleRegenerate}>
+              {busy && <Spinner />}
+              Regenerate Draft
+            </Button>
+          )}
+          {canApproveOrReject(report.status) && (
+            <Button variant="danger" disabled={busy} onClick={handleReject}>
+              Reject
+            </Button>
+          )}
+        </div>
+      )}
     </AppShell>
   );
 }
