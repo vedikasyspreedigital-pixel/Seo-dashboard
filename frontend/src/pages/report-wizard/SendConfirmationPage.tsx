@@ -6,6 +6,10 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
+import { InlineError } from '../../components/ui/InlineError';
+import { BackLink } from '../../components/ui/BackLink';
+import { TextInput } from '../../components/ui/TextInput';
+import { AlertPanel } from '../../components/ui/AlertPanel';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
 import { approveAndSendReport, getReport } from '../../api/client';
 import type { RankingReport } from '../../api/types';
@@ -69,9 +73,7 @@ export function SendConfirmationPage() {
         <PageHeader breadcrumbs={[{ label: 'Reports', to: '/reports' }, { label: 'Rejected' }]} />
         <Card className="mt-6 p-6">
           <p className="text-sm text-[var(--color-ink-muted)]">This report was rejected. No email was sent.</p>
-          <Link to="/reports" className="mt-3 inline-block text-sm font-semibold text-brand-300 hover:text-brand-200">
-            &larr; Back to Reports
-          </Link>
+          <BackLink to="/reports" label="Back to Reports" />
         </Card>
       </AppShell>
     );
@@ -84,9 +86,7 @@ export function SendConfirmationPage() {
         <Card className="mt-6 border-brand-400/25 bg-brand-400/[0.05] p-6">
           <p className="font-semibold text-brand-300">Report sent.</p>
           {report.sentAt && <p className="mt-1 text-sm text-[var(--color-ink-muted)]">{new Date(report.sentAt).toLocaleString()}</p>}
-          <Link to="/reports" className="mt-3 inline-block text-sm font-semibold text-brand-300 hover:text-brand-200">
-            &larr; Back to Reports
-          </Link>
+          <BackLink to="/reports" label="Back to Reports" />
         </Card>
       </AppShell>
     );
@@ -117,19 +117,14 @@ export function SendConfirmationPage() {
 
         <div className="mt-5">
           <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Approved by</label>
-          <input
-            type="text"
-            value={approvedBy}
-            onChange={(e) => setApprovedBy(e.target.value)}
-            className="w-full max-w-xs rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-3.5 py-2.5 text-sm text-[var(--color-ink)] shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-400/25"
-          />
+          <TextInput type="text" value={approvedBy} onChange={(e) => setApprovedBy(e.target.value)} className="max-w-xs" />
         </div>
 
-        <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-4">
+        <AlertPanel tone="warning" className="mt-5 flex items-start gap-2.5">
           <p className="text-sm text-amber-300">This report will be emailed and marked Sent. This cannot be undone.</p>
-        </div>
+        </AlertPanel>
 
-        {error && <p className="mt-4 text-sm font-medium text-rose-300">{error}</p>}
+        <InlineError message={error} className="mt-4" />
 
         <div className="mt-6 flex items-center gap-3">
           <Button disabled={sending || recipients.length === 0 || approvedBy.trim().length === 0} onClick={handleApproveAndSend}>

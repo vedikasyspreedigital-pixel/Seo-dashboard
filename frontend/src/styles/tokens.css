@@ -1,0 +1,37 @@
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+
+  /* Premium dark-enterprise violet accent -- restrained, not dominant.
+     brand-400/600 are the exact gradient stops used for primary buttons
+     and glow accents (linear-gradient(135deg, brand-400, brand-600)). */
+  --color-brand-50: #f3eeff;
+  --color-brand-100: #e4d9ff;
+  --color-brand-200: #cbb3ff;
+  --color-brand-300: #c4a6ff;
+  --color-brand-400: #9b5cff;
+  --color-brand-500: #7c3aed;
+  --color-brand-600: #6330c9;
+  --color-brand-700: #5227a3;
+  --color-brand-800: #3d1d7a;
+  --color-brand-900: #291352;
+
+  /* Reserved specifically for "this content came from Claude" badges
+     (AI-drafted, Analyst Insights) -- a brighter, pinker highlight-violet
+     distinct from the primary brand gradient, so AI-originated content
+     stays visually distinguishable from deterministic backend output even
+     though both live in the same violet family now. */
+  --color-ai-300: #d4bbff;
+  --color-ai-400: #c79bff;
+  --color-ai-500: #b57cff;
+
+  --color-ink: #f5f5f7;
+  --color-ink-muted: #a1a1aa;
+  --color-ink-faint: #6f6b78;
+
+  --color-surface: #0d0c11;
+  --color-surface-2: #121117;
+  --color-surface-3: #18171e;
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(255, 255, 255, 0.1);
+}

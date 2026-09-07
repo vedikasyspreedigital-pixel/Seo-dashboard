@@ -3,6 +3,7 @@ import { createApp } from './api/app.js';
 import { callDataForSeoLive, LIVE_ENDPOINT_URL } from './dataforseo/client.js';
 import { createMockDataForSeoClient } from './dataforseo/mockClient.js';
 import { createMockClaudeAnalyst, createMockClaudeEmailDrafter } from './reporting/mockClaudeClient.js';
+import { callClaudeReportAnalystLive, callClaudeEmailDraftLive } from './reporting/claudeClient.js';
 import { createMockEmailSender } from './reporting/mockEmailSender.js';
 import { createClickUpEmailSender } from './reporting/clickupEmailSender.js';
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
@@ -14,6 +15,19 @@ if (typeof process.loadEnvFile === 'function') {
     // .env optional if vars are already set
   }
 }
+
+// Without these, a truly unhandled error (outside any request -- e.g. a
+// rejected promise nothing ever awaited) crashes the process with no trace
+// beyond Node's own default stderr dump, and on some platforms no trace at
+// all. Logs and keeps running rather than exiting, since a single bad
+// rejection elsewhere in the process is not a reason to drop every
+// in-flight request.
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection:', reason);
+});
 
 const PORT = Number(process.env.PORT ?? 3001);
 
@@ -46,9 +60,23 @@ if (useClickUp) {
   console.log('Report delivery: MOCK mode (default). Set CLICKUP_EMAIL_LIVE=true to send through ClickUp for real.');
 }
 
+// Same safety gate as DataForSEO/ClickUp above, for the analysis/email-draft
+// step: MOCK (fixed placeholder text) unless CLAUDE_LIVE=true is explicitly
+// set, in which case ANTHROPIC_API_KEY must also be set (claudeClient.ts
+// throws clearly if it's missing).
+const useClaude = process.env.CLAUDE_LIVE === 'true';
+const callClaudeAnalyst = useClaude ? callClaudeReportAnalystLive : createMockClaudeAnalyst();
+const callClaudeEmailDraft = useClaude ? callClaudeEmailDraftLive : createMockClaudeEmailDrafter();
+
+if (useClaude) {
+  console.log('Claude analysis/email draft: LIVE -- real API calls will be made and billed.');
+} else {
+  console.log('Claude analysis/email draft: MOCK mode (default). Set CLAUDE_LIVE=true to enable real calls.');
+}
+
 const app = createApp(callDataForSeo, useLive ? 'live' : 'mock', useLive ? LIVE_ENDPOINT_URL : undefined, {
-  callClaudeAnalyst: createMockClaudeAnalyst(),
-  callClaudeEmailDraft: createMockClaudeEmailDrafter(),
+  callClaudeAnalyst,
+  callClaudeEmailDraft,
   sendEmail,
   generateExcelAttachment: generateExcelPdfAttachment,
 });

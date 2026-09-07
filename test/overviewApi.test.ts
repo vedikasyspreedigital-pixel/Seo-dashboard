@@ -6,6 +6,7 @@ import { createApp } from "../backend/api/app.js";
 import { prisma } from "../backend/db/client.js";
 import { ReportStatus } from "@prisma/client";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
+import { createAuthenticatedSession } from "./helpers/auth.js";
 
 // Full HTTP-layer test against the real local Postgres container, checking
 // that /api/overview's numbers are genuine counts/sums of what's actually
@@ -13,8 +14,8 @@ import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
 
 const unusedDataForSeoMock: CallDataForSeoFn = async () => ({ httpStatus: 200, body: { status_code: 20000, tasks: [] } });
 
-async function makeClient(name: string) {
-  return prisma.client.create({ data: { name } });
+async function makeClient(name: string, workspaceId: string) {
+  return prisma.client.create({ data: { name, workspaceId } });
 }
 
 async function makeRun(clientId: string, status: "UPLOADED" | "COMPLETED" | "CANCELLED" = "COMPLETED") {
@@ -59,7 +60,8 @@ async function cleanupClient(clientId: string) {
 
 test("GET /api/overview: totals are real counts, and KPI movements use only the latest report per client", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
-  const client = await makeClient(`Overview Test - ${randomUUID()}`);
+  const auth = await createAuthenticatedSession();
+  const client = await makeClient(`Overview Test - ${randomUUID()}`, auth.workspace.id);
   try {
     const run1 = await makeRun(client.id, "COMPLETED");
     const run2 = await makeRun(client.id, "COMPLETED");
@@ -69,30 +71,35 @@ test("GET /api/overview: totals are real counts, and KPI movements use only the 
     await prisma.rankingReport.update({ where: { id: older.id }, data: { createdAt: new Date(Date.now() - 60_000) } });
     await makeReportWithAnalytics(client.id, run2.id, 2, 1, 0, 3);
 
-    const res = await request(app).get("/api/overview");
+    const res = await request(app).get(`/api/overview?workspaceId=${auth.workspace.id}`).set("Cookie", auth.cookieHeader);
     assert.equal(res.status, 200);
-    // Other test files share this DB and run concurrently, so exact counts
-    // here would be racy -- assert real numeric totals that are at least
-    // consistent with what this test itself just created, not exact
-    // equality against a separately-queried snapshot.
-    assert.equal(typeof res.body.totalClients, "number");
-    assert.ok(res.body.totalClients >= 1);
-    assert.ok(res.body.totalRuns >= 2);
-    assert.ok(res.body.totalSuccessfulRuns >= 2);
+    // Scoped to a workspace created fresh for this test alone, so unlike
+    // before, other concurrent test files sharing this DB can't pollute
+    // these numbers -- exact equality is now safe, not just "at least".
+    assert.equal(res.body.totalClients, 1);
+    assert.equal(res.body.totalRuns, 2);
+    assert.equal(res.body.totalSuccessfulRuns, 2);
 
     // Only the newer report's numbers (2/1/0/3) should count for this client,
     // not the older report's (5/5/5/10) -- proves de-duplication by client.
-    assert.ok(res.body.rankingMovements.improved >= 2);
-    assert.ok(res.body.rankingMovements.declined >= 1);
+    assert.equal(res.body.rankingMovements.improved, 2);
+    assert.equal(res.body.rankingMovements.declined, 1);
 
-    assert.equal(res.body.recentRuns.length <= 8, true);
+    assert.equal(res.body.recentRuns.length, 2);
     const ourRun = res.body.recentRuns.find((r: { id: string }) => r.id === run2.id);
     assert.ok(ourRun);
     assert.equal(ourRun.clientName, client.name);
     assert.equal(ourRun.status, "COMPLETED");
   } finally {
     await cleanupClient(client.id);
+    await auth.cleanup();
   }
+});
+
+test("GET /api/overview requires authentication", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const res = await request(app).get("/api/overview?workspaceId=whatever");
+  assert.equal(res.status, 401);
 });
 
 test.after(async () => {

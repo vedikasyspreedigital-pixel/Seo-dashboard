@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
+import { PageTitle } from "../components/layout/PageHeader";
 import { KpiCard } from "../components/overview/KpiCard";
 import { MovementsChart } from "../components/overview/MovementsChart";
 import { RecentRunsCard } from "../components/overview/RecentRunsCard";
 import { ClientDetailsCard } from "../components/overview/ClientDetailsCard";
 import { useActiveClient } from "../context/ClientContext";
+import { useSession } from "../context/SessionContext";
 import { getOverview, getRuns } from "../api/client";
 import type { OverviewData } from "../api/types";
 import {
@@ -17,18 +19,20 @@ import {
 
 export function OverviewPage() {
   const { activeClient } = useActiveClient();
+  const { activeWorkspace } = useSession();
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [clientRunCount, setClientRunCount] = useState<number | null>(null);
 
   useEffect(() => {
+    if (!activeWorkspace) return;
     let cancelled = false;
-    getOverview().then((data) => {
+    getOverview(activeWorkspace.id).then((data) => {
       if (!cancelled) setOverview(data);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeWorkspace]);
 
   useEffect(() => {
     if (!activeClient) return;
@@ -43,14 +47,7 @@ export function OverviewPage() {
 
   return (
     <AppShell wide>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-[var(--color-ink)]">
-          Overall Overview
-        </h1>
-        <p className="mt-1.5 text-sm text-[var(--color-ink-muted)]">
-          Welcome back, Admin 👋
-        </p>
-      </div>
+      <PageTitle title="Overall Overview" subtitle="Welcome back, Admin 👋" className="mb-6" />
 
       {!overview ? (
         <div className="py-24 text-center text-sm text-[var(--color-ink-faint)]">

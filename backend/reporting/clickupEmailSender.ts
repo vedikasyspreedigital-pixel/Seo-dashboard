@@ -45,9 +45,26 @@ export interface ClickUpEmailSenderOptions {
   sessionStatePath: string;
   /** Defaults to true (headless) -- this runs as a backend service, not an interactive spike. */
   headless?: boolean;
+  /**
+   * When true, does everything up through attaching files to the composer,
+   * then stops -- never clicks Send, never posts the audit comment, never
+   * throws for a missing/disabled Send button. Not wired into
+   * approveAndSendReport's normal call path (that function always calls
+   * markSent right after sendEmail resolves, which would be WRONG for a
+   * report that was never actually sent) -- this is for manual, one-off
+   * verification scripts only, called directly with hand-built params.
+   */
+  dryRun?: boolean;
+  /** Only used when dryRun is true: where to save a screenshot of the filled/attached composer for manual review. */
+  dryRunScreenshotPath?: string;
 }
 
-export function createClickUpEmailSender({ sessionStatePath, headless = true }: ClickUpEmailSenderOptions): SendEmailFn {
+export function createClickUpEmailSender({
+  sessionStatePath,
+  headless = true,
+  dryRun = false,
+  dryRunScreenshotPath,
+}: ClickUpEmailSenderOptions): SendEmailFn {
   return async function sendViaClickUp(params: SendEmailParams): Promise<SendEmailResult> {
     if (!params.clickupTaskUrl) {
       throw new Error(
@@ -184,6 +201,16 @@ export function createClickUpEmailSender({ sessionStatePath, headless = true }: 
       // additional attachments, etc.) -- intentionally a no-op until the
       // client-to-ClickUp mapping is provided.
       await performClientWorkflowActions(page, params);
+
+      if (dryRun) {
+        // Everything up to and including the attachment is done and
+        // verified on the real page -- stop here deliberately. Never
+        // touches the Send button, never posts the audit comment.
+        if (dryRunScreenshotPath) {
+          await page.screenshot({ path: dryRunScreenshotPath, fullPage: false }).catch(() => {});
+        }
+        return { messageId: `clickup-dry-run:${Date.now()}` };
+      }
 
       // Confirmed attribute: data-test="comment-bar__send-btn". Confirmed
       // live that it renders `disabled=""` until required fields are

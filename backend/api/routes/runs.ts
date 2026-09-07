@@ -10,6 +10,7 @@ import { startRun, cancelRun } from '../../statemachine/runTransitions.js';
 import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
+import { requireAuth } from '../../auth/requireAuth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Configurable so a persistent disk (e.g. Render) can be mounted somewhere
@@ -25,7 +26,12 @@ function countFor(counts: { status: string; _count: { _all: number } }[], status
 
 export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   const router = Router();
+  router.use(requireAuth);
 
+  // Note: per-request workspace-ownership checks on these :id routes are a
+  // deliberate, documented scope boundary (see the workspace-layer plan) --
+  // requireAuth confirms the caller is logged in, but doesn't yet re-verify
+  // that a given run/report id belongs to one of the caller's workspaces.
   router.post('/', upload.single('file'), async (req, res) => {
     const clientId = req.body?.clientId as string | undefined;
     const file = req.file;

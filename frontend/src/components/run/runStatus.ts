@@ -17,8 +17,3 @@ import type { RunStatus } from '../../api/types';
 export function isRunReportable(status: RunStatus): boolean {
   return status === 'COMPLETED' || status === 'COMPLETED_WITH_ERRORS';
 }
-
-/** Whether the run is still in a state cancelRun's own guard actually accepts (UPLOADED | PROCESSING) -- mirrors backend/statemachine/runTransitions.js's cancelRun exactly, unchanged. */
-export function isRunCancelable(status: RunStatus): boolean {
-  return status === 'UPLOADED' || status === 'PROCESSING';
-}

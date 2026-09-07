@@ -16,14 +16,6 @@ export function canApproveOrReject(status: ReportStatus): boolean {
   return status === 'PENDING_APPROVAL';
 }
 
-export function canDownloadReport(reportHtml: string | null | undefined): boolean {
-  return typeof reportHtml === 'string' && reportHtml.length > 0;
-}
-
-export function isReportFailed(status: ReportStatus): boolean {
-  return status === 'ANALYSIS_FAILED' || status === 'EMAIL_DRAFT_FAILED';
-}
-
 /**
  * True once Build Report has already produced an artifact for this report.
  * Drives Analytics Preview's action button: re-entering the page (e.g. via
@@ -44,10 +36,6 @@ export function isReportAlreadyBuilt(status: ReportStatus): boolean {
  */
 export function canGenerateEmailDraft(status: ReportStatus): boolean {
   return status === 'REPORT_READY';
-}
-
-export function buildReportDownloadFilename(report: { id: string; runId: string }): string {
-  return `ranking-report-${report.runId}-${report.id.slice(0, 8)}.html`;
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

@@ -22,6 +22,14 @@ services:
           property: connectionString
       - key: UPLOADS_DIR
         value: /var/data/uploads
+      # Generated client-facing PDFs -- MUST be on the persistent disk, same
+      # as UPLOADS_DIR. Without this, buildReport.ts falls back to a path
+      # inside the app's own (ephemeral) filesystem, and every PDF is lost on
+      # the next redeploy/restart -- silently breaking "Download PDF" and
+      # attaching the report to a ClickUp email for any report built before
+      # the most recent deploy.
+      - key: REPORTS_DIR
+        value: /var/data/uploads/reports
       # Comma-separated list of origins allowed to call this API cross-origin
       # -- update this if the frontend's Vercel URL changes, or add a custom
       # domain here once one exists.
@@ -37,11 +45,18 @@ services:
         value: "false"
       - key: CLICKUP_SESSION_PATH
         value: /var/data/uploads/clickup-storage-state.json
+      # Same pattern again for the analysis/email-draft step: mock (fixed
+      # placeholder text) by default. Flip to "true" once ANTHROPIC_API_KEY
+      # is set below and you're ready for real spend.
+      - key: CLAUDE_LIVE
+        value: "false"
       # Secrets -- left blank here on purpose (sync: false) so Render
       # prompts for them in the dashboard instead of committing plaintext.
       - key: DATAFORSEO_LOGIN
         sync: false
       - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: ANTHROPIC_API_KEY
         sync: false
 
 databases:

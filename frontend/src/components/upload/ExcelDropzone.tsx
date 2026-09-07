@@ -101,7 +101,7 @@ export function ExcelDropzone({ file, validation, onFileSelected, disabled }: Pr
               </div>
             </div>
             <div className="p-5">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Required columns detected</p>
+              <p className="eyebrow-label">Required columns detected</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {validation.detectedColumns.map((column) => (
                   <span

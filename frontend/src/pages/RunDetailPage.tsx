@@ -6,6 +6,8 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Spinner } from '../components/ui/Spinner';
 import { StatTile } from '../components/ui/StatTile';
+import { InlineError } from '../components/ui/InlineError';
+import { FilterPills } from '../components/ui/FilterPills';
 import { StatusBadge } from '../components/run/StatusBadge';
 import { ProcessingSummary } from '../components/run/ProcessingSummary';
 import { CompletedSummary } from '../components/run/CompletedSummary';
@@ -170,7 +172,7 @@ export function RunDetailPage() {
         </div>
       )}
 
-      {actionError && <p className="mt-2 text-sm font-medium text-rose-300">{actionError}</p>}
+      <InlineError message={actionError} className="mt-2" />
 
       {progress && !isTerminal && (
         <div className="mt-6">
@@ -219,45 +221,32 @@ export function RunDetailPage() {
       <Card className="mt-4 overflow-hidden p-0">
         {isTerminal && (
           <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] px-6 py-4">
-            <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Filter</span>
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setFilter(f)}
-                className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-                  filter === f
-                    ? 'bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]'
-                    : 'text-[var(--color-ink-muted)] hover:bg-white/[0.04]'
-                }`}
-              >
-                {f}
-              </button>
-            ))}
+            <span className="eyebrow-label">Filter</span>
+            <FilterPills options={FILTERS} value={filter} onChange={setFilter} />
           </div>
         )}
         <table className="w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-[var(--color-border)] text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">
-              <th className="px-6 py-3.5">Keyword</th>
-              <th className="px-6 py-3.5">Location</th>
-              <th className="px-6 py-3.5">Lang</th>
-              <th className="px-6 py-3.5">Status</th>
-              <th className="px-6 py-3.5">Rank</th>
-              <th className="px-6 py-3.5">Ranking URL</th>
+            <tr className="border-b border-[var(--color-border)] eyebrow-label">
+              <th className="cell-compact">Keyword</th>
+              <th className="cell-compact">Location</th>
+              <th className="cell-compact">Lang</th>
+              <th className="cell-compact">Status</th>
+              <th className="cell-compact">Rank</th>
+              <th className="cell-compact">Ranking URL</th>
             </tr>
           </thead>
           <tbody>
             {filteredRows.map((row) => (
               <tr key={row.id} className="border-b border-[var(--color-border)] last:border-0 even:bg-[var(--color-surface-2)]/40">
-                <td className="px-6 py-3.5 text-[var(--color-ink)]">{row.keyword}</td>
-                <td className="px-6 py-3.5 text-[var(--color-ink-muted)]">{row.locationName}</td>
-                <td className="px-6 py-3.5 text-[var(--color-ink-muted)]">{row.languageName}</td>
-                <td className="px-6 py-3.5">
+                <td className="cell-compact text-[var(--color-ink)]">{row.keyword}</td>
+                <td className="cell-compact text-[var(--color-ink-muted)]">{row.locationName}</td>
+                <td className="cell-compact text-[var(--color-ink-muted)]">{row.languageName}</td>
+                <td className="cell-compact">
                   <StatusBadge status={row.status} />
                 </td>
-                <td className="px-6 py-3.5 font-mono text-[var(--color-ink)]">{formatRank(row.rankDisplay)}</td>
-                <td className="max-w-xs truncate px-6 py-3.5">
+                <td className="cell-compact font-mono text-[var(--color-ink)]">{formatRank(row.rankDisplay)}</td>
+                <td className="max-w-xs truncate cell-compact">
                   {row.rankingUrl ? (
                     <a href={row.rankingUrl} target="_blank" rel="noreferrer" className="text-brand-300 hover:text-brand-200">
                       {row.rankingUrl}

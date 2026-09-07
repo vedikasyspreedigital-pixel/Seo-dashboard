@@ -1,4 +1,5 @@
 import { Card } from '../ui/Card';
+import { StatusBadge } from '../ui/StatusBadge';
 import { UserIcon } from '../ui/icons';
 import type { ClientRecord } from '../../api/types';
 
@@ -28,13 +29,12 @@ export function ClientDetailsCard({ client, totalRunsForClient }: { client: Clie
         <span>
           <span className="flex items-center gap-2">
             <span className="text-sm font-semibold text-[var(--color-ink)]">{client.name}</span>
-            <span
-              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide ${
-                client.isActive ? 'bg-brand-400/15 text-brand-300' : 'bg-white/[0.05] text-[var(--color-ink-faint)]'
-              }`}
-            >
-              {client.isActive ? 'Active' : 'Inactive'}
-            </span>
+            <StatusBadge
+              label={client.isActive ? 'Active' : 'Inactive'}
+              toneClassName={client.isActive ? 'bg-brand-400/15 text-brand-300' : 'bg-white/[0.05] text-[var(--color-ink-faint)]'}
+              dot={false}
+              size="sm"
+            />
           </span>
           <span className="mt-0.5 block text-xs text-[var(--color-ink-faint)]">Client Details</span>
         </span>

@@ -11,7 +11,7 @@ interface Props {
 export function StatTile({ label, value, accent = 'text-[var(--color-ink)]' }: Props) {
   return (
     <Card className="p-4">
-      <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">{label}</p>
+      <p className="eyebrow-label">{label}</p>
       <p className={`mt-1.5 font-mono text-[28px] font-bold leading-none tabular-nums ${accent}`}>{value}</p>
     </Card>
   );

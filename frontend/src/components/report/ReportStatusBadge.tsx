@@ -1,8 +1,10 @@
 import type { ReportStatus } from '../../api/types';
+import { StatusBadge } from '../ui/StatusBadge';
 
 // Deliberately separate from run/StatusBadge.tsx: the reporting state
 // machine is isolated from RunStatus/RowStatus on the backend, so it gets
-// its own small badge here rather than widening that component's type.
+// its own small status-to-tone/label map here rather than widening that
+// component's type -- both build on the same shared ui/StatusBadge primitive.
 
 const STYLES: Record<ReportStatus, string> = {
   PENDING_ANALYSIS: 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]',
@@ -31,10 +33,5 @@ const LABELS: Record<ReportStatus, string> = {
 };
 
 export function ReportStatusBadge({ status }: { status: ReportStatus }) {
-  return (
-    <span className={`inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold tracking-wide ${STYLES[status]}`}>
-      <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-      {LABELS[status]}
-    </span>
-  );
+  return <StatusBadge label={LABELS[status]} toneClassName={STYLES[status]} />;
 }

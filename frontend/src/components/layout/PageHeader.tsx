@@ -28,9 +28,9 @@ export function PageHeader({ breadcrumbs, action }: { breadcrumbs: Breadcrumb[];
   );
 }
 
-export function PageTitle({ title, subtitle }: { title: string; subtitle?: string }) {
+export function PageTitle({ title, subtitle, className = 'mt-6' }: { title: string; subtitle?: string; className?: string }) {
   return (
-    <div className="mt-6">
+    <div className={className}>
       <h1 className="text-2xl font-semibold tracking-tight text-[var(--color-ink)]">{title}</h1>
       {subtitle && <p className="mt-1.5 text-sm text-[var(--color-ink-muted)]">{subtitle}</p>}
     </div>

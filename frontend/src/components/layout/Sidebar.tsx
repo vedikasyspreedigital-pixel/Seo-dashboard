@@ -60,7 +60,7 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-auto flex flex-col items-center gap-2">
-        <SidebarIcon icon={SettingsIcon} label="Client Settings (not built yet)" disabled />
+        <SidebarIcon to="/clients" icon={SettingsIcon} label="Client Management" />
       </div>
     </aside>
   );

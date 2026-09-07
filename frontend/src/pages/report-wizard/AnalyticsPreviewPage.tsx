@@ -9,6 +9,7 @@ import { StatTile } from '../../components/ui/StatTile';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { isReportAlreadyBuilt } from '../../components/report/reportStatus';
+import { Badge } from '../../components/ui/Badge';
 import { buildReport, getReport } from '../../api/client';
 import type { RankingReport } from '../../api/types';
 
@@ -66,9 +67,9 @@ export function AnalyticsPreviewPage() {
 
       <div className="mt-6 flex items-center gap-3">
         <PageTitle title="Analytics Preview" />
-        <span className="mt-6 inline-flex items-center rounded-full bg-[var(--color-surface-3)] px-3 py-1.5 text-xs font-semibold tracking-wide text-[var(--color-ink-muted)]">
+        <Badge tone="neutral" className="mt-6">
           Backend &middot; No AI
-        </span>
+        </Badge>
       </div>
 
       {error && (
@@ -101,7 +102,7 @@ export function AnalyticsPreviewPage() {
               </p>
               <table className="mt-3 w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b border-[var(--color-border)] text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">
+                  <tr className="border-b border-[var(--color-border)] eyebrow-label">
                     <th className="px-6 py-3">Keyword</th>
                     <th className="px-6 py-3">Previous</th>
                     <th className="px-6 py-3">Current</th>

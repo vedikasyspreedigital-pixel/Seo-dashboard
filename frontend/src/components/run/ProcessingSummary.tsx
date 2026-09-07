@@ -38,7 +38,7 @@ export function ProcessingSummary({ progress }: { progress: RunProgress }) {
       <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1.5">
         {TILES.map((tile) => (
           <span key={tile.key} className="font-mono text-sm">
-            <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">{tile.label}</span>
+            <span className="mr-1.5 eyebrow-label">{tile.label}</span>
             <span className={`font-bold ${tile.accent}`}>{progress[tile.key]}</span>
           </span>
         ))}

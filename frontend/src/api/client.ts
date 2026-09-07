@@ -1,5 +1,6 @@
 import type {
   ClientRecord,
+  CreateClientInput,
   CreateRunResult,
   OverviewData,
   RankingReport,
@@ -7,6 +8,8 @@ import type {
   RankingRun,
   RunProgress,
   RunRow,
+  SessionInfo,
+  UpdateClientInput,
   ValidateRunFileResult,
 } from './types';
 
@@ -16,6 +19,17 @@ import type {
 // set at build time, baked into the deployed bundle.
 const BASE = `${import.meta.env?.VITE_API_BASE_URL ?? ''}/api`;
 
+/**
+ * Every request goes through this instead of bare `fetch` so the session
+ * cookie is always included -- required once frontend/backend are on
+ * separate hosts (cross-origin), harmless as a same-origin default locally.
+ * Centralized here rather than added ad hoc per call so no endpoint can
+ * accidentally be added later without it.
+ */
+function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${BASE}${path}`, { ...init, credentials: 'include' });
+}
+
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}) as { error?: string });
@@ -24,13 +38,84 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function getClients(): Promise<ClientRecord[]> {
-  const res = await fetch(`${BASE}/clients`);
+// -- Auth / workspace -------------------------------------------------------
+
+export async function login(email: string, password: string): Promise<SessionInfo> {
+  const res = await apiFetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  return handle<SessionInfo>(res);
+}
+
+export async function logout(): Promise<void> {
+  await apiFetch('/auth/logout', { method: 'POST' });
+}
+
+/** Null (not a throw) when there's no valid session -- callers use this to decide whether to show the login page, not to handle an error. */
+export async function getMe(): Promise<SessionInfo | null> {
+  const res = await apiFetch('/auth/me');
+  if (res.status === 401) return null;
+  return handle<SessionInfo>(res);
+}
+
+export async function getClients(workspaceId: string): Promise<ClientRecord[]> {
+  const res = await apiFetch(`/clients?workspaceId=${encodeURIComponent(workspaceId)}`);
   return handle<ClientRecord[]>(res);
 }
 
-export async function getOverview(): Promise<OverviewData> {
-  const res = await fetch(`${BASE}/overview`);
+// -- Client Management ------------------------------------------------------
+// Distinct from getClients (the dropdown query): includes inactive clients
+// (and, optionally, archived ones) plus each client's ClickUp mapping.
+
+export async function getClientsForManagement(workspaceId: string, options?: { includeArchived?: boolean }): Promise<ClientRecord[]> {
+  const params = new URLSearchParams({ workspaceId, includeInactive: 'true' });
+  if (options?.includeArchived) params.set('includeArchived', 'true');
+  const res = await apiFetch(`/clients?${params.toString()}`);
+  return handle<ClientRecord[]>(res);
+}
+
+export async function createClient(input: CreateClientInput): Promise<ClientRecord> {
+  const res = await apiFetch('/clients', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return handle<ClientRecord>(res);
+}
+
+export async function updateClient(clientId: string, input: UpdateClientInput): Promise<ClientRecord> {
+  const res = await apiFetch(`/clients/${clientId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return handle<ClientRecord>(res);
+}
+
+export async function activateClient(clientId: string): Promise<ClientRecord> {
+  const res = await apiFetch(`/clients/${clientId}/activate`, { method: 'PATCH' });
+  return handle<ClientRecord>(res);
+}
+
+export async function deactivateClient(clientId: string): Promise<ClientRecord> {
+  const res = await apiFetch(`/clients/${clientId}/deactivate`, { method: 'PATCH' });
+  return handle<ClientRecord>(res);
+}
+
+export async function archiveClient(clientId: string): Promise<ClientRecord> {
+  const res = await apiFetch(`/clients/${clientId}/archive`, { method: 'PATCH' });
+  return handle<ClientRecord>(res);
+}
+
+export async function restoreClient(clientId: string): Promise<ClientRecord> {
+  const res = await apiFetch(`/clients/${clientId}/restore`, { method: 'PATCH' });
+  return handle<ClientRecord>(res);
+}
+
+export async function getOverview(workspaceId: string): Promise<OverviewData> {
+  const res = await apiFetch(`/overview?workspaceId=${encodeURIComponent(workspaceId)}`);
   return handle<OverviewData>(res);
 }
 
@@ -38,7 +123,7 @@ export async function createRun(clientId: string, file: File): Promise<CreateRun
   const formData = new FormData();
   formData.append('clientId', clientId);
   formData.append('file', file);
-  const res = await fetch(`${BASE}/runs`, { method: 'POST', body: formData });
+  const res = await apiFetch('/runs', { method: 'POST', body: formData });
   return handle<CreateRunResult>(res);
 }
 
@@ -47,37 +132,37 @@ export async function validateRunFile(clientId: string, file: File): Promise<Val
   const formData = new FormData();
   formData.append('clientId', clientId);
   formData.append('file', file);
-  const res = await fetch(`${BASE}/runs/validate`, { method: 'POST', body: formData });
+  const res = await apiFetch('/runs/validate', { method: 'POST', body: formData });
   return handle<ValidateRunFileResult>(res);
 }
 
 export async function startRun(runId: string): Promise<RankingRun> {
-  const res = await fetch(`${BASE}/runs/${runId}/start`, { method: 'POST' });
+  const res = await apiFetch(`/runs/${runId}/start`, { method: 'POST' });
   return handle<RankingRun>(res);
 }
 
 export async function cancelRun(runId: string): Promise<RankingRun> {
-  const res = await fetch(`${BASE}/runs/${runId}/cancel`, { method: 'POST' });
+  const res = await apiFetch(`/runs/${runId}/cancel`, { method: 'POST' });
   return handle<RankingRun>(res);
 }
 
 export async function getRuns(clientId: string): Promise<RankingRun[]> {
-  const res = await fetch(`${BASE}/runs?clientId=${encodeURIComponent(clientId)}`);
+  const res = await apiFetch(`/runs?clientId=${encodeURIComponent(clientId)}`);
   return handle<RankingRun[]>(res);
 }
 
 export async function getRun(runId: string): Promise<RankingRun> {
-  const res = await fetch(`${BASE}/runs/${runId}`);
+  const res = await apiFetch(`/runs/${runId}`);
   return handle<RankingRun>(res);
 }
 
 export async function getRunRows(runId: string): Promise<RunRow[]> {
-  const res = await fetch(`${BASE}/runs/${runId}/rows`);
+  const res = await apiFetch(`/runs/${runId}/rows`);
   return handle<RunRow[]>(res);
 }
 
 export async function getRunProgress(runId: string): Promise<RunProgress> {
-  const res = await fetch(`${BASE}/runs/${runId}/progress`);
+  const res = await apiFetch(`/runs/${runId}/progress`);
   return handle<RunProgress>(res);
 }
 
@@ -117,7 +202,7 @@ export function interpretCreateReportResponse(status: number, body: Record<strin
 
 /** Step 1 of the report wizard: creates the report and eagerly computes analytics. No Claude call. */
 export async function createReport(runId: string, previousRunId?: string): Promise<CreateReportOutcome> {
-  const res = await fetch(`${BASE}/reports`, {
+  const res = await apiFetch('/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ runId, previousRunId }),
@@ -127,12 +212,12 @@ export async function createReport(runId: string, previousRunId?: string): Promi
 }
 
 export async function getReports(clientId: string): Promise<RankingReportListItem[]> {
-  const res = await fetch(`${BASE}/reports?clientId=${encodeURIComponent(clientId)}`);
+  const res = await apiFetch(`/reports?clientId=${encodeURIComponent(clientId)}`);
   return handle<RankingReportListItem[]>(res);
 }
 
 export async function getReport(reportId: string): Promise<RankingReport> {
-  const res = await fetch(`${BASE}/reports/${reportId}`);
+  const res = await apiFetch(`/reports/${reportId}`);
   return handle<RankingReport>(res);
 }
 
@@ -152,7 +237,7 @@ export interface BuildReportResult {
  * it server-side -- fetch it via getReportPdfUrl, never regenerate it.
  */
 export async function buildReport(reportId: string): Promise<BuildReportResult> {
-  const res = await fetch(`${BASE}/reports/${reportId}/build-report`, { method: 'POST' });
+  const res = await apiFetch(`/reports/${reportId}/build-report`, { method: 'POST' });
   return handle<BuildReportResult>(res);
 }
 
@@ -162,12 +247,12 @@ export function getReportPdfUrl(reportId: string): string {
 }
 
 export async function generateEmailDraft(reportId: string): Promise<DraftGenerationResult> {
-  const res = await fetch(`${BASE}/reports/${reportId}/generate-email-draft`, { method: 'POST' });
+  const res = await apiFetch(`/reports/${reportId}/generate-email-draft`, { method: 'POST' });
   return handle<DraftGenerationResult>(res);
 }
 
 export async function regenerateEmailDraft(reportId: string): Promise<DraftGenerationResult> {
-  const res = await fetch(`${BASE}/reports/${reportId}/regenerate`, { method: 'POST' });
+  const res = await apiFetch(`/reports/${reportId}/regenerate`, { method: 'POST' });
   return handle<DraftGenerationResult>(res);
 }
 
@@ -180,7 +265,7 @@ export interface UpdateReportDraftInput {
 }
 
 export async function updateReportDraft(reportId: string, edits: UpdateReportDraftInput): Promise<RankingReport> {
-  const res = await fetch(`${BASE}/reports/${reportId}`, {
+  const res = await apiFetch(`/reports/${reportId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(edits),
@@ -195,7 +280,7 @@ export interface ApproveAndSendResult {
 }
 
 export async function approveAndSendReport(reportId: string, approvedBy: string): Promise<ApproveAndSendResult> {
-  const res = await fetch(`${BASE}/reports/${reportId}/approve-and-send`, {
+  const res = await apiFetch(`/reports/${reportId}/approve-and-send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approvedBy }),
@@ -207,6 +292,6 @@ export async function approveAndSendReport(reportId: string, approvedBy: string)
 }
 
 export async function rejectReport(reportId: string): Promise<RankingReport> {
-  const res = await fetch(`${BASE}/reports/${reportId}/reject`, { method: 'POST' });
+  const res = await apiFetch(`/reports/${reportId}/reject`, { method: 'POST' });
   return handle<RankingReport>(res);
 }

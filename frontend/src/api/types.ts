@@ -6,6 +6,46 @@ export interface ClientRecord {
   name: string;
   isActive: boolean;
   createdAt: string;
+  // Only present when fetched via getClientsForManagement (includeInactive)
+  // -- the plain dropdown-backing getClients() response omits these.
+  workspaceId?: string | null;
+  notes?: string | null;
+  archivedAt?: string | null;
+  clickupTaskId?: string | null;
+  clickupTaskUrl?: string | null;
+}
+
+export interface CreateClientInput {
+  workspaceId: string;
+  name: string;
+  clickupTaskId?: string;
+  clickupTaskUrl?: string;
+  notes?: string;
+}
+
+export interface UpdateClientInput {
+  name?: string;
+  notes?: string;
+  clickupTaskId?: string;
+  clickupTaskUrl?: string;
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+}
+
+export interface SessionInfo {
+  user: UserRecord;
+  workspaces: WorkspaceRecord[];
 }
 
 export interface RankingRun {

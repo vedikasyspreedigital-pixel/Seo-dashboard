@@ -1,4 +1,5 @@
 import express from "express";
+import { authRouter } from "./routes/auth.js";
 import { clientsRouter } from "./routes/clients.js";
 import { overviewRouter } from "./routes/overview.js";
 import { createRunsRouter } from "./routes/runs.js";
@@ -41,6 +42,10 @@ export function createApp(
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
+      // Required for the browser to send/receive the session cookie
+      // cross-origin (frontend on Vercel, backend on Render) -- only ever
+      // set for an explicitly allow-listed origin, never alongside "*".
+      res.setHeader("Access-Control-Allow-Credentials", "true");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -51,6 +56,7 @@ export function createApp(
     next();
   });
 
+  app.use("/api/auth", authRouter);
   app.use("/api/clients", clientsRouter);
   app.use("/api/overview", overviewRouter);
   app.use("/api/runs", createRunsRouter(callDataForSeo));
@@ -64,6 +70,17 @@ export function createApp(
   app.get("/api/health", (_req, res) =>
     res.json({ ok: true, pid: process.pid, dataForSeoMode, liveEndpointUrl: liveEndpointUrl ?? null }),
   );
+
+  // Centralized error logging -- without this, an unhandled exception in any
+  // route (most have no try/catch of their own) reaches Express 5's default
+  // error handler, which responds with a bare 500 and logs nothing
+  // server-side. This middleware logs first, then defers to that same
+  // default response behavior (no stack trace leaked to the client; Express
+  // only includes one when NODE_ENV !== "production").
+  app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error(`Unhandled error in ${req.method} ${req.path}:`, err);
+    next(err);
+  });
 
   return app;
 }

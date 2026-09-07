@@ -1,3 +1,5 @@
+import { StatusBadge as GenericStatusBadge } from '../ui/StatusBadge';
+
 type Status = 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'COMPLETED_WITH_ERRORS' | 'CANCELLED' | 'PENDING' | 'ERROR_RETRY' | 'FAILED';
 
 const STYLES: Record<Status, string> = {
@@ -24,10 +26,5 @@ const LABELS: Record<Status, string> = {
 
 export function StatusBadge({ status }: { status: string }) {
   const key = (status in STYLES ? status : 'PENDING') as Status;
-  return (
-    <span className={`inline-flex items-center rounded-full px-3 py-1.5 font-mono text-xs font-semibold tracking-wide ${STYLES[key]}`}>
-      <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-      {LABELS[key]}
-    </span>
-  );
+  return <GenericStatusBadge label={LABELS[key]} toneClassName={STYLES[key]} mono />;
 }

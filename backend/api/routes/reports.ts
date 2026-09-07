@@ -12,6 +12,7 @@ import type { CallClaudeEmailDraftFn } from "../../reporting/emailDraft.js";
 import type { CallClaudeFn } from "../../reporting/reportAnalyst.js";
 import type { SendEmailFn } from "../../reporting/emailSender.js";
 import type { GenerateExcelAttachmentFn } from "../../reporting/generateExcelAttachment.js";
+import { requireAuth } from "../../auth/requireAuth.js";
 
 // Mirrors frontend/src/components/report/reportStatus.ts's isValidEmailAddress
 // exactly -- the frontend already blocks invalid entries before Save Changes
@@ -30,6 +31,12 @@ export interface ReportsRouterDeps {
 
 export function createReportsRouter({ callClaudeAnalyst, callClaudeEmailDraft, sendEmail, generateExcelAttachment }: ReportsRouterDeps) {
   const router = Router();
+  router.use(requireAuth);
+
+  // Note: per-request workspace-ownership checks on these :id routes are a
+  // deliberate, documented scope boundary (see the workspace-layer plan) --
+  // requireAuth confirms the caller is logged in, but doesn't yet re-verify
+  // that a given report id belongs to one of the caller's workspaces.
 
   // Create: turns a completed RankingRun into a RankingReport, eagerly
   // computing analytics (pure backend code, no Claude) so the wizard's

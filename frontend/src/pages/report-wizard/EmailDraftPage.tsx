@@ -7,6 +7,7 @@ import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { EmailDraftEditor } from '../../components/report/EmailDraftEditor';
+import { Badge } from '../../components/ui/Badge';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
 import { canRegenerate, canApproveOrReject } from '../../components/report/reportStatus';
 import { getReport, regenerateEmailDraft, rejectReport, updateReportDraft, type UpdateReportDraftInput } from '../../api/client';
@@ -129,9 +130,9 @@ export function EmailDraftPage() {
 
       <div className="mt-6 flex items-center gap-3">
         <PageTitle title="Email Draft" />
-        <span className="mt-6 inline-flex items-center rounded-full bg-[var(--color-ai-500)]/15 px-3 py-1.5 text-xs font-semibold tracking-wide text-[var(--color-ai-300)]">
+        <Badge tone="ai" className="mt-6">
           AI-drafted &middot; Claude
-        </span>
+        </Badge>
       </div>
 
       {error && (

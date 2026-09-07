@@ -5,6 +5,7 @@ import { PageHeader, PageTitle } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Spinner } from '../components/ui/Spinner';
+import { InlineError } from '../components/ui/InlineError';
 import { ExcelDropzone, type FileValidationState } from '../components/upload/ExcelDropzone';
 import { useActiveClient } from '../context/ClientContext';
 import { createRun, validateRunFile } from '../api/client';
@@ -55,7 +56,7 @@ export function NewRunPage() {
       <PageTitle title="New Ranking Run" subtitle={activeClient?.name} />
 
       <Card className="mt-6 p-6">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Client</p>
+        <p className="eyebrow-label">Client</p>
         <div className="mt-1.5 rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-3.5 py-2.5 text-sm text-[var(--color-ink-muted)]">
           {activeClient?.name ?? 'No client selected'}
         </div>
@@ -64,7 +65,7 @@ export function NewRunPage() {
           <ExcelDropzone file={file} validation={validation} onFileSelected={handleFileSelected} disabled={submitting} />
         </div>
 
-        {error && <p className="mt-4 text-sm font-medium text-rose-300">{error}</p>}
+        <InlineError message={error} className="mt-4" />
 
         <div className="mt-6 flex items-center gap-3">
           <Button disabled={!canSubmit} onClick={handleSubmit}>

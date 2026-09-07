@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../../db/client.js";
 import { RunStatus, Prisma } from "@prisma/client";
+import { requireAuth } from "../../auth/requireAuth.js";
 
 // Cross-client aggregate data for the "Overall Overview" homepage. Entirely
 // real data -- every number here is a direct count/sum from the same
@@ -17,18 +18,34 @@ import { RunStatus, Prisma } from "@prisma/client";
 
 export const overviewRouter = Router();
 
-overviewRouter.get("/", async (_req, res) => {
+overviewRouter.use(requireAuth);
+
+overviewRouter.get("/", async (req, res) => {
+  const workspaceId = req.query.workspaceId;
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
+    res.status(400).json({ error: "workspaceId query parameter is required" });
+    return;
+  }
+  if (!req.authUser!.workspaceIds.includes(workspaceId)) {
+    res.status(403).json({ error: "You do not have access to this workspace" });
+    return;
+  }
+  // Same scoping as clients.ts: only this workspace's real (non-test)
+  // clients feed every aggregate below.
+  const clientScope = { workspaceId, isTestData: false } as const;
+
   const [totalClients, totalRuns, totalSuccessfulRuns, recentRunsRaw, allReports] = await Promise.all([
-    prisma.client.count({ where: { isActive: true } }),
-    prisma.rankingRun.count(),
-    prisma.rankingRun.count({ where: { status: RunStatus.COMPLETED } }),
+    prisma.client.count({ where: { isActive: true, ...clientScope } }),
+    prisma.rankingRun.count({ where: { client: clientScope } }),
+    prisma.rankingRun.count({ where: { status: RunStatus.COMPLETED, client: clientScope } }),
     prisma.rankingRun.findMany({
+      where: { client: clientScope },
       orderBy: { createdAt: "desc" },
       take: 8,
       include: { client: { select: { name: true } } },
     }),
     prisma.rankingReport.findMany({
-      where: { analyticsJson: { not: Prisma.DbNull } },
+      where: { analyticsJson: { not: Prisma.DbNull }, client: clientScope },
       select: { clientId: true, createdAt: true, analyticsJson: true },
       orderBy: { createdAt: "desc" },
     }),

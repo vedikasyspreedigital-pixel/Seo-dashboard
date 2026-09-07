@@ -77,8 +77,24 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   memberships WorkspaceMembership[]
+  sessions    Session[]
 
   @@map("users")
+}
+
+// Server-side session storage -- the opaque id is what's sent to the
+// browser as an httpOnly cookie; nothing about the user/role/workspace is
+// ever encoded client-side. Chosen over JWT specifically so a session can
+// be revoked instantly (delete the row) without needing a denylist.
+model Session {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("sessions")
 }
 
 // Which user can see which workspace(s) -- a visibility list, not a
@@ -114,6 +130,17 @@ model Client {
   // between "test data" and "real client not yet triaged into a workspace."
   isTestData Boolean  @default(false) @map("is_test_data")
   isActive   Boolean  @default(true) @map("is_active")
+  // Free-text internal notes, set/edited only from Client Management -- never
+  // surfaced to the client, never read by the ranking/reporting pipeline.
+  notes      String?  @map("notes")
+  // Soft-delete marker for "Delete client" in Client Management. Distinct
+  // from isActive: archiving always also sets isActive false (enforced in
+  // the archive endpoint), but restoring leaves isActive false so a
+  // restored client doesn't silently reappear in run/client dropdowns --
+  // re-activating is a separate, deliberate action. A real hard delete
+  // isn't generally possible anyway: Client -> RankingRun/ClientReportConfig/
+  // RankingReport are all ON DELETE RESTRICT in the DB.
+  archivedAt DateTime? @map("archived_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 

@@ -4,14 +4,12 @@ import { AppShell } from '../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
 import { ReportStatusBadge } from '../components/report/ReportStatusBadge';
+import { EmptyState } from '../components/ui/EmptyState';
 import { useActiveClient } from '../context/ClientContext';
 import { getReports } from '../api/client';
 import { resumeRouteForStatus } from '../components/report/reportFlowRoute';
+import { formatDateTime } from '../utils/formatters';
 import type { RankingReportListItem } from '../api/types';
-
-function formatDateTime(iso: string) {
-  return new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
 
 export function ReportsListPage() {
   const { activeClient } = useActiveClient();
@@ -41,32 +39,30 @@ export function ReportsListPage() {
 
       <Card className="mt-6 overflow-hidden p-0">
         {loading ? (
-          <p className="p-6 text-sm text-[var(--color-ink-muted)]">Loading...</p>
+          <EmptyState label="Loading..." />
         ) : reports.length === 0 ? (
-          <p className="p-6 text-sm text-[var(--color-ink-muted)]">
-            No reports yet. Generate one from a completed run's detail page.
-          </p>
+          <EmptyState label="No reports yet. Generate one from a completed run's detail page." />
         ) : (
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-[var(--color-border)] text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">
-                <th className="px-6 py-3.5">Report</th>
-                <th className="px-6 py-3.5">From run</th>
-                <th className="px-6 py-3.5">Created</th>
-                <th className="px-6 py-3.5">Status</th>
-                <th className="px-6 py-3.5" />
+              <tr className="border-b border-[var(--color-border)] eyebrow-label">
+                <th className="cell-compact">Report</th>
+                <th className="cell-compact">From run</th>
+                <th className="cell-compact">Created</th>
+                <th className="cell-compact">Status</th>
+                <th className="cell-compact" />
               </tr>
             </thead>
             <tbody>
               {reports.map((report) => (
                 <tr key={report.id} className="border-b border-[var(--color-border)] last:border-0 even:bg-[var(--color-surface-2)]/40">
-                  <td className="px-6 py-4 font-mono text-blue-300">#{report.id.slice(0, 8)}</td>
-                  <td className="px-6 py-4 text-[var(--color-ink)]">{report.run.sourceFilename}</td>
-                  <td className="px-6 py-4 text-[var(--color-ink-muted)]">{formatDateTime(report.createdAt)}</td>
-                  <td className="px-6 py-4">
+                  <td className="cell-cozy font-mono text-blue-300">#{report.id.slice(0, 8)}</td>
+                  <td className="cell-cozy text-[var(--color-ink)]">{report.run.sourceFilename}</td>
+                  <td className="cell-cozy text-[var(--color-ink-muted)]">{formatDateTime(report.createdAt)}</td>
+                  <td className="cell-cozy">
                     <ReportStatusBadge status={report.status} />
                   </td>
-                  <td className="px-6 py-4 text-right">
+                  <td className="cell-cozy text-right">
                     <Link to={resumeRouteForStatus(report.id, report.status)} className="font-semibold text-brand-300 hover:text-brand-200">
                       View &rarr;
                     </Link>

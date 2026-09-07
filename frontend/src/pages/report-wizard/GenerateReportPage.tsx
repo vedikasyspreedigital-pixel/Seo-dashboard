@@ -6,16 +6,15 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Select';
 import { Spinner } from '../../components/ui/Spinner';
+import { InlineError } from '../../components/ui/InlineError';
+import { AlertPanel } from '../../components/ui/AlertPanel';
 import { useActiveClient } from '../../context/ClientContext';
 import { createReport, getReport, getRuns } from '../../api/client';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
+import { formatDate } from '../../utils/formatters';
 import type { RankingRun } from '../../api/types';
 
 const REPORTABLE = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS']);
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-}
 
 export function GenerateReportPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -69,7 +68,7 @@ export function GenerateReportPage() {
       <PageTitle title="Generate SEO Report" subtitle={runId ? `Run #${runId.slice(0, 8)}` : undefined} />
 
       <Card className="mt-6 p-6">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Compare against previous run</p>
+        <p className="eyebrow-label">Compare against previous run</p>
         <div className="mt-1.5">
           <Select
             value={previousRunId}
@@ -80,13 +79,13 @@ export function GenerateReportPage() {
         </div>
         <p className="mt-2 text-xs text-[var(--color-ink-faint)]">Adds keyword movement deltas to analytics. Recommended.</p>
 
-        <div className="mt-5 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+        <AlertPanel tone="info" className="mt-5">
           <p className="text-sm text-[var(--color-ink-muted)]">
             This creates a report record and takes you to analytics. No Claude call happens until you draft the email later.
           </p>
-        </div>
+        </AlertPanel>
 
-        {error && <p className="mt-4 text-sm font-medium text-rose-300">{error}</p>}
+        <InlineError message={error} className="mt-4" />
 
         <div className="mt-6 flex items-center gap-3">
           <Button disabled={submitting} onClick={handleContinue}>

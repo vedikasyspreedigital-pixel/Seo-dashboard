@@ -4,12 +4,9 @@ import {
   isDraftEditable,
   canRegenerate,
   canApproveOrReject,
-  canDownloadReport,
-  isReportFailed,
   isReportAlreadyBuilt,
   canGenerateEmailDraft,
   resolveSaveButtonLabel,
-  buildReportDownloadFilename,
   isValidEmailAddress,
   parseRecipientsInput,
 } from "../src/components/report/reportStatus.js";
@@ -31,20 +28,6 @@ test("canRegenerate and canApproveOrReject: only PENDING_APPROVAL", () => {
   assert.equal(canRegenerate("SENT"), false);
   assert.equal(canApproveOrReject("REJECTED"), false);
   assert.equal(canApproveOrReject("REPORT_READY"), false);
-});
-
-test("canDownloadReport: true only when reportHtml is a non-empty string", () => {
-  assert.equal(canDownloadReport("<html>report</html>"), true);
-  assert.equal(canDownloadReport(""), false);
-  assert.equal(canDownloadReport(null), false);
-  assert.equal(canDownloadReport(undefined), false);
-});
-
-test("isReportFailed: only the two failure states", () => {
-  assert.equal(isReportFailed("ANALYSIS_FAILED"), true);
-  assert.equal(isReportFailed("EMAIL_DRAFT_FAILED"), true);
-  assert.equal(isReportFailed("PENDING_APPROVAL"), false);
-  assert.equal(isReportFailed("SENT"), false);
 });
 
 // FIX #2: Analytics Preview's action button must be state-aware -- it must
@@ -93,11 +76,6 @@ test("resolveSaveButtonLabel: editing again after a save (isDirty becomes true) 
 test("resolveSaveButtonLabel: default state (never saved, or a failed save) shows the plain label -- never falsely 'Saved'", () => {
   assert.equal(resolveSaveButtonLabel({ saving: false, justSaved: false, isDirty: false }), "Save Changes");
   assert.equal(resolveSaveButtonLabel({ saving: false, justSaved: false, isDirty: true }), "Save Changes");
-});
-
-test("buildReportDownloadFilename: stable, includes runId and a short report id", () => {
-  const name = buildReportDownloadFilename({ id: "12345678-abcd-efgh-ijkl-mnopqrstuvwx", runId: "run-1" });
-  assert.equal(name, "ranking-report-run-1-12345678.html");
 });
 
 test("isValidEmailAddress", () => {

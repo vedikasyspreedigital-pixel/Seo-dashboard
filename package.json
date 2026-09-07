@@ -16,7 +16,11 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "prisma:studio": "prisma studio",
-    "test": "node --import tsx --test test/*.test.mjs test/api.test.ts test/reporting.test.ts test/clientReportConfig.test.ts test/reportTransitions.test.ts test/reportAnalyst.test.ts test/reportGenerator.test.ts test/generateReport.test.ts test/emailDraft.test.ts test/generateEmailDraft.test.ts test/approveAndSend.test.ts test/editReportDraft.test.ts test/regenerateEmailDraft.test.ts test/reportsApi.test.ts test/overviewApi.test.ts test/generateClientReportPdf.test.ts test/generateExcelAttachment.test.ts frontend/test/reportStatus.test.ts frontend/test/reportsApiClient.test.ts frontend/test/reportFlowRoute.test.ts frontend/test/runStatus.test.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "test": "node --import tsx --test test/*.test.mjs test/api.test.ts test/reporting.test.ts test/clientReportConfig.test.ts test/reportTransitions.test.ts test/reportAnalyst.test.ts test/reportGenerator.test.ts test/generateReport.test.ts test/emailDraft.test.ts test/generateEmailDraft.test.ts test/approveAndSend.test.ts test/editReportDraft.test.ts test/regenerateEmailDraft.test.ts test/reportsApi.test.ts test/overviewApi.test.ts test/generateClientReportPdf.test.ts test/generateExcelAttachment.test.ts test/workspaceAuth.test.ts test/clientsApi.test.ts frontend/test/reportStatus.test.ts frontend/test/reportsApiClient.test.ts frontend/test/reportFlowRoute.test.ts frontend/test/runStatus.test.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",

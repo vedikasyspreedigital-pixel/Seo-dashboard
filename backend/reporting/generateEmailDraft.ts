@@ -12,6 +12,20 @@ import type { AnalystOutput } from "./reportAnalyst.js";
 // state machine EMAIL_DRAFTED -> PENDING_APPROVAL. On failure, the report
 // lands in EMAIL_DRAFT_FAILED, retryable via reportTransitions.retryEmailDraft.
 
+/**
+ * ClickUp Task ID is the primary way to point a client at their delivery
+ * task; the raw Task URL is the fallback for when no ID is set (or for a
+ * one-off task that doesn't fit the id-in-URL convention). Pure and
+ * side-effect-free so it's independently testable -- ClickUp task URLs are
+ * always of the form https://app.clickup.com/t/{taskId}, confirmed via the
+ * "https://app.clickup.com/t/xxxxxxx" placeholder already shown in the
+ * Email Draft UI's ClickUp task field.
+ */
+export function resolveClickupTaskUrl(config: { clickupTaskId?: string | null; clickupTaskUrl?: string | null } | null | undefined): string | null {
+  if (config?.clickupTaskId) return `https://app.clickup.com/t/${config.clickupTaskId}`;
+  return config?.clickupTaskUrl ?? null;
+}
+
 export type GenerateEmailDraftResult =
   | { outcome: "SUCCESS"; subject: string; bodyText: string; bodyHtml?: string; recipients: unknown }
   | { outcome: "VALIDATION_ERROR"; errorMessage: string }
@@ -52,7 +66,7 @@ export async function generateEmailDraft(reportId: string, callClaude: CallClaud
   // carries neither, and validateEmailDraftOutput rejects any unexpected
   // key in the output).
   const recipients = config?.recipients ?? [];
-  const clickupTaskUrl = config?.clickupTaskUrl ?? null;
+  const clickupTaskUrl = resolveClickupTaskUrl(config);
 
   await markEmailDrafted(reportId, {
     emailSubject: result.data.subject,

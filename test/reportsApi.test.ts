@@ -8,9 +8,28 @@ import { createMockClaudeAnalyst, createMockClaudeEmailDrafter } from "../backen
 import { createMockEmailSender } from "../backend/reporting/mockEmailSender.js";
 import { ReportStatus } from "@prisma/client";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
+import { createAuthenticatedSession, type AuthFixture } from "./helpers/auth.js";
+import { authedRequest } from "./helpers/authedRequest.js";
 
 // Full HTTP-layer test against the real local Postgres container. Both
 // Claude and the email provider are mocked -- no real calls of any kind.
+// All requests go through one shared logged-in session (reports.ts now
+// requires auth) -- these tests exercise report business logic, not
+// workspace-ownership checks, so which workspace the session belongs to is
+// irrelevant here.
+
+let auth: AuthFixture;
+test.before(async () => {
+  auth = await createAuthenticatedSession();
+});
+test.after(async () => {
+  await auth.cleanup();
+});
+
+/** Every call site below transparently becomes an authenticated request via closure over `auth`, set once test.before() runs. */
+function authedApp(app: ReturnType<typeof createApp>) {
+  return authedRequest(app, auth.cookieHeader);
+}
 
 const unusedDataForSeoMock: CallDataForSeoFn = async () => ({ httpStatus: 200, body: { status_code: 20000, tasks: [] } });
 
@@ -99,7 +118,7 @@ test("GET /api/reports/:id returns the full preview", async () => {
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app).get(`/api/reports/${report.id}`);
+    const res = await authedApp(app).get(`/api/reports/${report.id}`);
     assert.equal(res.status, 200);
     assert.equal(res.body.status, "PENDING_APPROVAL");
     assert.equal(res.body.reportHtml, "<html>report</html>");
@@ -111,7 +130,7 @@ test("GET /api/reports/:id returns the full preview", async () => {
 
 test("GET /api/reports/:id returns 404 for an unknown report", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
-  const res = await request(app).get(`/api/reports/${randomUUID()}`);
+  const res = await authedApp(app).get(`/api/reports/${randomUUID()}`);
   assert.equal(res.status, 404);
 });
 
@@ -122,7 +141,7 @@ test("PATCH /api/reports/:id edits the draft while PENDING_APPROVAL: subject, bo
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app)
+    const res = await authedApp(app)
       .patch(`/api/reports/${report.id}`)
       .send({
         emailSubject: "Edited via API",
@@ -142,7 +161,7 @@ test("PATCH /api/reports/:id edits the draft while PENDING_APPROVAL: subject, bo
     // separate GET (simulating a page refresh / re-navigation) must read
     // back the exact same persisted values, not whatever the PATCH request
     // merely echoed.
-    const refetched = await request(app).get(`/api/reports/${report.id}`);
+    const refetched = await authedApp(app).get(`/api/reports/${report.id}`);
     assert.equal(refetched.status, 200);
     assert.equal(refetched.body.emailSubject, "Edited via API");
     assert.equal(refetched.body.emailBody, "Edited body text via API");
@@ -159,7 +178,7 @@ test("PATCH /api/reports/:id rejects a non-array resolvedRecipients with 400", a
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app).patch(`/api/reports/${report.id}`).send({ resolvedRecipients: "not-an-array@example.com" });
+    const res = await authedApp(app).patch(`/api/reports/${report.id}`).send({ resolvedRecipients: "not-an-array@example.com" });
     assert.equal(res.status, 400);
   } finally {
     await cleanupClient(client.id);
@@ -173,7 +192,7 @@ test("PATCH /api/reports/:id rejects a malformed email address in resolvedRecipi
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id, ["original@example.com"]);
 
-    const res = await request(app)
+    const res = await authedApp(app)
       .patch(`/api/reports/${report.id}`)
       .send({ resolvedRecipients: ["valid@example.com", "not-an-email"] });
     assert.equal(res.status, 400);
@@ -198,12 +217,12 @@ test("POST /api/reports/:id/approve-and-send sends via the injected mock sender,
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const first = await request(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
+    const first = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
     assert.equal(first.status, 200);
     assert.equal(first.body.outcome, "SENT");
     assert.equal(sentCalls.length, 1);
 
-    const second = await request(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
+    const second = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
     assert.equal(second.status, 409);
     assert.equal(second.body.outcome, "ALREADY_PROCESSED");
     assert.equal(sentCalls.length, 1); // still only one send
@@ -219,7 +238,7 @@ test("POST /api/reports/:id/approve-and-send requires approvedBy", async () => {
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
+    const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
     assert.equal(res.status, 400);
   } finally {
     await cleanupClient(client.id);
@@ -233,7 +252,7 @@ test("POST /api/reports/:id/approve-and-send returns 422 when there are no recip
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id, []);
 
-    const res = await request(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
+    const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
     assert.equal(res.status, 422);
     assert.equal(res.body.outcome, "NO_RECIPIENTS");
   } finally {
@@ -248,11 +267,11 @@ test("POST /api/reports/:id/reject transitions to REJECTED", async () => {
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/reject`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/reject`);
     assert.equal(res.status, 200);
     assert.equal(res.body.status, "REJECTED");
 
-    const again = await request(app).post(`/api/reports/${report.id}/reject`);
+    const again = await authedApp(app).post(`/api/reports/${report.id}/reject`);
     assert.equal(again.status, 409);
   } finally {
     await cleanupClient(client.id);
@@ -270,7 +289,7 @@ test("POST /api/reports/:id/regenerate produces a fresh draft via the injected m
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/regenerate`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/regenerate`);
     assert.equal(res.status, 200);
     assert.equal(res.body.outcome, "SUCCESS");
 
@@ -287,7 +306,7 @@ test("POST /api/reports creates a report at PENDING_ANALYSIS with analytics eage
   try {
     const run = await makeRun(client.id, "COMPLETED");
 
-    const res = await request(app).post("/api/reports").send({ runId: run.id });
+    const res = await authedApp(app).post("/api/reports").send({ runId: run.id });
     assert.equal(res.status, 201);
     assert.equal(res.body.report.runId, run.id);
     assert.equal(res.body.report.clientId, client.id);
@@ -310,7 +329,7 @@ test("POST /api/reports accepts an explicit previousRunId for comparison", async
     const olderRun = await makeRun(client.id, "COMPLETED");
     const run = await makeRun(client.id, "COMPLETED");
 
-    const res = await request(app).post("/api/reports").send({ runId: run.id, previousRunId: olderRun.id });
+    const res = await authedApp(app).post("/api/reports").send({ runId: run.id, previousRunId: olderRun.id });
     assert.equal(res.status, 201);
     assert.equal(res.body.report.previousRunId, olderRun.id);
   } finally {
@@ -320,7 +339,7 @@ test("POST /api/reports accepts an explicit previousRunId for comparison", async
 
 test("POST /api/reports rejects an unknown run with 404", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
-  const res = await request(app).post("/api/reports").send({ runId: randomUUID() });
+  const res = await authedApp(app).post("/api/reports").send({ runId: randomUUID() });
   assert.equal(res.status, 404);
 });
 
@@ -330,7 +349,7 @@ test("POST /api/reports rejects an incomplete run (still PROCESSING) with 409", 
   try {
     const run = await makeRun(client.id, "PROCESSING");
 
-    const res = await request(app).post("/api/reports").send({ runId: run.id });
+    const res = await authedApp(app).post("/api/reports").send({ runId: run.id });
     assert.equal(res.status, 409);
     assert.match(res.body.error, /PROCESSING/);
 
@@ -343,7 +362,7 @@ test("POST /api/reports rejects an incomplete run (still PROCESSING) with 409", 
 
 test("POST /api/reports requires a runId", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
-  const res = await request(app).post("/api/reports").send({});
+  const res = await authedApp(app).post("/api/reports").send({});
   assert.equal(res.status, 400);
 });
 
@@ -353,10 +372,10 @@ test("POST /api/reports rejects a duplicate report for the same run with 409, wi
   try {
     const run = await makeRun(client.id, "COMPLETED");
 
-    const first = await request(app).post("/api/reports").send({ runId: run.id });
+    const first = await authedApp(app).post("/api/reports").send({ runId: run.id });
     assert.equal(first.status, 201);
 
-    const second = await request(app).post("/api/reports").send({ runId: run.id });
+    const second = await authedApp(app).post("/api/reports").send({ runId: run.id });
     assert.equal(second.status, 409);
     assert.equal(second.body.existingReportId, first.body.report.id);
 
@@ -375,7 +394,7 @@ test("POST /api/reports/:id/generate-email-draft drives REPORT_READY -> PENDING_
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makeReportReadyReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/generate-email-draft`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/generate-email-draft`);
     assert.equal(res.status, 200);
     assert.equal(res.body.outcome, "SUCCESS");
 
@@ -405,7 +424,7 @@ test("POST /api/reports/:id/generate-email-draft works for a report built via th
       },
     });
 
-    const res = await request(app).post(`/api/reports/${report.id}/generate-email-draft`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/generate-email-draft`);
     assert.equal(res.status, 200);
     assert.equal(res.body.outcome, "SUCCESS");
 
@@ -424,7 +443,7 @@ test("POST /api/reports/:id/generate-email-draft rejects a report that isn't REP
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/generate-email-draft`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/generate-email-draft`);
     assert.equal(res.status, 409);
   } finally {
     await cleanupClient(client.id);
@@ -438,7 +457,7 @@ test("POST /api/reports/:id/generate-insights drives PENDING_ANALYSIS -> ANALYSI
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makePendingAnalysisReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/generate-insights`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/generate-insights`);
     assert.equal(res.status, 200);
     assert.equal(res.body.outcome, "SUCCESS");
 
@@ -458,7 +477,7 @@ test("POST /api/reports/:id/generate-insights rejects a report that isn't PENDIN
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makeAnalysisReadyReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/generate-insights`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/generate-insights`);
     assert.equal(res.status, 409);
   } finally {
     await cleanupClient(client.id);
@@ -472,7 +491,7 @@ test("POST /api/reports/:id/build-report drives PENDING_ANALYSIS -> REPORT_READY
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makePendingAnalysisReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/build-report`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/build-report`);
     assert.equal(res.status, 200);
     assert.equal(res.body.outcome, "SUCCESS");
     assert.ok(res.body.clientPdfPath);
@@ -482,7 +501,7 @@ test("POST /api/reports/:id/build-report drives PENDING_ANALYSIS -> REPORT_READY
     assert.ok(persisted.clientPdfPath, "the generated PDF path must be stored on the report");
     assert.equal(persisted.reportHtml, null, "the deterministic PDF path replaces the old HTML report -- no narrative HTML is generated");
 
-    const pdfRes = await request(app).get(`/api/reports/${report.id}/pdf`);
+    const pdfRes = await authedApp(app).get(`/api/reports/${report.id}/pdf`);
     assert.equal(pdfRes.status, 200);
     assert.equal(pdfRes.headers["content-type"], "application/pdf");
     assert.ok(pdfRes.body.length > 0, "the streamed PDF must be non-empty");
@@ -499,7 +518,7 @@ test("POST /api/reports/:id/build-report also works from ANALYSIS_READY (reports
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makeAnalysisReadyReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/build-report`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/build-report`);
     assert.equal(res.status, 200);
     assert.equal(res.body.outcome, "SUCCESS");
 
@@ -518,7 +537,7 @@ test("POST /api/reports/:id/build-report rejects a report that's already past RE
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await request(app).post(`/api/reports/${report.id}/build-report`);
+    const res = await authedApp(app).post(`/api/reports/${report.id}/build-report`);
     assert.equal(res.status, 409);
   } finally {
     await cleanupClient(client.id);
@@ -539,12 +558,12 @@ test("POST /api/reports/:id/build-report is safe to click again after Back: re-e
 
     // 1. Run Completed -> creating the report is itself idempotent per run
     // (createReportForRun reuses an existing report for the same runId).
-    const created = await request(app).post("/api/reports").send({ runId: run.id });
+    const created = await authedApp(app).post("/api/reports").send({ runId: run.id });
     assert.equal(created.status, 201);
     const reportId = created.body.report.id;
 
     // 2. Analytics Preview -> Build Report (first time).
-    const first = await request(app).post(`/api/reports/${reportId}/build-report`);
+    const first = await authedApp(app).post(`/api/reports/${reportId}/build-report`);
     assert.equal(first.status, 200);
     assert.equal(first.body.outcome, "SUCCESS");
     const afterFirst = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId } });
@@ -554,12 +573,12 @@ test("POST /api/reports/:id/build-report is safe to click again after Back: re-e
 
     // 3. User navigates Back to Analytics Preview (pure client-side nav --
     // nothing to simulate server-side; the report is untouched).
-    const stillThere = await request(app).get(`/api/reports/${reportId}`);
+    const stillThere = await authedApp(app).get(`/api/reports/${reportId}`);
     assert.equal(stillThere.status, 200);
     assert.equal(stillThere.body.status, "REPORT_READY");
 
     // 4. Re-creating a report for the same run must NOT create a duplicate.
-    const againCreated = await request(app).post("/api/reports").send({ runId: run.id });
+    const againCreated = await authedApp(app).post("/api/reports").send({ runId: run.id });
     assert.equal(againCreated.status, 409);
     assert.equal(againCreated.body.existingReportId, reportId);
     const allReportsForRun = await prisma.rankingReport.findMany({ where: { runId: run.id } });
@@ -568,7 +587,7 @@ test("POST /api/reports/:id/build-report is safe to click again after Back: re-e
     // 5. Click Build Report again -- must succeed, not throw an invalid
     // state-transition error, and must not touch analyticsJson (no re-run
     // of analytics/Claude/DataForSEO).
-    const second = await request(app).post(`/api/reports/${reportId}/build-report`);
+    const second = await authedApp(app).post(`/api/reports/${reportId}/build-report`);
     assert.equal(second.status, 200);
     assert.equal(second.body.outcome, "SUCCESS");
 
@@ -589,8 +608,8 @@ test("POST /api/reports/:id/build-report double-click / concurrent race: both re
     const report = await makePendingAnalysisReport(client.id, run.id);
 
     const [first, second] = await Promise.all([
-      request(app).post(`/api/reports/${report.id}/build-report`),
-      request(app).post(`/api/reports/${report.id}/build-report`),
+      authedApp(app).post(`/api/reports/${report.id}/build-report`),
+      authedApp(app).post(`/api/reports/${report.id}/build-report`),
     ]);
 
     assert.equal(first.status, 200);
@@ -611,7 +630,7 @@ test("GET /api/reports/:id/pdf returns 404 before the report has been built", as
     const run = await makeRun(client.id, "COMPLETED");
     const report = await makePendingAnalysisReport(client.id, run.id);
 
-    const res = await request(app).get(`/api/reports/${report.id}/pdf`);
+    const res = await authedApp(app).get(`/api/reports/${report.id}/pdf`);
     assert.equal(res.status, 404);
   } finally {
     await cleanupClient(client.id);
@@ -628,7 +647,7 @@ test("GET /api/reports?clientId= lists only that client's reports, most recent f
     const otherRun = await makeRun(otherClient.id, "COMPLETED");
     await makePendingAnalysisReport(otherClient.id, otherRun.id);
 
-    const res = await request(app).get(`/api/reports?clientId=${client.id}`);
+    const res = await authedApp(app).get(`/api/reports?clientId=${client.id}`);
     assert.equal(res.status, 200);
     assert.equal(res.body.length, 1);
     assert.equal(res.body[0].id, report.id);
@@ -641,8 +660,14 @@ test("GET /api/reports?clientId= lists only that client's reports, most recent f
 
 test("GET /api/reports requires a clientId query parameter", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
-  const res = await request(app).get("/api/reports");
+  const res = await authedApp(app).get("/api/reports");
   assert.equal(res.status, 400);
+});
+
+test("GET /api/reports requires authentication -- the whole reports router is gated, not just an individual route", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const res = await request(app).get("/api/reports?clientId=whatever");
+  assert.equal(res.status, 401);
 });
 
 test.after(async () => {

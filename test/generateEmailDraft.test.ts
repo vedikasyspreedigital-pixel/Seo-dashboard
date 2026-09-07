@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
-import { generateEmailDraft } from "../backend/reporting/generateEmailDraft.js";
+import { generateEmailDraft, resolveClickupTaskUrl } from "../backend/reporting/generateEmailDraft.js";
 import { createMockClaudeEmailDrafter } from "../backend/reporting/mockClaudeClient.js";
 import { retryEmailDraft } from "../backend/reporting/reportTransitions.js";
 import { ReportStatus } from "@prisma/client";
@@ -196,6 +196,54 @@ test("retry path: EMAIL_DRAFT_FAILED -> retryEmailDraft -> REPORT_READY -> gener
     const final = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(final.status, ReportStatus.PENDING_APPROVAL);
     assert.deepEqual(final.resolvedRecipients, ["ops@example.com"]);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Workspace layer, step 2: ClickUp Task ID is the new primary way to point
+// a client at their delivery task; the pure resolver is tested directly,
+// and the end-to-end test below confirms it actually flows through
+// generateEmailDraft into resolvedClickupTaskUrl, not just in isolation.
+test("resolveClickupTaskUrl: task id wins when set, building the URL as https://app.clickup.com/t/{id}", () => {
+  assert.equal(resolveClickupTaskUrl({ clickupTaskId: "86d45e14k", clickupTaskUrl: "https://app.clickup.com/t/old" }), "https://app.clickup.com/t/86d45e14k");
+});
+
+test("resolveClickupTaskUrl: falls back to the raw task URL when no task id is set", () => {
+  assert.equal(resolveClickupTaskUrl({ clickupTaskId: null, clickupTaskUrl: "https://app.clickup.com/t/abc123" }), "https://app.clickup.com/t/abc123");
+  assert.equal(resolveClickupTaskUrl({ clickupTaskUrl: "https://app.clickup.com/t/abc123" }), "https://app.clickup.com/t/abc123");
+});
+
+test("resolveClickupTaskUrl: null when neither is set, or config itself is missing", () => {
+  assert.equal(resolveClickupTaskUrl({ clickupTaskId: null, clickupTaskUrl: null }), null);
+  assert.equal(resolveClickupTaskUrl(null), null);
+  assert.equal(resolveClickupTaskUrl(undefined), null);
+});
+
+test("generateEmailDraft: clickupTaskId on the client config takes priority over clickupTaskUrl end-to-end", async () => {
+  const client = await makeClient(`Email Draft Test - clickup task id priority ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    await prisma.clientReportConfig.create({
+      data: {
+        clientId: client.id,
+        reportTone: "professional",
+        sectionsEnabled: ["summary"],
+        metricsEnabled: ["averageRank"],
+        recipients: ["ops@example.com"],
+        clickupTaskId: "86d45e14k",
+        clickupTaskUrl: "https://app.clickup.com/t/stale-fallback-url",
+        reportingFrequency: "weekly",
+        templateId: "standard-v1",
+      },
+    });
+    const report = await makeReportReadyReport(client.id, run.id);
+
+    const result = await generateEmailDraft(report.id, createMockClaudeEmailDrafter());
+    assert.equal(result.outcome, "SUCCESS");
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.resolvedClickupTaskUrl, "https://app.clickup.com/t/86d45e14k", "task id must win over the stale fallback URL");
   } finally {
     await cleanupClient(client.id);
   }
