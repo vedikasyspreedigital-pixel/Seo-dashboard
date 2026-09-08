@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Deterministic replacement for the Make.com ranking scenario: Excel upload -> DB-backed ranking runs -> DataForSEO (wildcard target) -> deterministic response mapping -> Excel export. No LLM in the ranking pipeline.",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "backend": "tsx backend/server.ts",
