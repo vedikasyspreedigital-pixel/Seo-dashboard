@@ -106,6 +106,14 @@ export function createClickUpEmailSender({
     // can never risk clicking Send twice for the same report.
     const MAX_ATTEMPTS = 2;
     let lastError: Error = new Error("sendViaClickUp: no attempt ran");
+    // Set the MOMENT a browser/page 'crash' or 'disconnected' event fires --
+    // not inferred from an error message's text (a later, unrelated failure
+    // on a subsequent attempt must never let this get silently forgotten).
+    // Read at the very end to decide whether the final thrown error needs
+    // to say so explicitly, so a real browser crash can never come out the
+    // other end looking like an ordinary "Task panel never rendered"
+    // timeout from a later, non-crash attempt.
+    let crashedOnAnyAttempt = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       let browser: Browser | undefined;
@@ -115,6 +123,12 @@ export function createClickUpEmailSender({
       // arrow-function closures lose TypeScript's non-undefined narrowing.
       let debugPage: Page | undefined;
       let sendClicked = false;
+      // True the instant THIS attempt's page/browser actually crashed
+      // (event-driven, not inferred) -- gates the post-failure debug
+      // capture below off entirely, since attempting a screenshot/content
+      // read against a page already known dead just produces more of the
+      // exact same "Target crashed" noise instead of new information.
+      let pageCrashedThisAttempt = false;
       const tempAttachmentPaths: string[] = [];
 
       try {
@@ -142,13 +156,34 @@ export function createClickUpEmailSender({
         // transition entirely under prefers-reduced-motion, which sidesteps
         // whatever in that transition is crashing the renderer without
         // needing to identify the exact Chromium bug.
-        browser = await chromium.launch({
-          headless,
-          args: ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"],
+        //
+        // Confirmed NOT a missing-system-dependency problem either: Railway's
+        // build log (railway logs --build) shows `npx playwright install
+        // --with-deps chromium` installing every core Chromium runtime
+        // library (libnss3, libatk-bridge2.0-0, libgbm1, libasound2,
+        // libx11-xcb1, libxcomposite1, libxdamage1, libxfixes3, libxrandr2,
+        // libcups2, libxkbcommon0) plus a full font set, with zero apt
+        // errors -- a genuinely clean, complete --with-deps install.
+        const launchArgs = ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"];
+        console.error(`[clickupEmailSender] attempt ${attempt}/${MAX_ATTEMPTS}: launching chromium (headless=${headless}, args=${JSON.stringify(launchArgs)})`);
+        browser = await chromium.launch({ headless, args: launchArgs });
+        // Fires if the whole browser process itself disconnects/dies --
+        // distinct from (usually more severe than) a single page's 'crash'
+        // event below, which is scoped to one renderer target.
+        browser.on("disconnected", () => {
+          console.error(`[clickupEmailSender] attempt ${attempt}: browser 'disconnected' event at ${new Date().toISOString()}`);
         });
         const context = await browser.newContext({ storageState: sessionStatePath, reducedMotion: "reduce" });
         const page = await context.newPage();
         debugPage = page;
+        page.on("crash", () => {
+          pageCrashedThisAttempt = true;
+          crashedOnAnyAttempt = true;
+          console.error(`[clickupEmailSender] attempt ${attempt}: page 'crash' event at ${new Date().toISOString()} (url=${page.url()})`);
+        });
+        page.on("close", () => {
+          console.error(`[clickupEmailSender] attempt ${attempt}: page 'close' event at ${new Date().toISOString()}`);
+        });
 
         await page.goto(params.clickupTaskUrl, { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(1000);
@@ -455,26 +490,64 @@ export function createClickUpEmailSender({
         // -- e.g. "Could not find Email in the Comment mode menu" gives no
         // way to tell whether the menu never opened, opened empty, or opened
         // with different wording, without seeing the actual page.
-        await captureDebugArtifacts(debugPage, sessionStatePath).catch(() => {});
+        //
+        // Skipped entirely once the 'crash' listener above already fired for
+        // THIS attempt -- we already have definitive, immediate proof the
+        // page is dead; attempting a screenshot/content read against it
+        // just produces more identical "Target crashed" log lines instead
+        // of new information, obscuring the one signal that actually
+        // matters (the crash event itself) under repeated noise.
+        if (pageCrashedThisAttempt) {
+          console.error(`[clickupEmailSender] attempt ${attempt}: skipping debug capture -- page already confirmed crashed (see 'crash' event above).`);
+        } else {
+          await captureDebugArtifacts(debugPage, sessionStatePath).catch(() => {});
+        }
         lastError = err as Error;
         // Only ever retry a failure that happened BEFORE Send was clicked --
         // see the sendClicked comment above for why anything after that
         // point must propagate immediately instead.
         if (!sendClicked && attempt < MAX_ATTEMPTS) {
-          console.warn(`[clickupEmailSender] attempt ${attempt}/${MAX_ATTEMPTS} failed before Send was clicked (${lastError.message}) -- retrying with a fresh browser.`);
+          console.warn(
+            `[clickupEmailSender] attempt ${attempt}/${MAX_ATTEMPTS} failed before Send was clicked ` +
+              `(${pageCrashedThisAttempt ? "BROWSER CRASHED: " : ""}${lastError.message}) -- retrying with a fresh browser.`,
+          );
         } else {
-          throw err;
+          throw enrichWithCrashContext(err as Error, crashedOnAnyAttempt);
         }
       } finally {
         await Promise.all(tempAttachmentPaths.map((p) => rm(p, { force: true }).catch(() => {})));
-        await browser?.close().catch(() => {});
+        // Logged explicitly (not just swallowed) so a hang or failure IN
+        // close() itself -- e.g. the browser process wedged after its
+        // renderer crashed -- is visible rather than silently absorbed,
+        // per the requirement to confirm the crashed browser is actually
+        // fully closed before any retry launches a new one.
+        await browser
+          ?.close()
+          .then(() => console.error(`[clickupEmailSender] attempt ${attempt}: browser closed.`))
+          .catch((e) => console.error(`[clickupEmailSender] attempt ${attempt}: browser.close() itself failed: ${(e as Error).message}`));
       }
     }
     // Unreachable: the loop above always either returns (success) or throws
     // (final attempt exhausted, or a post-Send failure) -- this only
     // satisfies TypeScript's control-flow analysis, which can't see that.
-    throw lastError;
+    throw enrichWithCrashContext(lastError, crashedOnAnyAttempt);
   };
+}
+
+/**
+ * Ensures a real browser/page crash can never come out the other end
+ * looking like an ordinary application-level error (e.g. a LATER, non-crash
+ * attempt's "Task panel never rendered..." timeout) -- if ANY attempt's
+ * 'crash'/'disconnected' event fired, the thrown error explicitly says so
+ * up front, with the actual final error's message preserved after it, never
+ * replaced.
+ */
+function enrichWithCrashContext(err: Error, crashedOnAnyAttempt: boolean): Error {
+  if (!crashedOnAnyAttempt) return err;
+  return new Error(
+    `Chromium's renderer crashed (browser 'crash'/'disconnected' event observed) during at least one attempt -- ` +
+      `this is a browser/container stability issue, not a ClickUp UI change. Final error after retry: ${err.message}`,
+  );
 }
 
 /**
