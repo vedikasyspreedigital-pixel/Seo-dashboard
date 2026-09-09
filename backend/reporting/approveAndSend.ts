@@ -103,10 +103,12 @@ export async function approveAndSendReport(
     await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
     return { outcome: "SENT", messageId: sendResult.messageId };
   } catch (err) {
-    // Logged server-side because the frontend only ever shows the message
-    // text -- without this, diagnosing a live failure meant reading a
-    // screenshot instead of the actual Railway logs.
-    console.error(`[approveAndSend] send failed for report ${reportId}: ${(err as Error).message}`);
+    // Logged server-side (with stack -- the message alone doesn't say WHICH
+    // of several similar-looking calls, e.g. multiple waitForTimeout sites
+    // in clickupEmailSender.ts, actually crashed) because the frontend only
+    // ever shows the message text -- without this, diagnosing a live
+    // failure meant reading a screenshot instead of the actual Railway logs.
+    console.error(`[approveAndSend] send failed for report ${reportId}:`, err);
     // Send failed after claiming SENDING. Revert the claim back to
     // APPROVED so calling this function again legitimately retries the
     // send step (see above) -- never leaves the report stuck in SENDING.
