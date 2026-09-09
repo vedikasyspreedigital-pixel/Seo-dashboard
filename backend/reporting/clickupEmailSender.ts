@@ -96,7 +96,16 @@ export function createClickUpEmailSender({
     const tempAttachmentPaths: string[] = [];
 
     try {
-      browser = await chromium.launch({ headless });
+      // --disable-dev-shm-usage: Docker containers (Railway included) default
+      // to a 64MB /dev/shm, far too small for a heavy Angular SPA like
+      // ClickUp -- Chromium's renderer hits it and dies mid-interaction
+      // ("Target crashed") instead of raising a normal error. This makes
+      // Chromium fall back to /tmp for shared memory files. --no-sandbox is
+      // paired with it because the sandbox needs kernel privileges this
+      // container doesn't grant (it isn't Playwright's own preconfigured
+      // Docker image) -- without it, launch can fail outright rather than
+      // just the renderer crashing under load.
+      browser = await chromium.launch({ headless, args: ["--disable-dev-shm-usage", "--no-sandbox"] });
       const context = await browser.newContext({ storageState: sessionStatePath });
       const page = await context.newPage();
 
