@@ -1,25 +1,13 @@
-import type { RunAnalytics } from "./computeRunAnalytics.js";
-import type { AnalystOutput } from "./reportAnalyst.js";
-
-// The structured contract for the Claude Email Draft Generator. Deliberately
-// narrower than the Report Analyst's input: headline metrics + key insights
-// only, never the full movements table, and -- critically -- never any
-// recipient information. Recipients are resolved by the backend from
-// ClientReportConfig, always, and Claude's output is validated to reject
-// any field beyond subject/bodyText/bodyHtml, so it structurally cannot
-// smuggle recipient data back through an unexpected key either.
+// The email draft: a fixed, editable template -- no AI, no external call, no
+// validation layer needed (a deterministic template can't produce invalid
+// output). The SEO team edits the subject/body themselves before approving;
+// this only fills in a sensible, professional starting point with the real
+// reporting period dates.
 
 export interface EmailDraftInput {
-  client: { name: string };
-  reportSummary: {
-    totalKeywords: number;
-    averageRank: number | null;
-    top3: number;
-    top10: number;
-    notIn100: number;
-  };
-  keyInsights: string[];
-  tone: string;
+  clientName: string;
+  periodStart: Date;
+  periodEnd: Date;
 }
 
 export interface EmailDraftOutput {
@@ -28,103 +16,37 @@ export interface EmailDraftOutput {
   bodyHtml?: string;
 }
 
-export type CallClaudeEmailDraftFn = (input: EmailDraftInput) => Promise<unknown>;
+function formatDate(date: Date): string {
+  return date.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
+}
 
-export type RunEmailDraftGeneratorResult =
-  | { outcome: "SUCCESS"; data: EmailDraftOutput }
-  | { outcome: "VALIDATION_ERROR"; errors: string[] }
-  | { outcome: "CALL_ERROR"; errorMessage: string };
+const SIGNATURE = `Thanks and Regards,
 
-export function buildEmailDraftInput({
-  clientName,
-  analytics,
-  analysis,
-  tone,
-}: {
-  clientName: string;
-  analytics: RunAnalytics;
-  // null when the report reached REPORT_READY via the Build Report shortcut
-  // (PENDING_ANALYSIS -> REPORT_READY), skipping the optional Claude
-  // Insights step -- the email draft still gets the deterministic summary,
-  // just no keyInsights bullets to work from.
-  analysis: AnalystOutput | null;
-  tone: string;
-}): EmailDraftInput {
+TEAM SySpree
+
+SySpree Digital Pvt. Limited
+SySpree Digital PTE. Limited
+India | Singapore
+
+Email: support@syspreesolutions.com`;
+
+/** Fills the standard client-facing template with the real reporting period -- same dates shown on the PDF (generateClientReportPdf.ts formats them identically). */
+export function buildDefaultEmailDraft({ periodStart, periodEnd }: EmailDraftInput): EmailDraftOutput {
+  const start = formatDate(periodStart);
+  const end = formatDate(periodEnd);
+
+  const bodyText = `Dear Client,
+
+Pleased to attach your website ranking report for ${start} - ${end}. This report summarizes the development and performance of the search engine rankings for your website throughout this time.
+
+We want to stress that there are a number of variables that might affect search engine results, such as user behavior, competition, algorithm upgrades, and website design. But we've been working hard to optimize your website and raise its standing in search engine rankings.
+
+Thank you for your continued trust and partnership.
+
+${SIGNATURE}`;
+
   return {
-    client: { name: clientName },
-    reportSummary: {
-      totalKeywords: analytics.totals.totalKeywords,
-      averageRank: analytics.totals.averageRank,
-      top3: analytics.totals.top3Count,
-      top10: analytics.totals.top10Count,
-      notIn100: analytics.totals.notIn100Count,
-    },
-    keyInsights: analysis?.keyInsights ?? [],
-    tone,
+    subject: `SEO Ranking Report – ${start} to ${end}`,
+    bodyText,
   };
-}
-
-const ALLOWED_OUTPUT_KEYS = new Set(["subject", "bodyText", "bodyHtml"]);
-
-/**
- * Structural validation, hand-rolled like validateAnalystOutput. Any key
- * other than subject/bodyText/bodyHtml is rejected outright -- this is the
- * enforced half of "Claude must never determine recipient addresses": even
- * if a model tried to return a `recipients`/`to`/`cc` field, it fails
- * validation here and is never read by anything downstream.
- */
-export function validateEmailDraftOutput(raw: unknown): { valid: true; data: EmailDraftOutput } | { valid: false; errors: string[] } {
-  const errors: string[] = [];
-
-  if (typeof raw !== "object" || raw === null) {
-    return { valid: false, errors: ["Output is not an object"] };
-  }
-  const obj = raw as Record<string, unknown>;
-
-  for (const key of Object.keys(obj)) {
-    if (!ALLOWED_OUTPUT_KEYS.has(key)) {
-      errors.push(`Unexpected field "${key}" -- email draft output may only contain subject, bodyText, bodyHtml (never recipients)`);
-    }
-  }
-
-  if (typeof obj.subject !== "string" || obj.subject.length === 0) {
-    errors.push("subject must be a non-empty string");
-  } else if (obj.subject.length > 120) {
-    errors.push("subject exceeds 120 characters");
-  }
-
-  if (typeof obj.bodyText !== "string" || obj.bodyText.length === 0) {
-    errors.push("bodyText must be a non-empty string");
-  }
-
-  if (obj.bodyHtml !== undefined && typeof obj.bodyHtml !== "string") {
-    errors.push("bodyHtml must be a string when present");
-  }
-
-  if (errors.length > 0) return { valid: false, errors };
-  return { valid: true, data: obj as unknown as EmailDraftOutput };
-}
-
-/**
- * Orchestrates one Email Draft Generator call: invoke the injected Claude
- * client, then validate its output before trusting any of it. Same
- * dependency-injection shape as runReportAnalyst -- tests never need a real
- * Claude call.
- */
-export async function runEmailDraftGenerator(
-  input: EmailDraftInput,
-  callClaude: CallClaudeEmailDraftFn,
-): Promise<RunEmailDraftGeneratorResult> {
-  let raw: unknown;
-  try {
-    raw = await callClaude(input);
-  } catch (err) {
-    return { outcome: "CALL_ERROR", errorMessage: (err as Error).message };
-  }
-
-  const validation = validateEmailDraftOutput(raw);
-  if (!validation.valid) {
-    return { outcome: "VALIDATION_ERROR", errors: validation.errors };
-  }
-  return { outcome: "SUCCESS", data: validation.data };
 }

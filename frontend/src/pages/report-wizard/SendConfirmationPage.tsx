@@ -6,6 +6,8 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
+import { ReportStatusBadge } from '../../components/report/ReportStatusBadge';
+import { ReportPdfPreview } from '../../components/report/ReportPdfPreview';
 import { InlineError } from '../../components/ui/InlineError';
 import { BackLink } from '../../components/ui/BackLink';
 import { TextInput } from '../../components/ui/TextInput';
@@ -27,6 +29,17 @@ export function SendConfirmationPage() {
 
   useEffect(() => {
     if (!reportId) return;
+    // Reset ALL per-report local state the instant reportId changes, before
+    // the fetch even starts -- this route (/reports/:reportId/send) doesn't
+    // remount on a param-only change, so without this a `sent`/`error` flag
+    // left over from a PREVIOUSLY viewed report would otherwise persist and
+    // misrepresent the newly-viewed report (e.g. showing "Report sent" for
+    // a report that was never sent, permanently, since nothing else ever
+    // clears `sent` back to false).
+    setReport(null);
+    setSent(false);
+    setError(null);
+    setSending(false);
     // Guarded on the initial fetch only -- an email draft must have been
     // submitted for approval before this page has anything to show.
     getReport(reportId).then((r) => {
@@ -80,14 +93,82 @@ export function SendConfirmationPage() {
   }
 
   if (sent || report.status === 'SENT') {
+    // Read-only: every value below comes straight off the stored report row
+    // (getReport -> GET /api/reports/:id) -- nothing here is regenerated,
+    // re-derived, or re-fetched from anywhere else. The PDF below is the
+    // same GET /api/reports/:id/pdf stream used everywhere else in the app,
+    // which only ever reads the file buildReport already wrote to disk.
+    const sentRecipients = report.resolvedRecipients ?? [];
+    const sentCc = report.resolvedCc ?? [];
     return (
       <AppShell>
-        <PageHeader breadcrumbs={[{ label: 'Reports', to: '/reports' }, { label: 'Sent' }]} />
-        <Card className="mt-6 border-brand-400/25 bg-brand-400/[0.05] p-6">
-          <p className="font-semibold text-brand-300">Report sent.</p>
-          {report.sentAt && <p className="mt-1 text-sm text-[var(--color-ink-muted)]">{new Date(report.sentAt).toLocaleString()}</p>}
+        <PageHeader breadcrumbs={[{ label: 'Reports', to: '/reports' }, { label: 'Sent Report Details' }]} />
+        <div className="mt-6 flex items-center gap-3">
+          <PageTitle title="Sent Report Details" subtitle="Exactly what was stored and sent -- read-only." />
+          <ReportStatusBadge status="SENT" />
+        </div>
+
+        {report.auditCommentPosted === false && (
+          <AlertPanel tone="warning" className="mt-4">
+            <p className="text-sm text-amber-300">
+              The email itself was sent successfully -- only the follow-up ClickUp audit-trail comment failed to post. This does not affect delivery.
+            </p>
+          </AlertPanel>
+        )}
+
+        <Card className="mt-6 p-6">
+          <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <div className="flex justify-between gap-4 sm:block">
+              <span className="text-[var(--color-ink-faint)]">Sent</span>
+              <span className="text-right text-[var(--color-ink)] sm:block sm:text-left">{report.sentAt ? new Date(report.sentAt).toLocaleString() : '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4 sm:block">
+              <span className="text-[var(--color-ink-faint)]">Approved by</span>
+              <span className="text-right text-[var(--color-ink)] sm:block sm:text-left">{report.approvedBy ?? '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4 sm:block">
+              <span className="text-[var(--color-ink-faint)]">To</span>
+              <span className="text-right text-[var(--color-ink)] sm:block sm:text-left">{sentRecipients.length > 0 ? sentRecipients.join(', ') : '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4 sm:block">
+              <span className="text-[var(--color-ink-faint)]">Cc</span>
+              <span className="text-right text-[var(--color-ink)] sm:block sm:text-left">{sentCc.length > 0 ? sentCc.join(', ') : '(none)'}</span>
+            </div>
+            <div className="flex justify-between gap-4 sm:block">
+              <span className="text-[var(--color-ink-faint)]">ClickUp task</span>
+              <span className="text-right sm:block sm:text-left">
+                {report.resolvedClickupTaskUrl ? (
+                  <a href={report.resolvedClickupTaskUrl} target="_blank" rel="noreferrer" className="text-brand-300 hover:text-brand-200">
+                    {report.resolvedClickupTaskUrl}
+                  </a>
+                ) : (
+                  <span className="text-[var(--color-ink)]">—</span>
+                )}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4 sm:block">
+              <span className="text-[var(--color-ink-faint)]">Report</span>
+              <span className="text-right text-[var(--color-ink)] sm:block sm:text-left">#{report.id.slice(0, 8)}</span>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <p className="eyebrow-label">Subject</p>
+            <p className="mt-1.5 text-sm text-[var(--color-ink)]">{report.emailSubject ?? '—'}</p>
+          </div>
+
+          <div className="mt-5">
+            <p className="eyebrow-label">Body</p>
+            <p className="mt-1.5 whitespace-pre-wrap text-sm text-[var(--color-ink)]">{report.emailBody ?? '—'}</p>
+          </div>
+
           <BackLink to="/reports" label="Back to Reports" />
         </Card>
+
+        <div className="mt-4">
+          <p className="eyebrow-label mb-2">Attached report (PDF)</p>
+          <ReportPdfPreview reportId={report.id} />
+        </div>
       </AppShell>
     );
   }

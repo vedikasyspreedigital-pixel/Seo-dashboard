@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { prisma } from '../../db/client.js';
 import { requireAuth } from '../../auth/requireAuth.js';
+import { findOwnedClientOrRespond } from '../../auth/ownership.js';
 
 export const clientsRouter = Router();
 
@@ -23,16 +24,6 @@ function flattenClient<T extends { id: string; reportConfigs?: { clickupTaskId: 
   const { reportConfigs, ...rest } = client;
   const config = reportConfigs?.[0];
   return { ...rest, clickupTaskId: config?.clickupTaskId ?? null, clickupTaskUrl: config?.clickupTaskUrl ?? null };
-}
-
-/** 404s (never leaks 403 across workspaces) unless the client belongs to one of the caller's workspaces. Returns the client row on success. */
-async function findOwnedClientOrRespond(req: Request, res: Response, id: string) {
-  const client = await prisma.client.findUnique({ where: { id } });
-  if (!client || !client.workspaceId || !req.authUser!.workspaceIds.includes(client.workspaceId)) {
-    res.status(404).json({ error: 'Client not found' });
-    return null;
-  }
-  return client;
 }
 
 // Scoped to the workspace the caller explicitly asks for (mirrors the

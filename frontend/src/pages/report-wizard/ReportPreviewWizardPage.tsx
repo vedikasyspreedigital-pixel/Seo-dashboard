@@ -43,7 +43,7 @@ export function ReportPreviewWizardPage() {
       // Preview after reaching Email Draft, then clicked Next: Email
       // again) -- generate-email-draft only accepts REPORT_READY, so
       // re-calling it here would throw an invalid-transition error. Just
-      // resume on the existing draft instead of re-running Claude.
+      // resume on the existing draft instead of regenerating it again.
       navigate(`/reports/${reportId}/email`);
       return;
     }

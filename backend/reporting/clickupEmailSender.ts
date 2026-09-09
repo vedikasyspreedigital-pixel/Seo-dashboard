@@ -33,6 +33,23 @@
 // approveAndSendReport already treats any throw here as SEND_FAILED and
 // leaves the report APPROVED for a retry, so an expired session never
 // corrupts report state.
+//
+// Cc support: the toggle click and the input selector below were confirmed
+// live on 2026-09-08 against a real ClickUp task (user-provided DOM
+// snapshot after manually opening Cc in a real send attempt that correctly
+// refused to proceed once the old guessed input selector didn't match).
+// Two things the real DOM revealed that the original guess got wrong:
+//   1. Cc/Bcc are NOT special-cased like To (which is its own
+//      <cu-email-communicators-field data-test="email-communicators__to">
+//      with class cu-email-communicators__field-row--to). Cc/Bcc instead
+//      render through a generic templated field-row, and the one open
+//      instance is identified by a stable id ClickUp assigns per field
+//      type: the recipients drop-list container carries id="cc-0" (Bcc
+//      would presumably be "bcc-0").
+//   2. The input's class is `cu-search_input` (SINGLE underscore) --
+//      different from To's confirmed `cu-search__input` (double
+//      underscore). Not a typo in either place; genuinely two different
+//      components with two different class names.
 
 import { chromium, type Browser, type Page, type Locator } from "playwright";
 import { writeFile, rm } from "node:fs/promises";
@@ -161,6 +178,46 @@ export function createClickUpEmailSender({
         );
       }
 
+      // Pre-send duplicate guard: before filling/sending anything, check
+      // whether an email with this EXACT subject already exists in this
+      // task's activity history. This is what protects a RETRY after a
+      // "send was clicked but verification failed/timed out" failure from
+      // blindly resending -- if the original click actually landed, this
+      // catches it here instead of re-clicking Send.
+      //
+      // Confirmed via a real read-only inspection of this exact task
+      // (spikes/clickup-feasibility/diagnoseActivityHistory.mjs, run
+      // 2026-09-09): every sent email renders as its own comment entry
+      // carrying a stable, ClickUp-assigned data-comment-id -- but that
+      // same inspection ALSO found two already-sent emails in this task
+      // with the IDENTICAL subject text (two different runs for the same
+      // client happened to complete on the same calendar day, so the
+      // deterministic "<start> to <end>" subject collided). That rules out
+      // subject-matching as a perfectly unique key on its own. It's still
+      // used here because it's the strongest check available without
+      // parsing ClickUp's fuzzy relative timestamps ("Yesterday at
+      // 5:11 pm") or predicting a comment id ClickUp only assigns AFTER a
+      // send succeeds -- and a same-subject false positive only ever makes
+      // this check MORE cautious (refuses to send, asks a human to check
+      // ClickUp), never less. Runs on every attempt, not just retries --
+      // cheap, and a genuine first attempt should almost always find
+      // nothing. The matched entry's data-comment-id (when found) is
+      // included in the thrown error so a human has an exact, unambiguous
+      // reference to go check in ClickUp, even though the automated check
+      // itself doesn't need to resolve identity perfectly to do its job.
+      const existingSubjectMatch = page.getByText(params.subject, { exact: true }).first();
+      const alreadySent = await existingSubjectMatch.isVisible().catch(() => false);
+      if (alreadySent) {
+        const existingCommentId = await existingSubjectMatch
+          .evaluate((el) => el.closest("[data-comment-id]")?.getAttribute("data-comment-id") ?? null)
+          .catch(() => null);
+        throw new Error(
+          `An email with this exact subject ("${params.subject}") already appears in this task's history` +
+            (existingCommentId ? ` (ClickUp comment id ${existingCommentId})` : "") +
+            ` -- refusing to send again automatically. Verify in ClickUp whether this report was already delivered before retrying.`,
+        );
+      }
+
       // Confirmed real, auto-focused input -- no toggle click.
       const toFilled = await fillFirstMatch(
         page,
@@ -168,6 +225,47 @@ export function createClickUpEmailSender({
         params.to.join(", "),
       );
       if (!toFilled) throw new Error('Could not find/fill the "To" input (.cu-email-communicators__field-row--to input.cu-search__input).');
+
+      // CC -- ONLY attempted when cc recipients are actually configured, so a
+      // report with no cc never touches this UI at all. Confirmed live
+      // 2026-09-08 (see comment above): the open Cc row is identified by
+      // id="cc-0" on its recipients drop-list container, with the actual
+      // input matched by class cu-search_input (single underscore) inside
+      // it. If cc recipients are configured but the toggle/field can't be
+      // found, this throws and fails the whole send -- it never silently
+      // sends without the configured cc.
+      if (params.cc && params.cc.length > 0) {
+        const alreadyHasCcField = await composerRoot
+          .locator('[id^="cc-"] input.cu-search_input')
+          .first()
+          .isVisible()
+          .catch(() => false);
+        if (!alreadyHasCcField) {
+          const ccToggle = await firstMatch(page, [
+            () => composerRoot.getByText(/^\s*cc\s*$/i),
+            () => composerRoot.locator('[aria-label*="cc" i]'),
+            () => composerRoot.getByRole("button", { name: /^\s*cc\s*$/i }),
+          ]);
+          if (!ccToggle) {
+            throw new Error(
+              'Cc recipients are configured for this report, but no "Cc" toggle could be found in the composer -- refusing to send without cc rather than silently dropping it.',
+            );
+          }
+          await ccToggle.click();
+          await page.waitForTimeout(300);
+        }
+
+        const ccFilled = await fillFirstMatch(
+          page,
+          [() => composerRoot.locator('[id^="cc-"] input.cu-search_input'), () => composerRoot.locator('[id^="cc-"] input')],
+          params.cc.join(", "),
+        );
+        if (!ccFilled) {
+          throw new Error(
+            'Cc recipients are configured for this report, but the Cc input could not be found/filled after opening it -- refusing to send without cc.',
+          );
+        }
+      }
 
       // Confirmed attribute: data-test (not data-testid).
       const subjectFilled = await fillFirstMatch(page, [() => page.locator('[data-test="email-communicators__subject"]')], params.subject);
@@ -245,12 +343,19 @@ export function createClickUpEmailSender({
       // Best-effort audit comment ("log every outbound email as a task
       // comment with timestamp + recipient"). The sent email itself already
       // appears in the task history, so a failure here does not undo an
-      // already-verified send -- it only means the extra comment is missing.
-      await postAuditComment(page, params.to, params.subject).catch((err) => {
-        console.warn(`[clickupEmailSender] send verified, but audit comment failed: ${(err as Error).message}`);
-      });
+      // already-verified send, does not throw, and never turns a real SENT
+      // into a SEND_FAILED -- it only means the extra comment is missing.
+      // That outcome is still worth knowing later (this is exactly the gap
+      // hit tracing a real send with nothing but a console.warn line to go
+      // on), so it's returned as part of the result instead of only logged.
+      const auditCommentPosted = await postAuditComment(page, params.to, params.subject)
+        .then(() => true)
+        .catch((err) => {
+          console.warn(`[clickupEmailSender] send verified, but audit comment failed: ${(err as Error).message}`);
+          return false;
+        });
 
-      return { messageId: `clickup:${Date.now()}` };
+      return { messageId: `clickup:${Date.now()}`, auditCommentPosted };
     } finally {
       await Promise.all(tempAttachmentPaths.map((p) => rm(p, { force: true }).catch(() => {})));
       await browser?.close().catch(() => {});

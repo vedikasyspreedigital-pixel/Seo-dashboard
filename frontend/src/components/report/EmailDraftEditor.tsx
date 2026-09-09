@@ -22,6 +22,7 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
   const [subject, setSubject] = useState(report.emailSubject ?? '');
   const [body, setBody] = useState(report.emailBody ?? '');
   const [recipientsInput, setRecipientsInput] = useState((report.resolvedRecipients ?? []).join(', '));
+  const [ccInput, setCcInput] = useState((report.resolvedCc ?? []).join(', '));
   const [clickupTaskUrl, setClickupTaskUrl] = useState(report.resolvedClickupTaskUrl ?? '');
 
   // Reset local form state whenever the server-side draft actually changes
@@ -33,12 +34,16 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
     setSubject(report.emailSubject ?? '');
     setBody(report.emailBody ?? '');
     setRecipientsInput((report.resolvedRecipients ?? []).join(', '));
+    setCcInput((report.resolvedCc ?? []).join(', '));
     setClickupTaskUrl(report.resolvedClickupTaskUrl ?? '');
-  }, [report.id, report.emailSubject, report.emailBody, report.resolvedRecipients, report.resolvedClickupTaskUrl]);
+  }, [report.id, report.emailSubject, report.emailBody, report.resolvedRecipients, report.resolvedCc, report.resolvedClickupTaskUrl]);
 
   const editable = isDraftEditable(report.status);
   const { recipients, invalid } = parseRecipientsInput(recipientsInput);
-  const canSave = editable && !disabled && subject.trim().length > 0 && body.trim().length > 0 && invalid.length === 0;
+  // Cc is optional -- an empty Cc field is always valid, only malformed
+  // addresses within it are rejected, same rule as Recipients.
+  const { recipients: cc, invalid: invalidCc } = parseRecipientsInput(ccInput);
+  const canSave = editable && !disabled && subject.trim().length > 0 && body.trim().length > 0 && invalid.length === 0 && invalidCc.length === 0;
 
   // Unsaved-changes tracking (FIX #4 section 8): purely derived from
   // comparing the live form to the last-known-persisted `report` -- no
@@ -48,6 +53,7 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
     subject !== (report.emailSubject ?? '') ||
     body !== (report.emailBody ?? '') ||
     recipientsInput !== (report.resolvedRecipients ?? []).join(', ') ||
+    ccInput !== (report.resolvedCc ?? []).join(', ') ||
     clickupTaskUrl !== (report.resolvedClickupTaskUrl ?? '');
   const saveLabel = resolveSaveButtonLabel({ saving, justSaved, isDirty });
 
@@ -90,6 +96,20 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
         </div>
 
         <div>
+          <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Cc (comma-separated, optional)</label>
+          <TextInput
+            type="text"
+            value={ccInput}
+            disabled={!editable}
+            onChange={(e) => setCcInput(e.target.value)}
+            placeholder="manager@example.com"
+          />
+          {invalidCc.length > 0 && (
+            <p className="mt-1.5 text-xs font-medium text-rose-300">Not a valid email address: {invalidCc.join(', ')}</p>
+          )}
+        </div>
+
+        <div>
           <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">ClickUp task (delivers via its Email composer)</label>
           <TextInput
             type="text"
@@ -111,6 +131,7 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
                   emailSubject: subject,
                   emailBody: body,
                   resolvedRecipients: recipients,
+                  resolvedCc: cc,
                   resolvedClickupTaskUrl: clickupTaskUrl.trim() || null,
                 })
               }

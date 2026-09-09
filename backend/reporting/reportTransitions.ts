@@ -6,11 +6,14 @@ import { InvalidReportTransitionError } from "./errors.js";
 //        │        │                           │       ▲                          │        │
 //        │   ANALYSIS_FAILED            EMAIL_DRAFT_FAILED                  APPROVED   REJECTED
 //        │        │  (retry)                   │  (retry)                       │
-//        │        └──▶ PENDING_ANALYSIS        └──▶ REPORT_READY               SENT
-//        │                                                ▲
-//        └───────────────────────────────────▶ REPORT_READY (Build Report skips the
-//                                                            optional Claude Insights
-//                                                            step entirely)
+//        │        └──▶ PENDING_ANALYSIS        └──▶ REPORT_READY              SENDING
+//        │                                                ▲                   │      │
+//        └───────────────────────────────────▶ REPORT_READY (Build Report    SENT   APPROVED
+//                                                            skips the               (send
+//                                                            optional Claude          failed --
+//                                                            Insights step            retry
+//                                                            entirely)                stays
+//                                                                                      possible)
 //
 // The PENDING_ANALYSIS -> REPORT_READY edge lets "Build Report" run directly
 // off the deterministic analyticsJson computed at report-creation time,
@@ -22,6 +25,13 @@ import { InvalidReportTransitionError } from "./errors.js";
 // diagram only drew APPROVED/REJECTED out of PENDING_APPROVAL. Everything
 // else here is unchanged from that diagram.
 //
+// APPROVED -> SENDING -> SENT|APPROVED: SENDING is claimed atomically right
+// before the real ClickUp send automation runs (see markSending below) --
+// it exists solely so two concurrent approve-and-send calls can never both
+// execute sendEmail() for the same report. A failed send reverts SENDING
+// back to APPROVED (markSendFailed) so a legitimate retry stays possible;
+// nothing can go directly from APPROVED to SENT anymore.
+//
 // Isolated from RunStatus/RowStatus -- this module never imports from
 // backend/statemachine or backend/worker, and nothing there imports this.
 export const REPORT_TRANSITIONS: Record<ReportStatus, ReportStatus[]> = {
@@ -32,7 +42,8 @@ export const REPORT_TRANSITIONS: Record<ReportStatus, ReportStatus[]> = {
   EMAIL_DRAFT_FAILED: [ReportStatus.REPORT_READY],
   EMAIL_DRAFTED: [ReportStatus.PENDING_APPROVAL],
   PENDING_APPROVAL: [ReportStatus.APPROVED, ReportStatus.REJECTED, ReportStatus.REPORT_READY],
-  APPROVED: [ReportStatus.SENT],
+  APPROVED: [ReportStatus.SENDING],
+  SENDING: [ReportStatus.SENT, ReportStatus.APPROVED],
   REJECTED: [],
   SENT: [],
 };
@@ -46,8 +57,15 @@ export function isValidReportTransition(from: ReportStatus, to: ReportStatus): b
  * match one of `fromStatuses`), the same pattern used by the ranking row/run
  * state machine: two concurrent callers racing the same report can't both
  * "win" -- the loser matches zero rows and gets InvalidReportTransitionError.
+ *
+ * Exported so callers outside this file that need the SAME atomic
+ * conditional-update guarantee (e.g. editReportDraft.ts's updateReportDraft,
+ * which edits fields while requiring PENDING_APPROVAL without itself being a
+ * status transition -- `data` here simply never includes `status`, so it's
+ * left untouched) can reuse it instead of re-implementing a weaker
+ * read-then-write check.
  */
-async function guardedUpdate(
+export async function guardedUpdate(
   reportId: string,
   fromStatuses: ReportStatus[],
   data: Prisma.RankingReportUpdateManyMutationInput,
@@ -128,12 +146,14 @@ export async function markEmailDrafted(
     emailBody,
     emailBodyHtml,
     resolvedRecipients,
+    resolvedCc,
     resolvedClickupTaskUrl,
   }: {
     emailSubject: string;
     emailBody: string;
     emailBodyHtml?: string | null;
     resolvedRecipients: Prisma.InputJsonValue;
+    resolvedCc?: Prisma.InputJsonValue;
     resolvedClickupTaskUrl?: string | null;
   },
 ) {
@@ -146,6 +166,7 @@ export async function markEmailDrafted(
       emailBody,
       emailBodyHtml: emailBodyHtml ?? null,
       resolvedRecipients,
+      resolvedCc: resolvedCc ?? Prisma.DbNull,
       resolvedClickupTaskUrl: resolvedClickupTaskUrl ?? null,
       lastErrorMessage: null,
     },
@@ -203,13 +224,45 @@ export async function rejectReport(reportId: string) {
   );
 }
 
-/** APPROVED -> SENT. Terminal -- the email send itself is not implemented here, only the state transition. */
-export async function markSent(reportId: string) {
+/**
+ * APPROVED -> SENDING. Atomically claims the right to actually run the send
+ * automation: exactly one concurrent caller can win this conditional
+ * UPDATE, so approveAndSendReport calls this immediately before invoking
+ * sendEmail, and only proceeds if it wins. A second concurrent call (double
+ * -click, retried request, race) loses here -- count is 0, this throws --
+ * and is rejected before ever touching ClickUp.
+ */
+export async function markSending(reportId: string) {
+  return guardedUpdate(reportId, [ReportStatus.APPROVED], { status: ReportStatus.SENDING }, "claim send (APPROVED -> SENDING)");
+}
+
+/**
+ * SENDING -> APPROVED. The send automation failed (threw before reaching
+ * markSent) -- reverts the claim so approveAndSendReport can legitimately be
+ * retried later, instead of leaving the report stuck in SENDING forever.
+ */
+export async function markSendFailed(reportId: string, { errorMessage }: { errorMessage: string }) {
   return guardedUpdate(
     reportId,
-    [ReportStatus.APPROVED],
-    { status: ReportStatus.SENT, sentAt: new Date() },
-    "mark sent (APPROVED -> SENT)",
+    [ReportStatus.SENDING],
+    { status: ReportStatus.APPROVED, lastErrorMessage: errorMessage },
+    "mark send failed (SENDING -> APPROVED)",
+  );
+}
+
+/**
+ * SENDING -> SENT. Terminal -- only reachable from the claimed SENDING
+ * state, never directly from APPROVED. `auditCommentPosted` is purely
+ * observability (see SendEmailResult) -- whatever value the sender reports
+ * (or omits) is recorded, but it never affects whether this transition
+ * itself succeeds: by the time this is called, the email has already sent.
+ */
+export async function markSent(reportId: string, { auditCommentPosted }: { auditCommentPosted?: boolean } = {}) {
+  return guardedUpdate(
+    reportId,
+    [ReportStatus.SENDING],
+    { status: ReportStatus.SENT, sentAt: new Date(), auditCommentPosted: auditCommentPosted ?? null },
+    "mark sent (SENDING -> SENT)",
   );
 }
 
@@ -230,6 +283,7 @@ export async function regenerateEmailDraftFromApproval(reportId: string) {
       emailBody: null,
       emailBodyHtml: null,
       resolvedRecipients: Prisma.DbNull,
+      resolvedCc: Prisma.DbNull,
       resolvedClickupTaskUrl: null,
       lastErrorMessage: null,
     },

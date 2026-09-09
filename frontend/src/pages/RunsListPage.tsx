@@ -21,7 +21,11 @@ export function RunsListPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!activeClient) return;
+    if (!activeClient) {
+      setRuns([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     getRuns(activeClient.id)

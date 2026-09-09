@@ -1,6 +1,6 @@
 import { prisma } from "../db/client.js";
 import { ReportStatus } from "@prisma/client";
-import { approveReport, markSent } from "./reportTransitions.js";
+import { approveReport, markSending, markSendFailed, markSent } from "./reportTransitions.js";
 import { InvalidReportTransitionError } from "./errors.js";
 import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
@@ -34,6 +34,7 @@ export async function approveAndSendReport(
   }
 
   const recipients = Array.isArray(report.resolvedRecipients) ? (report.resolvedRecipients as string[]) : [];
+  const cc = Array.isArray(report.resolvedCc) ? (report.resolvedCc as string[]) : [];
   if (recipients.length === 0) {
     return { outcome: "NO_RECIPIENTS", errorMessage: "Cannot send: no recipients configured for this report." };
   }
@@ -56,6 +57,22 @@ export async function approveAndSendReport(
   // failed after approval succeeded. This call is a retry of the send
   // step only; approval is not repeated.
 
+  // Atomically claim the send BEFORE calling sendEmail: this is what
+  // guarantees only one concurrent caller can ever execute sendEmail() for
+  // this report. Two requests racing here (double-click, retried request,
+  // two tabs) both reach this line with status APPROVED, but only one wins
+  // the conditional APPROVED -> SENDING update -- the loser gets
+  // InvalidReportTransitionError and returns immediately, never touching
+  // ClickUp.
+  try {
+    current = await markSending(reportId);
+  } catch (err) {
+    if (err instanceof InvalidReportTransitionError) {
+      return { outcome: "ALREADY_PROCESSED", errorMessage: err.message };
+    }
+    throw err;
+  }
+
   try {
     // The client-facing PDF (Report Summary + one Keyword Ranking Table,
     // built straight from the report's own deterministic analyticsJson),
@@ -73,6 +90,7 @@ export async function approveAndSendReport(
 
     const sendResult = await sendEmail({
       to: recipients,
+      cc: cc.length > 0 ? cc : undefined,
       subject: current.emailSubject ?? "",
       bodyText: current.emailBody ?? "",
       bodyHtml: current.emailBodyHtml ?? undefined,
@@ -82,12 +100,15 @@ export async function approveAndSendReport(
       excelPdfBuffer,
       excelPdfFilename,
     });
-    await markSent(reportId);
+    await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
     return { outcome: "SENT", messageId: sendResult.messageId };
   } catch (err) {
-    // Send failed after approval succeeded. There is no APPROVED-failure
-    // state in the design -- the report simply stays APPROVED, and calling
-    // this function again will retry only the send step (see above).
+    // Send failed after claiming SENDING. Revert the claim back to
+    // APPROVED so calling this function again legitimately retries the
+    // send step (see above) -- never leaves the report stuck in SENDING.
+    // If the revert itself somehow fails, the ORIGINAL send error is still
+    // what the caller needs to see and act on, not the revert failure.
+    await markSendFailed(reportId, { errorMessage: (err as Error).message }).catch(() => {});
     return { outcome: "SEND_FAILED", errorMessage: (err as Error).message };
   }
 }

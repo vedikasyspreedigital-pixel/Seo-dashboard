@@ -126,7 +126,7 @@ test("GET /api/clients requires authentication", async () => {
 test("full flow: upload -> start -> progress -> export, using mocked DataForSEO", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
   const client = await prisma.client.create({
-    data: { name: `API Test ${randomUUID()}` },
+    data: { name: `API Test ${randomUUID()}`, workspaceId: sharedAuth.workspace.id },
   });
 
   try {
@@ -177,7 +177,7 @@ test("full flow: upload -> start -> progress -> export, using mocked DataForSEO"
 test("starting a run twice is rejected (invalid transition), not silently re-run", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
   const client = await prisma.client.create({
-    data: { name: `API Test ${randomUUID()}` },
+    data: { name: `API Test ${randomUUID()}`, workspaceId: sharedAuth.workspace.id },
   });
 
   try {
@@ -208,8 +208,8 @@ test("starting a run twice is rejected (invalid transition), not silently re-run
 
 test("GET /api/runs?clientId= lists only that client's runs, most recent first", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
-  const client = await prisma.client.create({ data: { name: `API Test - runs list ${randomUUID()}` } });
-  const otherClient = await prisma.client.create({ data: { name: `API Test - runs list other ${randomUUID()}` } });
+  const client = await prisma.client.create({ data: { name: `API Test - runs list ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  const otherClient = await prisma.client.create({ data: { name: `API Test - runs list other ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
   try {
     const fileBuffer = await buildTestWorkbookBuffer();
     const uploadRes = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "test.xlsx");
@@ -240,7 +240,7 @@ test("GET /api/runs requires authentication -- the whole runs router is gated, n
 
 test("GET /api/runs/:id/rows returns row-level detail in source order", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
-  const client = await prisma.client.create({ data: { name: `API Test - run rows ${randomUUID()}` } });
+  const client = await prisma.client.create({ data: { name: `API Test - run rows ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
   try {
     const fileBuffer = await buildTestWorkbookBuffer();
     const uploadRes = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "test.xlsx");
@@ -265,7 +265,7 @@ test("GET /api/runs/:id/rows returns 404 for an unknown run", async () => {
 
 test("POST /api/runs/:id/cancel: UPLOADED -> CANCELLED, and a second cancel is rejected", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
-  const client = await prisma.client.create({ data: { name: `API Test - cancel run ${randomUUID()}` } });
+  const client = await prisma.client.create({ data: { name: `API Test - cancel run ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
   try {
     const fileBuffer = await buildTestWorkbookBuffer();
     const uploadRes = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "test.xlsx");
@@ -284,7 +284,7 @@ test("POST /api/runs/:id/cancel: UPLOADED -> CANCELLED, and a second cancel is r
 
 test("POST /api/runs/validate: parses without persisting anything", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
-  const client = await prisma.client.create({ data: { name: `API Test - validate ${randomUUID()}` } });
+  const client = await prisma.client.create({ data: { name: `API Test - validate ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
   try {
     const fileBuffer = await buildTestWorkbookBuffer();
     const res = await authedApp(app)
@@ -307,7 +307,7 @@ test("POST /api/runs/validate: parses without persisting anything", async () => 
 
 test("POST /api/runs/validate: missing required column returns 400 with a clear message", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
-  const client = await prisma.client.create({ data: { name: `API Test - validate missing column ${randomUUID()}` } });
+  const client = await prisma.client.create({ data: { name: `API Test - validate missing column ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
   try {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Sheet1");

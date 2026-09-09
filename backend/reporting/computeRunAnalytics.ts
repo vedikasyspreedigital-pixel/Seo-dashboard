@@ -32,6 +32,8 @@ export interface RunAnalytics {
   runId: string;
   previousRunId: string | null;
   totals: AnalyticsTotals;
+  /** The previous run's own totals (same shape as `totals`), computed from the same rows already fetched for movements -- null when there's no previous run to compare against. */
+  previousTotals: AnalyticsTotals | null;
   movements: {
     improved: KeywordMovement[];
     declined: KeywordMovement[];
@@ -129,6 +131,7 @@ export async function computeRunAnalytics(runId: string, previousRunId?: string)
     unchanged: [] as KeywordMovement[],
     newlyTracked: [] as NewlyTrackedKeyword[],
   };
+  let previousTotals: AnalyticsTotals | null = null;
 
   if (previousRunId) {
     const previousRows: RankRow[] = await prisma.rankingRow.findMany({
@@ -136,7 +139,8 @@ export async function computeRunAnalytics(runId: string, previousRunId?: string)
       select: { keyword: true, rowUid: true, rankValue: true, rankDisplay: true },
     });
     movements = computeMovements(currentRows, previousRows);
+    previousTotals = computeTotals(previousRows);
   }
 
-  return { runId, previousRunId: previousRunId ?? null, totals, movements };
+  return { runId, previousRunId: previousRunId ?? null, totals, previousTotals, movements };
 }

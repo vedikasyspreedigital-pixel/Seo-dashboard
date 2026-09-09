@@ -261,6 +261,7 @@ export interface UpdateReportDraftInput {
   emailBody?: string;
   emailBodyHtml?: string;
   resolvedRecipients?: string[];
+  resolvedCc?: string[];
   resolvedClickupTaskUrl?: string | null;
 }
 

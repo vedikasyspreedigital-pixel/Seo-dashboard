@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
 import { regenerateEmailDraft } from "../backend/reporting/generateEmailDraft.js";
-import { createMockClaudeEmailDrafter } from "../backend/reporting/mockClaudeClient.js";
 import { InvalidReportTransitionError } from "../backend/reporting/errors.js";
 import { ReportStatus } from "@prisma/client";
 
@@ -24,11 +23,11 @@ async function makePendingApprovalReport(clientId: string, runId: string) {
       runId,
       status: ReportStatus.PENDING_APPROVAL,
       analyticsJson: { totals: { totalKeywords: 3, averageRank: 10, top3Count: 0, top10Count: 1, notIn100Count: 1 }, movements: { improved: [], declined: [], unchanged: [], newlyTracked: [] } },
-      analysisJson: { overallNarrative: "old narrative", keyInsights: ["old insight"], notableWins: [], notableLosses: [], recommendedFocusAreas: [] },
-      reportHtml: "<html>old report</html>",
+      clientPdfPath: "/tmp/stub-report.pdf",
       emailSubject: "Stale subject",
       emailBody: "Stale body",
       resolvedRecipients: ["ops@example.com"],
+      resolvedCc: ["stale-cc@example.com"],
     },
   });
 }
@@ -42,7 +41,7 @@ async function cleanupClient(clientId: string) {
   await prisma.client.delete({ where: { id: clientId } });
 }
 
-test("regenerate: clears the stale draft, produces a fresh one, and ends back at PENDING_APPROVAL", async () => {
+test("regenerate: clears the stale draft (including cc), produces a fresh one from current client config, and ends back at PENDING_APPROVAL", async () => {
   const client = await makeClient(`Regenerate Test - success ${randomUUID()}`);
   try {
     const run = await makeRun(client.id);
@@ -53,22 +52,22 @@ test("regenerate: clears the stale draft, produces a fresh one, and ends back at
         sectionsEnabled: ["summary"],
         metricsEnabled: ["averageRank"],
         recipients: ["ops@example.com", "new-recipient@example.com"],
+        cc: ["fresh-cc@example.com"],
         reportingFrequency: "weekly",
         templateId: "standard-v1",
       },
     });
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const result = await regenerateEmailDraft(report.id, createMockClaudeEmailDrafter());
+    const result = await regenerateEmailDraft(report.id);
     assert.equal(result.outcome, "SUCCESS");
+    assert.deepEqual(result.cc, ["fresh-cc@example.com"]);
 
     const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(persisted.status, ReportStatus.PENDING_APPROVAL); // back in the approval queue
     assert.notEqual(persisted.emailSubject, "Stale subject"); // genuinely regenerated, not the old draft
     assert.notEqual(persisted.emailBody, "Stale body");
-    // analytics/analysis/report from the earlier phase are untouched -- only the email draft was redone
-    assert.deepEqual(persisted.analysisJson, { overallNarrative: "old narrative", keyInsights: ["old insight"], notableWins: [], notableLosses: [], recommendedFocusAreas: [] });
-    assert.equal(persisted.reportHtml, "<html>old report</html>");
+    assert.deepEqual(persisted.resolvedCc, ["fresh-cc@example.com"], "stale cc must be replaced, not merged with the new one");
   } finally {
     await cleanupClient(client.id);
   }
@@ -80,27 +79,7 @@ test("regenerate: refused when the report is not PENDING_APPROVAL", async () => 
     const run = await makeRun(client.id);
     const report = await prisma.rankingReport.create({ data: { clientId: client.id, runId: run.id, status: ReportStatus.SENT } });
 
-    await assert.rejects(() => regenerateEmailDraft(report.id, createMockClaudeEmailDrafter()), InvalidReportTransitionError);
-  } finally {
-    await cleanupClient(client.id);
-  }
-});
-
-test("regenerate: if the fresh attempt itself fails, the report lands in EMAIL_DRAFT_FAILED, not stuck mid-regeneration", async () => {
-  const client = await makeClient(`Regenerate Test - fresh attempt fails ${randomUUID()}`);
-  try {
-    const run = await makeRun(client.id);
-    const report = await makePendingApprovalReport(client.id, run.id);
-
-    const throwingClient = async () => {
-      throw new Error("model unavailable during regenerate");
-    };
-    const result = await regenerateEmailDraft(report.id, throwingClient);
-    assert.equal(result.outcome, "CALL_ERROR");
-
-    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
-    assert.equal(persisted.status, ReportStatus.EMAIL_DRAFT_FAILED);
-    assert.equal(persisted.lastErrorMessage, "model unavailable during regenerate");
+    await assert.rejects(() => regenerateEmailDraft(report.id), InvalidReportTransitionError);
   } finally {
     await cleanupClient(client.id);
   }

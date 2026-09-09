@@ -33,14 +33,13 @@ this, everything written to disk is lost on every redeploy, same risk as on Rend
 | `CORS_ORIGINS` | `https://frontend-azure-pi-30.vercel.app,http://localhost:5173` (update if the Vercel URL ever changes) |
 | `DATAFORSEO_LIVE` | `false` to start |
 | `CLICKUP_EMAIL_LIVE` | `false` to start |
-| `CLAUDE_LIVE` | `false` to start |
 | `DATAFORSEO_LOGIN` | your real value — mark as a **secret** variable |
 | `DATAFORSEO_PASSWORD` | your real value — mark as a **secret** variable |
-| `ANTHROPIC_API_KEY` | your real value — mark as a **secret** variable |
 
-Leave the three `*_LIVE` flags `false` until you're deliberately ready for real spend /
+Leave the two `*_LIVE` flags `false` until you're deliberately ready for real spend /
 real sends — same fail-closed-to-mock behavior as before, this is app code, not
-Railway-specific.
+Railway-specific. (There is no Claude/AI variable anymore -- the app has no AI step;
+report analysis and the email draft are both fully deterministic.)
 
 ## 4. ClickUp session file (same manual step as before, platform doesn't change this)
 

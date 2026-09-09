@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 
 const TONE_STYLES = {
   neutral: 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]',
-  ai: 'bg-[var(--color-ai-500)]/15 text-[var(--color-ai-300)]',
 };
 
 export function Badge({ tone, children, className = '' }: { tone: keyof typeof TONE_STYLES; children: ReactNode; className?: string }) {

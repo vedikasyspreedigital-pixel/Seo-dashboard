@@ -41,6 +41,14 @@ enum ReportStatus {
   EMAIL_DRAFTED
   PENDING_APPROVAL
   APPROVED
+  // Atomically claimed from APPROVED right before the real ClickUp send
+  // automation runs -- see reportTransitions.ts's markSending/markSendFailed.
+  // Exists solely so two concurrent approve-and-send calls can never both
+  // execute sendEmail() for the same report: only one can win the
+  // APPROVED -> SENDING transition, the loser is rejected before ever
+  // touching ClickUp. On failure this reverts to APPROVED (so a legitimate
+  // retry stays possible); on success it becomes SENT.
+  SENDING
   REJECTED
   SENT
 }
@@ -165,7 +173,8 @@ model ClientReportConfig {
   sectionsEnabled    Json    @map("sections_enabled") // e.g. ["summary","wins","losses","recommendations","full_table"]
   metricsEnabled     Json    @map("metrics_enabled") // e.g. ["averageRank","top3","top10","notIn100"]
   customInstructions String? @map("custom_instructions")
-  recipients         Json // email addresses -- resolved by the backend only; Claude never sees or decides this
+  recipients         Json // email addresses -- resolved by the backend only, never AI-decided
+  cc                 Json?   @map("cc") // optional CC email addresses -- same resolution rule as recipients
   clickupTaskId      String? @map("clickup_task_id") // primary: bare ClickUp task id (e.g. "86d45e14k") -- resolved into a full URL as https://app.clickup.com/t/{id} when set
   clickupTaskUrl     String? @map("clickup_task_url") // fallback: the ClickUp task whose Email composer delivers this client's reports, used verbatim when clickupTaskId is unset -- resolved by the backend only, same as recipients
   reportingFrequency String  @map("reporting_frequency") // "weekly" | "biweekly" | "monthly" | "manual"
@@ -293,7 +302,8 @@ model RankingReport {
   emailSubject       String? @map("email_subject") // Claude Email Draft Generator's output (subject)
   emailBody          String? @map("email_body") // Claude Email Draft Generator's output (bodyText)
   emailBodyHtml      String? @map("email_body_html") // Claude Email Draft Generator's output (bodyHtml)
-  resolvedRecipients Json?   @map("resolved_recipients") // copied from ClientReportConfig.recipients, human-editable, never Claude-decided
+  resolvedRecipients Json?   @map("resolved_recipients") // copied from ClientReportConfig.recipients, human-editable, never AI-decided
+  resolvedCc         Json?   @map("resolved_cc") // copied from ClientReportConfig.cc, human-editable, same rule as resolvedRecipients
   resolvedClickupTaskUrl String? @map("resolved_clickup_task_url") // copied from ClientReportConfig.clickupTaskUrl, human-editable, never Claude-decided
 
   lastErrorMessage String? @map("last_error_message")
@@ -301,6 +311,15 @@ model RankingReport {
   approvedBy String?   @map("approved_by")
   approvedAt DateTime? @map("approved_at")
   sentAt     DateTime? @map("sent_at")
+  // Set only when sentAt is set (SENDING -> SENT). Distinguishes "email
+  // sent, audit trail also posted" (true) from "email genuinely sent, but
+  // the follow-up ClickUp audit comment failed" (false) -- a failed audit
+  // comment NEVER blocks or reverses the send itself (see approveAndSend.ts
+  // / clickupEmailSender.ts's postAuditComment), it only means this stays
+  // false so the gap is visible here instead of only in server logs. Null
+  // for reports sent before this field existed, or by a sender that
+  // doesn't model an audit-comment step at all (e.g. the mock).
+  auditCommentPosted Boolean? @map("audit_comment_posted")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

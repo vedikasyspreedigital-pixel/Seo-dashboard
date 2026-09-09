@@ -66,6 +66,7 @@ test("approval: PENDING_APPROVAL -> SENT, sender receives exactly the resolved r
     assert.equal(sentCalls.length, 1);
     assert.deepEqual(sentCalls[0], {
       to: ["ops@example.com", "owner@example.com"],
+      cc: undefined,
       subject: "Your ranking update",
       bodyText: "Here is your update.",
       bodyHtml: "<p>Here is your update.</p>",
@@ -245,6 +246,82 @@ test("duplicate-send protection: two concurrent approve-and-send calls on the sa
   }
 });
 
+// Stronger version of the test above: an instant mock resolves so fast
+// there's barely any await-yield window for a real interleaving, so it
+// could theoretically pass "by luck" even without the atomic SENDING claim.
+// This one holds sendEmail open for 100ms so BOTH concurrent calls are
+// guaranteed to have already reached (or be waiting to reach) the send step
+// before either finishes -- proving the guard holds under a realistic race
+// window, not just a lucky one.
+test("duplicate-send protection: two concurrent approve-and-send calls with a SLOW sender still send exactly once, and the loser never even calls the sender", async () => {
+  const client = await makeClient(`Approve Send Test - concurrent slow duplicate ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    let sendCount = 0;
+    const sendEmail = async () => {
+      sendCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return { messageId: `mock-${randomUUID()}` };
+    };
+
+    const results = await Promise.allSettled([
+      approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail }),
+      approveAndSendReport(report.id, { approvedBy: "b@example.com", sendEmail }),
+    ]);
+
+    const outcomes = results.map((r) => (r.status === "fulfilled" ? r.value.outcome : "REJECTED_PROMISE"));
+    assert.equal(outcomes.filter((o) => o === "SENT").length, 1);
+    assert.equal(outcomes.filter((o) => o === "ALREADY_PROCESSED").length, 1);
+    // The critical guarantee: sendEmail (the real ClickUp automation, here
+    // mocked) was invoked exactly once -- the loser was rejected by the
+    // atomic APPROVED -> SENDING claim BEFORE it could ever call sendEmail,
+    // not merely prevented from double-counting after the fact.
+    assert.equal(sendCount, 1);
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.status, ReportStatus.SENT);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("SENDING never gets stuck: a send failure while claimed reverts to APPROVED, never leaving the report unrecoverable", async () => {
+  const client = await makeClient(`Approve Send Test - never stuck in SENDING ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    const failing = createFailingMockEmailSender("ClickUp composer timed out");
+    const failed = await approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail: failing });
+    assert.equal(failed.outcome, "SEND_FAILED");
+
+    const afterFailure = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(afterFailure.status, ReportStatus.APPROVED, "must revert out of SENDING, not get stuck there");
+    assert.equal(afterFailure.lastErrorMessage, "ClickUp composer timed out");
+
+    // Two concurrent retries after the failure -- same guarantee holds:
+    // exactly one wins the re-claim, the other is rejected before sending.
+    let sendCount = 0;
+    const working = createMockEmailSender(() => {
+      sendCount += 1;
+    });
+    const retries = await Promise.allSettled([
+      approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail: working }),
+      approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail: working }),
+    ]);
+    const retryOutcomes = retries.map((r) => (r.status === "fulfilled" ? r.value.outcome : "REJECTED_PROMISE"));
+    assert.equal(retryOutcomes.filter((o) => o === "SENT").length, 1);
+    assert.equal(sendCount, 1);
+
+    const final = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(final.status, ReportStatus.SENT);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test("failure handling: a send failure leaves the report APPROVED (not lost), and a retry with a working sender succeeds", async () => {
   const client = await makeClient(`Approve Send Test - send failure retry ${randomUUID()}`);
   try {
@@ -270,6 +347,66 @@ test("failure handling: a send failure leaves the report APPROVED (not lost), an
 
     const final = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(final.status, ReportStatus.SENT);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Phase 5: audit-comment outcome is purely observability, persisted for
+// later inspection -- it must NEVER change whether the send itself counts
+// as SENT, and must never trigger a duplicate resend.
+test("audit-comment observability: a sender reporting auditCommentPosted:false still counts as a full SENT success, and the flag is persisted", async () => {
+  const client = await makeClient(`Approve Send Test - audit comment failed ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    const sendEmail = async () => ({ messageId: `mock-${randomUUID()}`, auditCommentPosted: false });
+    const result = await approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail });
+    assert.equal(result.outcome, "SENT", "a failed audit comment must never turn a real send into a failure");
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.status, ReportStatus.SENT);
+    assert.equal(persisted.auditCommentPosted, false);
+
+    // And critically: no automatic/implicit resend happens as a result --
+    // the report is terminal (SENT), a subsequent approve-and-send call is
+    // rejected exactly like any other already-sent report.
+    const again = await approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail });
+    assert.equal(again.outcome, "ALREADY_PROCESSED");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("audit-comment observability: auditCommentPosted:true is persisted when the sender reports success", async () => {
+  const client = await makeClient(`Approve Send Test - audit comment succeeded ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    const sendEmail = async () => ({ messageId: `mock-${randomUUID()}`, auditCommentPosted: true });
+    const result = await approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail });
+    assert.equal(result.outcome, "SENT");
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.auditCommentPosted, true);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("audit-comment observability: a sender that doesn't model an audit-comment step at all (e.g. the mock) persists null, not false", async () => {
+  const client = await makeClient(`Approve Send Test - audit comment not applicable ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    const result = await approveAndSendReport(report.id, { approvedBy: "a@example.com", sendEmail: createMockEmailSender() });
+    assert.equal(result.outcome, "SENT");
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.auditCommentPosted, null, "undefined from the sender must be stored as null, not misrepresented as false");
   } finally {
     await cleanupClient(client.id);
   }

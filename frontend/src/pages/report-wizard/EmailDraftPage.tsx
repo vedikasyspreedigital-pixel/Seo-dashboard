@@ -130,8 +130,8 @@ export function EmailDraftPage() {
 
       <div className="mt-6 flex items-center gap-3">
         <PageTitle title="Email Draft" />
-        <Badge tone="ai" className="mt-6">
-          AI-drafted &middot; Claude
+        <Badge tone="neutral" className="mt-6">
+          Template &middot; Editable
         </Badge>
       </div>
 

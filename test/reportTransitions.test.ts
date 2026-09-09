@@ -14,6 +14,8 @@ import {
   submitForApproval,
   approveReport,
   rejectReport,
+  markSending,
+  markSendFailed,
   markSent,
 } from "../backend/reporting/reportTransitions.js";
 import { InvalidReportTransitionError } from "../backend/reporting/errors.js";
@@ -68,7 +70,13 @@ test("report transition graph matches the locked design", () => {
   assert.equal(isValidReportTransition(ReportStatus.EMAIL_DRAFTED, ReportStatus.PENDING_APPROVAL), true);
   assert.equal(isValidReportTransition(ReportStatus.PENDING_APPROVAL, ReportStatus.APPROVED), true);
   assert.equal(isValidReportTransition(ReportStatus.PENDING_APPROVAL, ReportStatus.REJECTED), true);
-  assert.equal(isValidReportTransition(ReportStatus.APPROVED, ReportStatus.SENT), true);
+  // APPROVED can no longer jump straight to SENT -- it must pass through
+  // the atomically-claimed SENDING state first (see approveAndSend.ts).
+  assert.equal(isValidReportTransition(ReportStatus.APPROVED, ReportStatus.SENDING), true);
+  assert.equal(isValidReportTransition(ReportStatus.APPROVED, ReportStatus.SENT), false);
+  assert.equal(isValidReportTransition(ReportStatus.SENDING, ReportStatus.SENT), true);
+  // A failed send reverts the claim so a legitimate retry stays possible.
+  assert.equal(isValidReportTransition(ReportStatus.SENDING, ReportStatus.APPROVED), true);
 
   // No skipping states, no illegal reversals, terminal states have no exits.
   assert.equal(isValidReportTransition(ReportStatus.PENDING_ANALYSIS, ReportStatus.PENDING_APPROVAL), false);
@@ -111,9 +119,103 @@ test("happy path: PENDING_ANALYSIS -> ... -> SENT, every field set at the right 
     assert.equal(approved.approvedBy, "om@syspreedigital.com");
     assert.ok(approved.approvedAt);
 
+    const sending = await markSending(report.id);
+    assert.equal(sending.status, ReportStatus.SENDING);
+
     const sent = await markSent(report.id);
     assert.equal(sent.status, ReportStatus.SENT);
     assert.ok(sent.sentAt);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("markSending: only one of two concurrent callers can claim APPROVED -> SENDING, the loser is rejected", async () => {
+  const client = await makeClient(`Report Transitions - concurrent markSending ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id);
+    await markAnalysisReady(report.id, { analyticsJson: {}, analysisJson: {} });
+    await markReportReady(report.id, {});
+    await markEmailDrafted(report.id, { emailSubject: "s", emailBody: "b", resolvedRecipients: ["a@example.com"] });
+    await submitForApproval(report.id);
+    await approveReport(report.id, { approvedBy: "om@syspreedigital.com" });
+
+    const results = await Promise.allSettled([markSending(report.id), markSending(report.id)]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    assert.equal(fulfilled.length, 1, "exactly one concurrent claim must win");
+    assert.equal(rejected.length, 1, "exactly one concurrent claim must lose");
+    assert.ok((rejected[0] as PromiseRejectedResult).reason instanceof InvalidReportTransitionError);
+
+    const final = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(final.status, ReportStatus.SENDING);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("markSendFailed: SENDING -> APPROVED, recording the error and leaving the report retryable -- never stuck in SENDING", async () => {
+  const client = await makeClient(`Report Transitions - markSendFailed ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id);
+    await markAnalysisReady(report.id, { analyticsJson: {}, analysisJson: {} });
+    await markReportReady(report.id, {});
+    await markEmailDrafted(report.id, { emailSubject: "s", emailBody: "b", resolvedRecipients: ["a@example.com"] });
+    await submitForApproval(report.id);
+    await approveReport(report.id, { approvedBy: "om@syspreedigital.com" });
+    await markSending(report.id);
+
+    const reverted = await markSendFailed(report.id, { errorMessage: "ClickUp composer timed out" });
+    assert.equal(reverted.status, ReportStatus.APPROVED);
+    assert.equal(reverted.lastErrorMessage, "ClickUp composer timed out");
+
+    // Retryable: a fresh markSending call succeeds again from APPROVED.
+    const retried = await markSending(report.id);
+    assert.equal(retried.status, ReportStatus.SENDING);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("markSendFailed refuses to run against a report that isn't SENDING (e.g. still APPROVED, never claimed)", async () => {
+  const client = await makeClient(`Report Transitions - markSendFailed guard ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id);
+    await markAnalysisReady(report.id, { analyticsJson: {}, analysisJson: {} });
+    await markReportReady(report.id, {});
+    await markEmailDrafted(report.id, { emailSubject: "s", emailBody: "b", resolvedRecipients: ["a@example.com"] });
+    await submitForApproval(report.id);
+    await approveReport(report.id, { approvedBy: "om@syspreedigital.com" });
+
+    await assert.rejects(() => markSendFailed(report.id, { errorMessage: "should not apply" }), InvalidReportTransitionError);
+
+    const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(unchanged.status, ReportStatus.APPROVED);
+    assert.equal(unchanged.lastErrorMessage, null);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("markSent refuses to run directly from APPROVED -- SENDING must be claimed first", async () => {
+  const client = await makeClient(`Report Transitions - markSent guard ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id);
+    await markAnalysisReady(report.id, { analyticsJson: {}, analysisJson: {} });
+    await markReportReady(report.id, {});
+    await markEmailDrafted(report.id, { emailSubject: "s", emailBody: "b", resolvedRecipients: ["a@example.com"] });
+    await submitForApproval(report.id);
+    await approveReport(report.id, { approvedBy: "om@syspreedigital.com" });
+
+    await assert.rejects(() => markSent(report.id), InvalidReportTransitionError);
+
+    const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(unchanged.status, ReportStatus.APPROVED);
+    assert.equal(unchanged.sentAt, null);
   } finally {
     await cleanupClient(client.id);
   }
@@ -271,6 +373,25 @@ test("foreign key: a run with an existing report cannot be deleted until the rep
   await prisma.rankingReport.delete({ where: { id: report.id } });
   await prisma.rankingRun.delete({ where: { id: run.id } });
   await prisma.client.delete({ where: { id: client.id } });
+});
+
+test("markSent: auditCommentPosted defaults to null when omitted, and stores whatever boolean is passed", async () => {
+  const client = await makeClient(`Report Transitions - markSent audit comment ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+
+    const reportA = await makeReport(client.id, run.id);
+    await markAnalysisReady(reportA.id, { analyticsJson: {}, analysisJson: {} });
+    await markReportReady(reportA.id, {});
+    await markEmailDrafted(reportA.id, { emailSubject: "s", emailBody: "b", resolvedRecipients: ["a@example.com"] });
+    await submitForApproval(reportA.id);
+    await approveReport(reportA.id, { approvedBy: "om@syspreedigital.com" });
+    await markSending(reportA.id);
+    const sentNoArg = await markSent(reportA.id);
+    assert.equal(sentNoArg.auditCommentPosted, null);
+  } finally {
+    await cleanupClient(client.id);
+  }
 });
 
 test.after(async () => {

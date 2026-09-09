@@ -11,6 +11,7 @@ import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
 import { requireAuth } from '../../auth/requireAuth.js';
+import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Configurable so a persistent disk (e.g. Render) can be mounted somewhere
@@ -28,10 +29,6 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   const router = Router();
   router.use(requireAuth);
 
-  // Note: per-request workspace-ownership checks on these :id routes are a
-  // deliberate, documented scope boundary (see the workspace-layer plan) --
-  // requireAuth confirms the caller is logged in, but doesn't yet re-verify
-  // that a given run/report id belongs to one of the caller's workspaces.
   router.post('/', upload.single('file'), async (req, res) => {
     const clientId = req.body?.clientId as string | undefined;
     const file = req.file;
@@ -39,6 +36,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       res.status(400).json({ error: 'clientId and file are required' });
       return;
     }
+    if (!(await findOwnedClientOrRespond(req, res, clientId, { requireActive: true }))) return;
 
     try {
       const { run, insertedRowCount, rowErrors } = await ingestExcelRun({
@@ -70,6 +68,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       res.status(400).json({ error: 'clientId and file are required' });
       return;
     }
+    if (!(await findOwnedClientOrRespond(req, res, clientId, { requireActive: true }))) return;
 
     try {
       const { rows, rowErrors } = await parseRankingExcel(file.buffer, { clientId });
@@ -86,6 +85,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   });
 
   router.post('/:id/start', async (req, res) => {
+    if (!(await findOwnedRunOrRespond(req, res, req.params.id, { requireActive: true }))) return;
     try {
       const run = await startRun(req.params.id);
       // Fire-and-forget: the HTTP response returns immediately, the
@@ -108,6 +108,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       res.status(400).json({ error: 'clientId query parameter is required' });
       return;
     }
+    if (!(await findOwnedClientOrRespond(req, res, clientId))) return;
     const runs = await prisma.rankingRun.findMany({ where: { clientId }, orderBy: { createdAt: 'desc' } });
     res.json(runs);
   });
@@ -115,6 +116,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   // UPLOADED | PROCESSING -> CANCELLED. Was already implemented in the
   // state machine but never exposed via the router.
   router.post('/:id/cancel', async (req, res) => {
+    if (!(await findOwnedRunOrRespond(req, res, req.params.id, { requireActive: true }))) return;
     try {
       const run = await cancelRun(req.params.id);
       res.json(run);
@@ -128,11 +130,8 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   });
 
   router.get('/:id', async (req, res) => {
-    const run = await prisma.rankingRun.findUnique({ where: { id: req.params.id }, include: { client: true } });
-    if (!run) {
-      res.status(404).json({ error: 'Run not found' });
-      return;
-    }
+    const run = await findOwnedRunOrRespond(req, res, req.params.id);
+    if (!run) return;
     res.json(run);
   });
 
@@ -140,11 +139,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   // language/status/rank/ranking URL for every row, source order.
   router.get('/:id/rows', async (req, res) => {
     const runId = req.params.id;
-    const run = await prisma.rankingRun.findUnique({ where: { id: runId } });
-    if (!run) {
-      res.status(404).json({ error: 'Run not found' });
-      return;
-    }
+    if (!(await findOwnedRunOrRespond(req, res, runId))) return;
     const rows = await prisma.rankingRow.findMany({
       where: { runId },
       orderBy: { sourceRowNumber: 'asc' },
@@ -164,11 +159,8 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
 
   router.get('/:id/progress', async (req, res) => {
     const runId = req.params.id;
-    const run = await prisma.rankingRun.findUnique({ where: { id: runId } });
-    if (!run) {
-      res.status(404).json({ error: 'Run not found' });
-      return;
-    }
+    const run = await findOwnedRunOrRespond(req, res, runId);
+    if (!run) return;
 
     const counts = await prisma.rankingRow.groupBy({ by: ['status'], where: { runId }, _count: { _all: true } });
 
@@ -185,11 +177,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
 
   router.get('/:id/export', async (req, res) => {
     const runId = req.params.id;
-    const run = await prisma.rankingRun.findUnique({ where: { id: runId } });
-    if (!run) {
-      res.status(404).json({ error: 'Run not found' });
-      return;
-    }
+    if (!(await findOwnedRunOrRespond(req, res, runId))) return;
 
     const { buffer: updatedBuffer, filename } = await exportRunExcelBuffer(runId);
 

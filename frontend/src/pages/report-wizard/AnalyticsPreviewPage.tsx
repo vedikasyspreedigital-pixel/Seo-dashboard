@@ -22,6 +22,13 @@ export function AnalyticsPreviewPage() {
 
   useEffect(() => {
     if (!reportId) return;
+    // Clear stale state from a PREVIOUSLY viewed report before fetching --
+    // this route doesn't remount on a param-only navigation between two
+    // different reportIds, so without this the old report's data (or a
+    // stale build-report error) could render for a frame under this URL.
+    setReport(null);
+    setError(null);
+    setGenerating(false);
     getReport(reportId).then(setReport);
   }, [reportId]);
 

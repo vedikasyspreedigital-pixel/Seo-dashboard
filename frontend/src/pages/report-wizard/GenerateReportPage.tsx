@@ -81,7 +81,7 @@ export function GenerateReportPage() {
 
         <AlertPanel tone="info" className="mt-5">
           <p className="text-sm text-[var(--color-ink-muted)]">
-            This creates a report record and takes you to analytics. No Claude call happens until you draft the email later.
+            This creates a report record and takes you to analytics. Everything here is computed directly from the ranking data -- no AI involved anywhere in this flow.
           </p>
         </AlertPanel>
 

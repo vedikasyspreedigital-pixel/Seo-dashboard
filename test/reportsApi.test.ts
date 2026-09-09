@@ -4,16 +4,16 @@ import request from "supertest";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../backend/api/app.js";
 import { prisma } from "../backend/db/client.js";
-import { createMockClaudeAnalyst, createMockClaudeEmailDrafter } from "../backend/reporting/mockClaudeClient.js";
 import { createMockEmailSender } from "../backend/reporting/mockEmailSender.js";
 import { ReportStatus } from "@prisma/client";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
 import { createAuthenticatedSession, type AuthFixture } from "./helpers/auth.js";
 import { authedRequest } from "./helpers/authedRequest.js";
 
-// Full HTTP-layer test against the real local Postgres container. Both
-// Claude and the email provider are mocked -- no real calls of any kind.
-// All requests go through one shared logged-in session (reports.ts now
+// Full HTTP-layer test against the real local Postgres container. The email
+// provider is mocked -- no real calls of any kind, and no AI involved
+// anywhere in this router. All requests go through one shared logged-in
+// session (reports.ts now
 // requires auth) -- these tests exercise report business logic, not
 // workspace-ownership checks, so which workspace the session belongs to is
 // irrelevant here.
@@ -33,8 +33,8 @@ function authedApp(app: ReturnType<typeof createApp>) {
 
 const unusedDataForSeoMock: CallDataForSeoFn = async () => ({ httpStatus: 200, body: { status_code: 20000, tasks: [] } });
 
-async function makeClient(name: string) {
-  return prisma.client.create({ data: { name } });
+async function makeClient(name: string, workspaceId: string = auth.workspace.id) {
+  return prisma.client.create({ data: { name, workspaceId } });
 }
 
 async function makeRun(clientId: string, status: "UPLOADED" | "PROCESSING" | "COMPLETED" | "COMPLETED_WITH_ERRORS" | "CANCELLED" = "COMPLETED") {
@@ -208,8 +208,6 @@ test("PATCH /api/reports/:id rejects a malformed email address in resolvedRecipi
 test("POST /api/reports/:id/approve-and-send sends via the injected mock sender, and rejects a second call", async () => {
   const sentCalls: unknown[] = [];
   const app = createApp(unusedDataForSeoMock, "mock", undefined, {
-    callClaudeAnalyst: createMockClaudeAnalyst(),
-    callClaudeEmailDraft: createMockClaudeEmailDrafter(),
     sendEmail: createMockEmailSender((p) => sentCalls.push(p)),
   });
   const client = await makeClient(`Reports API Test - approve send ${randomUUID()}`);
@@ -278,10 +276,8 @@ test("POST /api/reports/:id/reject transitions to REJECTED", async () => {
   }
 });
 
-test("POST /api/reports/:id/regenerate produces a fresh draft via the injected mock Claude client", async () => {
+test("POST /api/reports/:id/regenerate produces a fresh draft from the deterministic template", async () => {
   const app = createApp(unusedDataForSeoMock, "mock", undefined, {
-    callClaudeAnalyst: createMockClaudeAnalyst(),
-    callClaudeEmailDraft: createMockClaudeEmailDrafter(),
     sendEmail: createMockEmailSender(),
   });
   const client = await makeClient(`Reports API Test - regenerate ${randomUUID()}`);
@@ -300,7 +296,7 @@ test("POST /api/reports/:id/regenerate produces a fresh draft via the injected m
   }
 });
 
-test("POST /api/reports creates a report at PENDING_ANALYSIS with analytics eagerly computed, but does not call Claude", async () => {
+test("POST /api/reports creates a report at PENDING_ANALYSIS with analytics eagerly computed, no AI involved", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Reports API Test - create success ${randomUUID()}`);
   try {
@@ -312,7 +308,7 @@ test("POST /api/reports creates a report at PENDING_ANALYSIS with analytics eage
     assert.equal(res.body.report.clientId, client.id);
     assert.equal(res.body.report.status, "PENDING_ANALYSIS");
     assert.ok(res.body.report.analyticsJson, "analytics should be eagerly computed at creation");
-    assert.equal(res.body.report.analysisJson, null, "Claude has not been called yet");
+    assert.equal(res.body.report.analysisJson, null, "no AI insights step exists in this app");
     assert.equal(res.body.report.reportHtml, null);
 
     const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: res.body.report.id } });
@@ -387,7 +383,7 @@ test("POST /api/reports rejects a duplicate report for the same run with 409, wi
   }
 });
 
-test("POST /api/reports/:id/generate-email-draft drives REPORT_READY -> PENDING_APPROVAL via the mock Claude client", async () => {
+test("POST /api/reports/:id/generate-email-draft drives REPORT_READY -> PENDING_APPROVAL via the deterministic template", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Reports API Test - generate email draft ${randomUUID()}`);
   try {
@@ -407,7 +403,7 @@ test("POST /api/reports/:id/generate-email-draft drives REPORT_READY -> PENDING_
   }
 });
 
-test("POST /api/reports/:id/generate-email-draft works for a report built via the Build Report shortcut (no Claude Insights, analysisJson is null)", async () => {
+test("POST /api/reports/:id/generate-email-draft works for a report built via the Build Report shortcut (analysisJson is null, there is no Insights step)", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Reports API Test - email draft without insights ${randomUUID()}`);
   try {
@@ -450,41 +446,7 @@ test("POST /api/reports/:id/generate-email-draft rejects a report that isn't REP
   }
 });
 
-test("POST /api/reports/:id/generate-insights drives PENDING_ANALYSIS -> ANALYSIS_READY via the mock Claude client, without building the report", async () => {
-  const app = createApp(unusedDataForSeoMock, "mock");
-  const client = await makeClient(`Reports API Test - generate insights ${randomUUID()}`);
-  try {
-    const run = await makeRun(client.id, "COMPLETED");
-    const report = await makePendingAnalysisReport(client.id, run.id);
-
-    const res = await authedApp(app).post(`/api/reports/${report.id}/generate-insights`);
-    assert.equal(res.status, 200);
-    assert.equal(res.body.outcome, "SUCCESS");
-
-    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
-    assert.equal(persisted.status, "ANALYSIS_READY");
-    assert.ok(persisted.analysisJson);
-    assert.equal(persisted.reportHtml, null, "build-report is a separate step");
-  } finally {
-    await cleanupClient(client.id);
-  }
-});
-
-test("POST /api/reports/:id/generate-insights rejects a report that isn't PENDING_ANALYSIS with 409", async () => {
-  const app = createApp(unusedDataForSeoMock, "mock");
-  const client = await makeClient(`Reports API Test - generate insights wrong state ${randomUUID()}`);
-  try {
-    const run = await makeRun(client.id, "COMPLETED");
-    const report = await makeAnalysisReadyReport(client.id, run.id);
-
-    const res = await authedApp(app).post(`/api/reports/${report.id}/generate-insights`);
-    assert.equal(res.status, 409);
-  } finally {
-    await cleanupClient(client.id);
-  }
-});
-
-test("POST /api/reports/:id/build-report drives PENDING_ANALYSIS -> REPORT_READY directly, generating one PDF artifact, no Claude Insights step required", async () => {
+test("POST /api/reports/:id/build-report drives PENDING_ANALYSIS -> REPORT_READY directly, generating one PDF artifact -- there is no Insights step in this app", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Reports API Test - build report from pending analysis ${randomUUID()}`);
   try {

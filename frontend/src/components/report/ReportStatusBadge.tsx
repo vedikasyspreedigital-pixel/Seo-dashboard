@@ -15,6 +15,7 @@ const STYLES: Record<ReportStatus, string> = {
   EMAIL_DRAFTED: 'bg-blue-500/10 text-blue-300',
   PENDING_APPROVAL: 'bg-amber-500/10 text-amber-300',
   APPROVED: 'bg-brand-400/15 text-brand-300',
+  SENDING: 'bg-amber-500/10 text-amber-300',
   REJECTED: 'bg-[var(--color-surface-3)] text-[var(--color-ink-faint)]',
   SENT: 'bg-brand-400/15 text-brand-300',
 };
@@ -28,6 +29,7 @@ const LABELS: Record<ReportStatus, string> = {
   EMAIL_DRAFTED: 'Drafted',
   PENDING_APPROVAL: 'Pending approval',
   APPROVED: 'Approved',
+  SENDING: 'Sending…',
   REJECTED: 'Rejected',
   SENT: 'Sent',
 };

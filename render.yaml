@@ -45,18 +45,11 @@ services:
         value: "false"
       - key: CLICKUP_SESSION_PATH
         value: /var/data/uploads/clickup-storage-state.json
-      # Same pattern again for the analysis/email-draft step: mock (fixed
-      # placeholder text) by default. Flip to "true" once ANTHROPIC_API_KEY
-      # is set below and you're ready for real spend.
-      - key: CLAUDE_LIVE
-        value: "false"
       # Secrets -- left blank here on purpose (sync: false) so Render
       # prompts for them in the dashboard instead of committing plaintext.
       - key: DATAFORSEO_LOGIN
         sync: false
       - key: DATAFORSEO_PASSWORD
-        sync: false
-      - key: ANTHROPIC_API_KEY
         sync: false
 
 databases:

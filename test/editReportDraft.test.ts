@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
 import { updateReportDraft } from "../backend/reporting/editReportDraft.js";
+import { rejectReport } from "../backend/reporting/reportTransitions.js";
 import { InvalidReportTransitionError } from "../backend/reporting/errors.js";
 import { ReportStatus } from "@prisma/client";
 
@@ -100,6 +101,47 @@ for (const otherStatus of [ReportStatus.REPORT_READY, ReportStatus.EMAIL_DRAFTED
     }
   });
 }
+
+// Regression test for the fix: updateReportDraft used to be a plain
+// read-then-check-then-write, so a concurrent status change (reject,
+// approve, regenerate) could commit BETWEEN the check and the write, and
+// the edit would still apply to a report that had already moved on. Now
+// it's the same atomic conditional-update guardedUpdate every real
+// transition uses, so this is closed by construction -- this test proves it
+// under a genuine race, not just a sequential check.
+test("concurrency: an edit racing a concurrent reject can never land on an already-rejected report -- no split-brain between the edit's own outcome and what's actually persisted", async () => {
+  const client = await makeClient(`Edit Draft Test - concurrent reject race ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReport(client.id, run.id, ReportStatus.PENDING_APPROVAL);
+
+    const [editResult, rejectResult] = await Promise.allSettled([
+      updateReportDraft(report.id, { emailSubject: "Raced edit" }),
+      rejectReport(report.id),
+    ]);
+
+    // rejectReport never depends on updateReportDraft's own state (the edit
+    // never touches `status`), so it must always succeed here regardless of
+    // ordering.
+    assert.equal(rejectResult.status, "fulfilled");
+
+    const final = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(final.status, ReportStatus.REJECTED);
+
+    if (editResult.status === "fulfilled") {
+      // The edit's own atomic update won the race (ran before reject
+      // committed) -- its reported success must actually be persisted.
+      assert.equal(final.emailSubject, "Raced edit", "edit reported success -- its value must actually be persisted");
+    } else {
+      // Reject won the race -- the edit must have been rejected by the
+      // atomic guard, and the report must be completely untouched by it.
+      assert.ok(editResult.reason instanceof InvalidReportTransitionError);
+      assert.equal(final.emailSubject, "Original subject", "edit reported failure -- the report must be untouched by it");
+    }
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
 
 test.after(async () => {
   await prisma.$disconnect();

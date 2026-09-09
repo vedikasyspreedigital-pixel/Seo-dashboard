@@ -1,16 +1,13 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db/client.js";
-import { buildEmailDraftInput, runEmailDraftGenerator, type CallClaudeEmailDraftFn } from "./emailDraft.js";
-import { markEmailDrafted, markEmailDraftFailed, submitForApproval, regenerateEmailDraftFromApproval } from "./reportTransitions.js";
-import type { RunAnalytics } from "./computeRunAnalytics.js";
-import type { AnalystOutput } from "./reportAnalyst.js";
+import { buildDefaultEmailDraft } from "./emailDraft.js";
+import { markEmailDrafted, submitForApproval, regenerateEmailDraftFromApproval } from "./reportTransitions.js";
 
-// The email draft service: uses the RankingReport's already-validated
-// analyticsJson/analysisJson (from the report generation step), drafts an
-// email via the injected Claude client, then -- on success -- resolves
-// recipients from ClientReportConfig (never from Claude) and drives the
-// state machine EMAIL_DRAFTED -> PENDING_APPROVAL. On failure, the report
-// lands in EMAIL_DRAFT_FAILED, retryable via reportTransitions.retryEmailDraft.
+// The email draft service: fills the standard template with the report's
+// real period dates, then -- always successfully, since there's no external
+// call to fail -- resolves recipients/cc (never AI-decided) from
+// ClientReportConfig and drives the state machine
+// REPORT_READY -> EMAIL_DRAFTED -> PENDING_APPROVAL.
 
 /**
  * ClickUp Task ID is the primary way to point a client at their delivery
@@ -26,15 +23,12 @@ export function resolveClickupTaskUrl(config: { clickupTaskId?: string | null; c
   return config?.clickupTaskUrl ?? null;
 }
 
-export type GenerateEmailDraftResult =
-  | { outcome: "SUCCESS"; subject: string; bodyText: string; bodyHtml?: string; recipients: unknown }
-  | { outcome: "VALIDATION_ERROR"; errorMessage: string }
-  | { outcome: "CALL_ERROR"; errorMessage: string };
+export type GenerateEmailDraftResult = { outcome: "SUCCESS"; subject: string; bodyText: string; bodyHtml?: string; recipients: unknown; cc: unknown };
 
-export async function generateEmailDraft(reportId: string, callClaude: CallClaudeEmailDraftFn): Promise<GenerateEmailDraftResult> {
+export async function generateEmailDraft(reportId: string): Promise<GenerateEmailDraftResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
-    include: { client: true },
+    include: { client: true, run: true, previousRun: true },
   });
 
   const config = await prisma.clientReportConfig.findFirst({
@@ -42,52 +36,38 @@ export async function generateEmailDraft(reportId: string, callClaude: CallClaud
     orderBy: { createdAt: "desc" },
   });
 
-  const analytics = report.analyticsJson as unknown as RunAnalytics;
-  const analysis = report.analysisJson as unknown as AnalystOutput | null;
+  const periodStart = report.previousRun?.completedAt ?? report.previousRun?.createdAt ?? report.run.completedAt ?? report.run.createdAt;
+  const periodEnd = report.run.completedAt ?? report.run.createdAt;
 
-  const input = buildEmailDraftInput({
-    clientName: report.client.name,
-    analytics,
-    analysis,
-    tone: config?.reportTone ?? "professional",
-  });
+  const draft = buildDefaultEmailDraft({ clientName: report.client.name, periodStart, periodEnd });
 
-  const result = await runEmailDraftGenerator(input, callClaude);
-
-  if (result.outcome !== "SUCCESS") {
-    const errorMessage = result.outcome === "CALL_ERROR" ? result.errorMessage : result.errors.join("; ");
-    await markEmailDraftFailed(reportId, { errorMessage });
-    return { outcome: result.outcome, errorMessage };
-  }
-
-  // Recipients (and the ClickUp task to deliver through) come from the
-  // client's own configuration, resolved by the backend -- Claude's output
-  // never had either field to read in the first place (EmailDraftInput
-  // carries neither, and validateEmailDraftOutput rejects any unexpected
-  // key in the output).
+  // Recipients (and cc, and the ClickUp task to deliver through) come from
+  // the client's own configuration, resolved by the backend -- never
+  // AI-decided.
   const recipients = config?.recipients ?? [];
+  const cc = config?.cc ?? [];
   const clickupTaskUrl = resolveClickupTaskUrl(config);
 
   await markEmailDrafted(reportId, {
-    emailSubject: result.data.subject,
-    emailBody: result.data.bodyText,
-    emailBodyHtml: result.data.bodyHtml,
+    emailSubject: draft.subject,
+    emailBody: draft.bodyText,
+    emailBodyHtml: draft.bodyHtml,
     resolvedRecipients: recipients as Prisma.InputJsonValue,
+    resolvedCc: cc as Prisma.InputJsonValue,
     resolvedClickupTaskUrl: clickupTaskUrl,
   });
   await submitForApproval(reportId);
 
-  return { outcome: "SUCCESS", subject: result.data.subject, bodyText: result.data.bodyText, bodyHtml: result.data.bodyHtml, recipients };
+  return { outcome: "SUCCESS", subject: draft.subject, bodyText: draft.bodyText, bodyHtml: draft.bodyHtml, recipients, cc };
 }
 
 /**
  * The "Regenerate" action from the approval screen: discards the current
- * draft (PENDING_APPROVAL -> REPORT_READY, clearing subject/body/recipients)
- * and immediately re-runs generateEmailDraft to produce a fresh one. Ends
- * at PENDING_APPROVAL again on success, or EMAIL_DRAFT_FAILED if the new
- * attempt itself fails.
+ * draft (PENDING_APPROVAL -> REPORT_READY, clearing subject/body/recipients/cc)
+ * and immediately re-runs generateEmailDraft to produce a fresh one (the same
+ * default template -- this is effectively "reset to the default template").
  */
-export async function regenerateEmailDraft(reportId: string, callClaude: CallClaudeEmailDraftFn): Promise<GenerateEmailDraftResult> {
+export async function regenerateEmailDraft(reportId: string): Promise<GenerateEmailDraftResult> {
   await regenerateEmailDraftFromApproval(reportId);
-  return generateEmailDraft(reportId, callClaude);
+  return generateEmailDraft(reportId);
 }

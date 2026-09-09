@@ -4,7 +4,6 @@ import { clientsRouter } from "./routes/clients.js";
 import { overviewRouter } from "./routes/overview.js";
 import { createRunsRouter } from "./routes/runs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
-import { createMockClaudeAnalyst, createMockClaudeEmailDrafter } from "../reporting/mockClaudeClient.js";
 import { createMockEmailSender } from "../reporting/mockEmailSender.js";
 import type { CallDataForSeoFn } from "../worker/processRun.js";
 
@@ -20,17 +19,14 @@ const allowedOrigins = (process.env.CORS_ORIGINS ?? "http://localhost:5173")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-// reportingDeps defaults to mocks: no ANTHROPIC_API_KEY and no email
-// provider are configured anywhere in this codebase yet, so /api/reports
-// always runs against mocks unless a caller explicitly injects real
-// implementations (which don't exist yet either).
+// reportingDeps defaults to a mock email sender: no real email provider is
+// configured anywhere in this codebase yet, so /api/reports always runs
+// against the mock unless a caller explicitly injects a real one.
 export function createApp(
   callDataForSeo: CallDataForSeoFn,
   dataForSeoMode: "live" | "mock",
   liveEndpointUrl?: string,
   reportingDeps: ReportsRouterDeps = {
-    callClaudeAnalyst: createMockClaudeAnalyst(),
-    callClaudeEmailDraft: createMockClaudeEmailDrafter(),
     sendEmail: createMockEmailSender(),
   },
 ) {

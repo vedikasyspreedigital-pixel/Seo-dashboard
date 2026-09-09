@@ -43,6 +43,17 @@ export function RunDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Runs ONLY when runId itself changes (not on every progress poll tick,
+    // unlike the rows-fetch effect below) -- clears stale state left over
+    // from a PREVIOUSLY viewed run so it never renders for a frame under
+    // this run's URL while the fresh fetch is in flight (this route doesn't
+    // remount on a param-only navigation between two different runIds).
+    setRun(null);
+    setRows([]);
+    setActionError(null);
+  }, [runId]);
+
+  useEffect(() => {
     if (!runId) return;
     getRun(runId).then(setRun);
   }, [runId]);

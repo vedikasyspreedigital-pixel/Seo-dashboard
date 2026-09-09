@@ -17,7 +17,11 @@ export function ReportsListPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!activeClient) return;
+    if (!activeClient) {
+      setReports([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     getReports(activeClient.id)

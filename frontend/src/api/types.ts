@@ -132,6 +132,7 @@ export type ReportStatus =
   | 'EMAIL_DRAFTED'
   | 'PENDING_APPROVAL'
   | 'APPROVED'
+  | 'SENDING'
   | 'REJECTED'
   | 'SENT';
 
@@ -171,8 +172,10 @@ export interface RunAnalytics {
   };
 }
 
-// Mirrors backend/reporting/reportAnalyst.ts's AnalystOutput -- Claude's
-// schema-validated narrative output, never containing numbers Claude invented.
+// Legacy shape for RankingReport.analysisJson -- this app has no AI analysis
+// step anymore, so every report's analysisJson is permanently null going
+// forward. Kept only so the type still matches what the backend can return
+// for historical rows from before this was removed.
 export interface AnalystOutput {
   overallNarrative: string;
   keyInsights: string[];
@@ -195,11 +198,14 @@ export interface RankingReport {
   emailBody: string | null;
   emailBodyHtml: string | null;
   resolvedRecipients: string[] | null;
+  resolvedCc: string[] | null;
   resolvedClickupTaskUrl: string | null;
   lastErrorMessage: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
   sentAt: string | null;
+  /** null = not applicable/unknown (sent before this existed, or a sender with no audit-comment step). false = the email genuinely sent, but the follow-up ClickUp audit-trail comment failed -- never means the send itself failed. */
+  auditCommentPosted: boolean | null;
   createdAt: string;
   updatedAt: string;
 }

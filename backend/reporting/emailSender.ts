@@ -4,6 +4,8 @@
 
 export interface SendEmailParams {
   to: string[];
+  /** Optional -- empty/undefined means no cc, handled robustly by every sender. */
+  cc?: string[];
   subject: string;
   bodyText: string;
   bodyHtml?: string;
@@ -24,6 +26,16 @@ export interface SendEmailParams {
 
 export interface SendEmailResult {
   messageId: string;
+  /**
+   * Whether a follow-up audit-trail comment was ALSO successfully posted,
+   * distinct from whether the email itself was sent (messageId being
+   * present already means the email sent -- this is strictly additional
+   * observability, never a condition for send success). true = posted,
+   * false = the send succeeded but the audit comment failed, undefined =
+   * not modeled by this sender (e.g. the mock, which has no audit-comment
+   * concept at all).
+   */
+  auditCommentPosted?: boolean;
 }
 
 export type SendEmailFn = (params: SendEmailParams) => Promise<SendEmailResult>;
