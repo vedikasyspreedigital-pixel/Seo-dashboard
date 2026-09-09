@@ -183,13 +183,12 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   // The one action that can actually send an email. Recipients are read
   // from what was already resolved from ClientReportConfig at draft time --
   // this endpoint never accepts a recipient list from the request body.
+  // approvedBy is likewise never client-supplied -- it's the authenticated
+  // session's own email, so the audit trail can't be spoofed by whatever a
+  // request happens to send.
   router.post("/:id/approve-and-send", async (req, res) => {
     if (!(await findOwnedReportOrRespond(req, res, req.params.id, { requireActive: true }))) return;
-    const approvedBy = req.body?.approvedBy;
-    if (typeof approvedBy !== "string" || approvedBy.length === 0) {
-      res.status(400).json({ error: "approvedBy is required" });
-      return;
-    }
+    const approvedBy = req.authUser!.email;
     const result = await approveAndSendReport(req.params.id, { approvedBy, sendEmail, generateExcelAttachment });
     const statusCode = result.outcome === "SENT" ? 200 : result.outcome === "ALREADY_PROCESSED" ? 409 : result.outcome === "NO_RECIPIENTS" ? 422 : 502;
     res.status(statusCode).json(result);

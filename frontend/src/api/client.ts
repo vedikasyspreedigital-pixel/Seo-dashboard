@@ -280,11 +280,12 @@ export interface ApproveAndSendResult {
   errorMessage?: string;
 }
 
-export async function approveAndSendReport(reportId: string, approvedBy: string): Promise<ApproveAndSendResult> {
+// approvedBy is no longer a request param -- the backend derives it from the
+// authenticated session (req.authUser.email) so it can't be spoofed by
+// whatever a request body happens to send.
+export async function approveAndSendReport(reportId: string): Promise<ApproveAndSendResult> {
   const res = await apiFetch(`/reports/${reportId}/approve-and-send`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approvedBy }),
   });
   // Every outcome (SENT/NO_RECIPIENTS/ALREADY_PROCESSED/SEND_FAILED) is a
   // meaningful JSON body, not a generic failure -- read it directly instead

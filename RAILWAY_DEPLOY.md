@@ -18,7 +18,7 @@ The app needs one persistent volume for uploaded Excel files, generated PDFs, an
 ClickUp Playwright session file — all three env vars below point into it. Without
 this, everything written to disk is lost on every redeploy, same risk as on Render.
 
-1. On the backend service, add a **Volume**, mount path `/data`.
+1. On the backend service, add a **Volume**, mount path `/var/data`.
 
 ## 3. Environment variables (Railway service → Variables)
 
@@ -27,9 +27,9 @@ this, everything written to disk is lost on every redeploy, same risk as on Rend
 | `NODE_ENV` | `production` |
 | `DATABASE_URL` | reference the Postgres plugin's connection variable (Railway lets you reference another service's variable directly, e.g. `${{Postgres.DATABASE_URL}}`) |
 | `PORT` | leave unset — Railway injects its own `PORT` and the app already reads `process.env.PORT` |
-| `UPLOADS_DIR` | `/data/uploads` |
-| `REPORTS_DIR` | `/data/uploads/reports` |
-| `CLICKUP_SESSION_PATH` | `/data/uploads/clickup-storage-state.json` |
+| `UPLOADS_DIR` | `/var/data/uploads` |
+| `REPORTS_DIR` | `/var/data/uploads/reports` |
+| `CLICKUP_SESSION_PATH` | `/var/data/uploads/clickup-storage-state.json` |
 | `CORS_ORIGINS` | `https://frontend-azure-pi-30.vercel.app,http://localhost:5173` (update if the Vercel URL ever changes) |
 | `DATAFORSEO_LIVE` | `false` to start |
 | `CLICKUP_EMAIL_LIVE` | `false` to start |
@@ -47,11 +47,18 @@ Once `CLICKUP_EMAIL_LIVE` is ready to flip to `true`, the Playwright session fil
 has to be produced by a human login and placed on the volume:
 
 1. Locally: `npm run setup-session` (in `spikes/clickup-feasibility`) — opens a real
-   browser, log in to ClickUp yourself, press Enter when done.
-2. Upload the resulting `clickup-storage-state.json` to the Railway volume at
-   `/data/uploads/clickup-storage-state.json` (via Railway's volume file browser, or a
-   one-off `railway run` / SFTP-style copy — whichever Railway's current tooling
-   supports at the time).
+   browser, log in to ClickUp yourself, press Enter when done. Writes
+   `session/clickup-storage-state.json`.
+2. Upload it to the Railway volume via the CLI's SSH access (Railway has no
+   drag-and-drop file browser for volumes):
+   ```
+   railway login
+   railway link
+   railway ssh keys add   # first time only, if you hit "Host key verification failed"
+   cat spikes/clickup-feasibility/session/clickup-storage-state.json | railway ssh --service <backend-service-name> "cat > /var/data/uploads/clickup-storage-state.json"
+   ```
+3. Verify: `railway ssh --service <backend-service-name> "ls -la /var/data/uploads/"`
+   should show `clickup-storage-state.json` alongside the existing report/upload files.
 
 ## 5. Frontend (Vercel) — one change
 

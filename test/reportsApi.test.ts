@@ -215,12 +215,12 @@ test("POST /api/reports/:id/approve-and-send sends via the injected mock sender,
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const first = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
+    const first = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
     assert.equal(first.status, 200);
     assert.equal(first.body.outcome, "SENT");
     assert.equal(sentCalls.length, 1);
 
-    const second = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
+    const second = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
     assert.equal(second.status, 409);
     assert.equal(second.body.outcome, "ALREADY_PROCESSED");
     assert.equal(sentCalls.length, 1); // still only one send
@@ -229,15 +229,20 @@ test("POST /api/reports/:id/approve-and-send sends via the injected mock sender,
   }
 });
 
-test("POST /api/reports/:id/approve-and-send requires approvedBy", async () => {
+test("POST /api/reports/:id/approve-and-send derives approvedBy from the authenticated session, ignoring any body value", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
-  const client = await makeClient(`Reports API Test - missing approvedBy ${randomUUID()}`);
+  const client = await makeClient(`Reports API Test - approvedBy from session ${randomUUID()}`);
   try {
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id);
 
-    const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
-    assert.equal(res.status, 400);
+    // A spoofed approvedBy in the body must be ignored -- the persisted
+    // value is always the authenticated session's own email.
+    const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "someone-else@example.com" });
+    assert.equal(res.status, 200);
+
+    const stored = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(stored.approvedBy, auth.user.email);
   } finally {
     await cleanupClient(client.id);
   }
@@ -250,7 +255,7 @@ test("POST /api/reports/:id/approve-and-send returns 422 when there are no recip
     const run = await makeRun(client.id);
     const report = await makePendingApprovalReport(client.id, run.id, []);
 
-    const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({ approvedBy: "om@syspreedigital.com" });
+    const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
     assert.equal(res.status, 422);
     assert.equal(res.body.outcome, "NO_RECIPIENTS");
   } finally {

@@ -10,10 +10,10 @@ import { ReportStatusBadge } from '../../components/report/ReportStatusBadge';
 import { ReportPdfPreview } from '../../components/report/ReportPdfPreview';
 import { InlineError } from '../../components/ui/InlineError';
 import { BackLink } from '../../components/ui/BackLink';
-import { TextInput } from '../../components/ui/TextInput';
 import { AlertPanel } from '../../components/ui/AlertPanel';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
 import { approveAndSendReport, getReport } from '../../api/client';
+import { useSession } from '../../context/SessionContext';
 import type { RankingReport } from '../../api/types';
 
 const SEND_PAGE_STATUSES: RankingReport['status'][] = ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SENT'];
@@ -21,8 +21,8 @@ const SEND_PAGE_STATUSES: RankingReport['status'][] = ['PENDING_APPROVAL', 'APPR
 export function SendConfirmationPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const navigate = useNavigate();
+  const { user } = useSession();
   const [report, setReport] = useState<RankingReport | null>(null);
-  const [approvedBy, setApprovedBy] = useState('Admin');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
@@ -56,7 +56,7 @@ export function SendConfirmationPage() {
     setSending(true);
     setError(null);
     try {
-      const result = await approveAndSendReport(reportId, approvedBy.trim());
+      const result = await approveAndSendReport(reportId);
       if (result.outcome !== 'SENT') {
         setError(result.errorMessage ?? `Could not send (${result.outcome}).`);
         setSending(false);
@@ -198,7 +198,7 @@ export function SendConfirmationPage() {
 
         <div className="mt-5">
           <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Approved by</label>
-          <TextInput type="text" value={approvedBy} onChange={(e) => setApprovedBy(e.target.value)} className="max-w-xs" />
+          <p className="text-sm text-[var(--color-ink)]">{user?.name ?? user?.email ?? '—'}</p>
         </div>
 
         <AlertPanel tone="warning" className="mt-5 flex items-start gap-2.5">
@@ -208,7 +208,7 @@ export function SendConfirmationPage() {
         <InlineError message={error} className="mt-4" />
 
         <div className="mt-6 flex items-center gap-3">
-          <Button disabled={sending || recipients.length === 0 || approvedBy.trim().length === 0} onClick={handleApproveAndSend}>
+          <Button disabled={sending || recipients.length === 0} onClick={handleApproveAndSend}>
             {sending && <Spinner />}
             Approve &amp; Send
           </Button>
