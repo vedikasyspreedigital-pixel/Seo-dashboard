@@ -53,8 +53,16 @@
 # they're part of Playwright's own documented Debian dependency list for
 # Chromium (the same list `install-deps`/`--with-deps` targets), so this
 # doesn't need to be rediscovered one crash at a time.
-[phases.setup]
-nixPkgs = [
+#
+# Using `nixLibs`, NOT `[phases.setup] nixPkgs` -- a first attempt using
+# nixPkgs under [phases.setup] broke the build outright ("npm: command
+# not found", exit 127) because nixPkgs there REPLACES Nixpacks'
+# auto-detected Node.js/npm toolchain for that phase entirely rather than
+# adding to it. nixLibs is Nixpacks' actual documented mechanism for
+# exactly this use case (extra runtime shared libraries a binary the app
+# calls into needs, added to the library path) without touching the
+# auto-detected build toolchain at all.
+nixLibs = [
   "glib",
   "nss",
   "nspr",
