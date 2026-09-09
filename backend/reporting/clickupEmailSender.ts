@@ -93,6 +93,11 @@ export function createClickUpEmailSender({
     }
 
     let browser: Browser | undefined;
+    // Set right after the page is created, purely so the catch block below
+    // can capture debug artifacts -- kept separate from the `const page`
+    // used throughout the automation logic itself so none of those
+    // arrow-function closures lose TypeScript's non-undefined narrowing.
+    let debugPage: Page | undefined;
     const tempAttachmentPaths: string[] = [];
 
     try {
@@ -126,6 +131,7 @@ export function createClickUpEmailSender({
       });
       const context = await browser.newContext({ storageState: sessionStatePath, reducedMotion: "reduce" });
       const page = await context.newPage();
+      debugPage = page;
 
       await page.goto(params.clickupTaskUrl, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1000);
@@ -387,11 +393,45 @@ export function createClickUpEmailSender({
         });
 
       return { messageId: `clickup:${Date.now()}`, auditCommentPosted };
+    } catch (err) {
+      // Debug artifacts, not user-facing behavior: a screenshot + full DOM
+      // dump of whatever the page actually looked like at the moment of
+      // failure, saved next to the session file on the persistent volume
+      // (survives the browser closing in `finally` below, and is fetchable
+      // afterward via `railway ssh ... cat`). Added after several live
+      // failures whose only evidence was a generic Playwright error message
+      // -- e.g. "Could not find Email in the Comment mode menu" gives no
+      // way to tell whether the menu never opened, opened empty, or opened
+      // with different wording, without seeing the actual page.
+      await captureDebugArtifacts(debugPage, sessionStatePath).catch(() => {});
+      throw err;
     } finally {
       await Promise.all(tempAttachmentPaths.map((p) => rm(p, { force: true }).catch(() => {})));
       await browser?.close().catch(() => {});
     }
   };
+}
+
+/**
+ * Saves a screenshot + full HTML dump of `page` next to the session file on
+ * the persistent volume (same directory as sessionStatePath), timestamped so
+ * repeated failures don't overwrite each other. Deliberately swallows its
+ * own errors at every step (a failed debug capture must never mask or
+ * replace the real error this is trying to help diagnose) and no-ops if
+ * `page` was never created (failure happened before context/page setup).
+ */
+async function captureDebugArtifacts(page: Page | undefined, sessionStatePath: string): Promise<void> {
+  if (!page) return;
+  const dir = path.dirname(sessionStatePath);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const screenshotPath = path.join(dir, `debug-failure-${stamp}.png`);
+  const htmlPath = path.join(dir, `debug-failure-${stamp}.html`);
+  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+  await page
+    .content()
+    .then((html) => writeFile(htmlPath, html, "utf8"))
+    .catch(() => {});
+  console.error(`[clickupEmailSender] saved debug artifacts: ${screenshotPath} , ${htmlPath}`);
 }
 
 /**
