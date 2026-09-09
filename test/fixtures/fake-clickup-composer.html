@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!--
+  Minimal fixture standing in for a real ClickUp task view, ALREADY in
+  Email mode (so this test focuses purely on: does a broken/missing
+  post-send "switch to Comment mode" control block a verified send?
+  Whether the Comment->Email mode switch itself is required to REACH email
+  mode is a separate, real ClickUp UI dependency that this fixture
+  deliberately does not exercise).
+
+  Real selectors from backend/reporting/clickupEmailSender.ts this
+  mirrors:
+    - getByText(/^(Status|Assignees|Priority)$/i)      -- task view loaded
+    - getByPlaceholder(/^\s*to\s*$/i)                   -- alreadyInEmailMode
+    - .cu-email-communicators__field-row--to input.cu-search__input
+    - [data-test="email-communicators__subject"]
+    - .ql-editor[contenteditable="true"]                -- exactly ONE
+      inside #composer-root (getComposerRoot's shared-ancestor scope), so
+      the real bodyFilled step's locator stays strict-mode-safe
+    - [data-test="comment-bar__send-btn"]
+    - getByText(subject) in an activity area, after Send             -- verified
+
+  Deliberately absent ANYWHERE: any element matching postAuditComment's
+  "switch to Comment mode" lookup (no role=button named "Email", no
+  [aria-haspopup="menu"].cdk-menu-trigger, no "Email" text inside the
+  composer root) -- simulating the Comment UI being entirely unavailable
+  for the optional post-send audit step. A SECOND, hidden
+  .ql-editor[contenteditable="true"] sits outside #composer-root,
+  deliberately unclickable (display:none) -- postAuditComment's own
+  fallback (page.locator('.ql-editor...').last()) will resolve to THIS
+  one once the real body editor no longer needs finding, and clicking it
+  will time out and throw, exercising the actual failure path (not just
+  the "nothing to do" path).
+-->
+<html>
+  <body>
+    <div>Status</div>
+    <div>Assignees</div>
+    <div>Priority</div>
+
+    <div id="composer-root">
+      <div class="cu-email-communicators__field-row--to">
+        <input class="cu-search__input" placeholder="To" />
+      </div>
+      <input data-test="email-communicators__subject" placeholder="Subject" />
+      <div class="ql-editor" contenteditable="true"></div>
+      <button data-test="comment-bar__send-btn" type="button">Send</button>
+    </div>
+
+    <div id="activity"></div>
+
+    <!-- Deliberately broken/unreachable "Comment box" -- simulates the
+         post-send mode-switch-back never having worked, so the audit
+         comment step's own DOM.last() fallback hits a real dead end. -->
+    <div class="ql-editor" contenteditable="true" style="display: none"></div>
+
+    <script>
+      document.querySelector('[data-test="comment-bar__send-btn"]').addEventListener("click", function () {
+        var subject = document.querySelector('[data-test="email-communicators__subject"]').value;
+        var entry = document.createElement("div");
+        entry.textContent = subject;
+        document.getElementById("activity").appendChild(entry);
+      });
+    </script>
+  </body>
+</html>
