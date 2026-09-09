@@ -177,6 +177,11 @@ export function createClickUpEmailSender({
         if (!commentDropdown) {
           throw new Error('Could not find the "Comment" mode control on the ClickUp task, and not already in Email mode -- page layout may have changed.');
         }
+        // This exact click has crashed the renderer ("Target crashed") on
+        // multiple live runs -- a post-crash screenshot can't show anything
+        // (the renderer's already dead by then), so capture state
+        // immediately before it instead.
+        await captureDebugArtifactsBefore(page, sessionStatePath, "comment-click");
         await commentDropdown.click();
         await page.waitForTimeout(500);
 
@@ -186,6 +191,9 @@ export function createClickUpEmailSender({
           () => page.getByText(/^\s*email\s*$/i).first(),
         ]);
         if (!emailOption) throw new Error('Could not find "Email" in the Comment mode menu -- Email mode may not be enabled for this task/workspace.');
+        // Same reasoning as above -- this is the other click that's crashed
+        // the renderer on a separate live run.
+        await captureDebugArtifactsBefore(page, sessionStatePath, "email-click");
         await emailOption.click();
         await page.waitForTimeout(1000);
       }
@@ -418,7 +426,15 @@ export function createClickUpEmailSender({
  * repeated failures don't overwrite each other. Deliberately swallows its
  * own errors at every step (a failed debug capture must never mask or
  * replace the real error this is trying to help diagnose) and no-ops if
- * `page` was never created (failure happened before context/page setup).
+ * `page` was never created (failure happened before context/page setup) --
+ * but unlike an earlier version of this function, it reports HONESTLY
+ * whether each write actually succeeded rather than always claiming
+ * "saved". That bug mattered here specifically: after a real "Target
+ * crashed" renderer death, page.screenshot()/page.content() themselves
+ * fail (there's no renderer left to read from) -- a post-crash capture
+ * attempt logged "saved" for two files that were never written. For a true
+ * render-crash, see captureDebugArtifactsBefore below instead, which
+ * captures state BEFORE the risky click, while the renderer is still alive.
  */
 async function captureDebugArtifacts(page: Page | undefined, sessionStatePath: string): Promise<void> {
   if (!page) return;
@@ -426,12 +442,41 @@ async function captureDebugArtifacts(page: Page | undefined, sessionStatePath: s
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const screenshotPath = path.join(dir, `debug-failure-${stamp}.png`);
   const htmlPath = path.join(dir, `debug-failure-${stamp}.html`);
-  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-  await page
+  const screenshotOk = await page
+    .screenshot({ path: screenshotPath, fullPage: true })
+    .then(() => true)
+    .catch((e) => {
+      console.error(`[clickupEmailSender] debug screenshot capture failed: ${(e as Error).message}`);
+      return false;
+    });
+  const htmlOk = await page
     .content()
     .then((html) => writeFile(htmlPath, html, "utf8"))
-    .catch(() => {});
-  console.error(`[clickupEmailSender] saved debug artifacts: ${screenshotPath} , ${htmlPath}`);
+    .then(() => true)
+    .catch((e) => {
+      console.error(`[clickupEmailSender] debug HTML capture failed: ${(e as Error).message}`);
+      return false;
+    });
+  console.error(`[clickupEmailSender] debug artifacts: screenshot=${screenshotOk ? screenshotPath : "FAILED"} , html=${htmlOk ? htmlPath : "FAILED"}`);
+}
+
+/**
+ * Captures a screenshot BEFORE a risky action, timestamped with `label` --
+ * used to bracket the specific clicks that have repeatedly crashed the
+ * renderer (ClickUp's animated Comment/Email mode-switcher menu), since a
+ * post-crash capture can never work: by the time an action throws "Target
+ * crashed", the renderer is already dead and there's nothing left to read.
+ * This shows the exact DOM state one step before whatever kills it. Same
+ * swallow-your-own-errors rule as captureDebugArtifacts.
+ */
+async function captureDebugArtifactsBefore(page: Page, sessionStatePath: string, label: string): Promise<void> {
+  const dir = path.dirname(sessionStatePath);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const screenshotPath = path.join(dir, `debug-before-${label}-${stamp}.png`);
+  await page
+    .screenshot({ path: screenshotPath, fullPage: true })
+    .then(() => console.error(`[clickupEmailSender] pre-action debug screenshot saved: ${screenshotPath}`))
+    .catch((e) => console.error(`[clickupEmailSender] pre-action debug screenshot failed: ${(e as Error).message}`));
 }
 
 /**
