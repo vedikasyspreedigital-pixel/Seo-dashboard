@@ -53,6 +53,7 @@
 
 import { chromium, type Browser, type Page, type Locator } from "playwright";
 import { writeFile, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { SendEmailFn, SendEmailParams, SendEmailResult } from "./emailSender.js";
@@ -74,6 +75,52 @@ export interface ClickUpEmailSenderOptions {
   dryRun?: boolean;
   /** Only used when dryRun is true: where to save a screenshot of the filled/attached composer for manual review. */
   dryRunScreenshotPath?: string;
+}
+
+// Playwright's own documented mechanism for surfacing what's actually
+// happening inside the browser process (protocol-level browser lifecycle
+// events, including the underlying reason a target died) instead of only
+// the generic "Target crashed" Playwright itself throws. Set once here
+// (not per-call) and only if the environment hasn't already configured its
+// own DEBUG scope, so this never clobbers an operator's own setting.
+if (!process.env.DEBUG) {
+  process.env.DEBUG = "pw:browser";
+}
+
+/**
+ * Reads container-level (cgroup) memory/CPU limits directly, NOT
+ * `os.totalmem()`/`os.cpus()` -- those read host-level /proc data that is
+ * NOT container-scoped (confirmed live on this exact Railway container:
+ * os.cpus().length and `nproc` report 48 -- the HOST's core count -- while
+ * the cgroup CPU quota is only 2.0 vCPU worth of CFS bandwidth, and
+ * /proc/meminfo reports ~322GiB total versus a 1000MB cgroup memory.max).
+ * Tries cgroup v2 paths first, falls back to v1, and never throws --
+ * diagnostic-only, must never affect the real send.
+ */
+function readContainerResourceLimits(): string {
+  const parts: string[] = [];
+  try {
+    const memUsed = Number(readFileSync("/sys/fs/cgroup/memory.current", "utf8").trim());
+    const memMax = readFileSync("/sys/fs/cgroup/memory.max", "utf8").trim();
+    parts.push(`cgroup memory: ${(memUsed / 1024 / 1024).toFixed(0)}MB used / ${memMax === "max" ? "unlimited" : (Number(memMax) / 1024 / 1024).toFixed(0) + "MB"} limit`);
+  } catch {
+    try {
+      const memUsed = Number(readFileSync("/sys/fs/cgroup/memory/memory.usage_in_bytes", "utf8").trim());
+      const memMax = Number(readFileSync("/sys/fs/cgroup/memory/memory.limit_in_bytes", "utf8").trim());
+      parts.push(`cgroup memory (v1): ${(memUsed / 1024 / 1024).toFixed(0)}MB used / ${(memMax / 1024 / 1024).toFixed(0)}MB limit`);
+    } catch {
+      parts.push("cgroup memory: unavailable");
+    }
+  }
+  try {
+    const cpuMax = readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim();
+    const [quota, period] = cpuMax.split(" ");
+    parts.push(`cgroup CPU quota: ${quota === "max" ? "unlimited" : `${(Number(quota) / Number(period)).toFixed(2)} vCPU`} (visible cores via os.cpus(): ${os.cpus().length})`);
+  } catch {
+    parts.push(`cgroup CPU quota: unavailable (visible cores via os.cpus(): ${os.cpus().length})`);
+  }
+  parts.push(`node process RSS: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)}MB`);
+  return parts.join(" | ");
 }
 
 export function createClickUpEmailSender({
@@ -165,13 +212,14 @@ export function createClickUpEmailSender({
         // libcups2, libxkbcommon0) plus a full font set, with zero apt
         // errors -- a genuinely clean, complete --with-deps install.
         const launchArgs = ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"];
-        console.error(`[clickupEmailSender] attempt ${attempt}/${MAX_ATTEMPTS}: launching chromium (headless=${headless}, args=${JSON.stringify(launchArgs)})`);
+        console.error(`[clickupEmailSender] attempt ${attempt}/${MAX_ATTEMPTS}: launching chromium (headless=${headless}, args=${JSON.stringify(launchArgs)}) | ${readContainerResourceLimits()}`);
         browser = await chromium.launch({ headless, args: launchArgs });
+        console.error(`[clickupEmailSender] attempt ${attempt}: chromium launched, version=${browser.version()} | ${readContainerResourceLimits()}`);
         // Fires if the whole browser process itself disconnects/dies --
         // distinct from (usually more severe than) a single page's 'crash'
         // event below, which is scoped to one renderer target.
         browser.on("disconnected", () => {
-          console.error(`[clickupEmailSender] attempt ${attempt}: browser 'disconnected' event at ${new Date().toISOString()}`);
+          console.error(`[clickupEmailSender] attempt ${attempt}: browser 'disconnected' event at ${new Date().toISOString()} | ${readContainerResourceLimits()}`);
         });
         const context = await browser.newContext({ storageState: sessionStatePath, reducedMotion: "reduce" });
         const page = await context.newPage();
@@ -179,12 +227,13 @@ export function createClickUpEmailSender({
         page.on("crash", () => {
           pageCrashedThisAttempt = true;
           crashedOnAnyAttempt = true;
-          console.error(`[clickupEmailSender] attempt ${attempt}: page 'crash' event at ${new Date().toISOString()} (url=${page.url()})`);
+          console.error(`[clickupEmailSender] attempt ${attempt}: page 'crash' event at ${new Date().toISOString()} (url=${page.url()}) | ${readContainerResourceLimits()}`);
         });
         page.on("close", () => {
           console.error(`[clickupEmailSender] attempt ${attempt}: page 'close' event at ${new Date().toISOString()}`);
         });
 
+        console.error(`[clickupEmailSender] attempt ${attempt}: about to navigate to ${params.clickupTaskUrl} | ${readContainerResourceLimits()}`);
         await page.goto(params.clickupTaskUrl, { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(1000);
         if (/login|auth/i.test(page.url())) {
