@@ -868,3 +868,38 @@ async function postAuditComment(page: Page, composerRoot: Locator, recipients: s
     }
   }
 }
+
+/**
+ * Launches Chromium (same args as the real sender) and immediately closes
+ * it -- proves the environment can run Chromium AT ALL before a real user
+ * ever clicks Approve & Send, rather than only discovering a broken
+ * environment (missing OS libraries, a bad Nixpacks/Docker image, etc.)
+ * partway through a real send attempt. Meant to be called once at server
+ * startup (see server.ts), not per-send -- this is a deploy-time
+ * environment check, not part of the send flow itself.
+ *
+ * Directly born from a real outage: Chromium failed to launch on Railway
+ * with "error while loading shared libraries: libglib-2.0.so.0" --
+ * confirmed via `ldd` that nearly every Chromium runtime dependency was
+ * missing from the deployed container despite a clean build-time apt
+ * install (Nixpacks does not persist apt-installed system packages from
+ * build into the final runtime image; see nixpacks.toml for the actual
+ * fix). This check exists so the NEXT time something like that happens,
+ * it shows up as a clear boot-time log line instead of being discovered
+ * only when a real report fails to send.
+ */
+export async function verifyChromiumLaunch(): Promise<{ ok: boolean; message: string }> {
+  let browser: Browser | undefined;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const version = browser.version();
+    return { ok: true, message: `Chromium launched successfully (version=${version}).` };
+  } catch (err) {
+    return { ok: false, message: `Chromium FAILED to launch: ${(err as Error).message}` };
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+}

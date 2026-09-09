@@ -3,7 +3,7 @@ import { createApp } from './api/app.js';
 import { callDataForSeoLive, LIVE_ENDPOINT_URL } from './dataforseo/client.js';
 import { createMockDataForSeoClient } from './dataforseo/mockClient.js';
 import { createMockEmailSender } from './reporting/mockEmailSender.js';
-import { createClickUpEmailSender } from './reporting/clickupEmailSender.js';
+import { createClickUpEmailSender, verifyChromiumLaunch } from './reporting/clickupEmailSender.js';
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
 
 if (typeof process.loadEnvFile === 'function') {
@@ -58,10 +58,31 @@ if (useClickUp) {
   console.log('Report delivery: MOCK mode (default). Set CLICKUP_EMAIL_LIVE=true to send through ClickUp for real.');
 }
 
-const app = createApp(callDataForSeo, useLive ? 'live' : 'mock', useLive ? LIVE_ENDPOINT_URL : undefined, {
-  sendEmail,
-  generateExcelAttachment: generateExcelPdfAttachment,
-});
-app.listen(PORT, () => {
-  console.log(`API listening on http://localhost:${PORT}`);
-});
+async function start() {
+  // Deploy-time environment check, not part of the send flow -- proves
+  // Chromium can actually launch in THIS environment before any real user
+  // clicks Approve & Send. Born from a real outage where Chromium failed
+  // to launch on Railway (missing OS libraries the build never persisted
+  // into the runtime image -- see nixpacks.toml) and that only surfaced
+  // when a real report failed to send. Logged, never blocks startup --
+  // ClickUp being broken shouldn't take down report generation, uploads,
+  // or anything else the app does.
+  if (useClickUp) {
+    const check = await verifyChromiumLaunch();
+    if (check.ok) {
+      console.log(`Chromium startup check: OK -- ${check.message}`);
+    } else {
+      console.error(`Chromium startup check: FAILED -- ${check.message} -- ClickUp sends will fail until this is fixed.`);
+    }
+  }
+
+  const app = createApp(callDataForSeo, useLive ? 'live' : 'mock', useLive ? LIVE_ENDPOINT_URL : undefined, {
+    sendEmail,
+    generateExcelAttachment: generateExcelPdfAttachment,
+  });
+  app.listen(PORT, () => {
+    console.log(`API listening on http://localhost:${PORT}`);
+  });
+}
+
+start();

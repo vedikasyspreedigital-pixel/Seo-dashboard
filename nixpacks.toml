@@ -1,0 +1,79 @@
+# Fixes a real, confirmed production outage: Chromium (both the regular
+# binary and chrome-headless-shell) failed to launch on Railway with
+# "error while loading shared libraries: libglib-2.0.so.0: cannot open
+# shared object file". Root cause, confirmed directly on the live
+# container (not guessed):
+#
+#   - `find / -name 'libglib-2.0*'` returned NOTHING anywhere on the
+#     runtime filesystem, and `ldconfig -p` showed an empty cache -- the
+#     apt packages `npx playwright install --with-deps chromium` installs
+#     during the BUILD (confirmed successful in the build log -- fonts,
+#     libnss3, libatk-bridge2.0-0, libgbm1, etc. all unpacked with zero
+#     apt errors) do not persist into Nixpacks' final RUNTIME image.
+#   - Confirmed why: `npx playwright install-deps --dry-run chromium` run
+#     directly on the live container fails with "Unable to locate
+#     package <name>" for every single dependency -- not "already
+#     installed", but apt's own package INDEX is missing/different from
+#     the build environment. The runtime image is evidently a different,
+#     more minimal environment than the build environment.
+#   - What DOES persist: the actual Chromium/headless-shell/ffmpeg
+#     binaries themselves (confirmed present under
+#     ~/.cache/ms-playwright on the runtime container) -- so this is
+#     specifically an apt-installed-system-library persistence problem,
+#     not a missing browser binary problem.
+#
+# Fix: declare the required libraries as Nix packages instead of relying
+# on the apt install to persist. nixPkgs IS Nixpacks' own native
+# mechanism for the runtime environment (this is what actually survives
+# into the final image, unlike an apt-get call inside buildCommand) --
+# this is Nixpacks' documented, intended way to add system dependencies,
+# as opposed to smuggling an apt-get RUN command into a custom build
+# command override.
+#
+# Every package below maps directly to a specific "=> not found" line
+# from `ldd` run against the actual chrome-headless-shell binary on the
+# live container -- not a hand-guessed list:
+#   glib          -> libglib-2.0.so.0, libgobject-2.0.so.0, libgio-2.0.so.0
+#   nss           -> libnss3.so, libnssutil3.so
+#   nspr          -> libnspr4.so
+#   at-spi2-atk   -> libatk-1.0.so.0, libatk-bridge-2.0.so.0
+#   at-spi2-core  -> libatspi.so.0
+#   dbus          -> libdbus-1.so.3
+#   mesa          -> libgbm.so.1
+#   expat         -> libexpat.so.1
+#   libxkbcommon  -> libxkbcommon.so.0
+#   alsa-lib      -> libasound.so.2
+#   xorg.libX11, xorg.libXcomposite, xorg.libXdamage, xorg.libXext,
+#   xorg.libXfixes, xorg.libXrandr, xorg.libxcb
+#                 -> libX11/libXcomposite/libXdamage/libXext/libXfixes/
+#                    libXrandr/libxcb .so files
+# cairo/pango/fontconfig/freetype/cups are ALSO Chromium runtime deps
+# (not all hit in that one ldd run, since ldd stops resolving transitive
+# deps of already-missing libraries) -- included preemptively since
+# they're part of Playwright's own documented Debian dependency list for
+# Chromium (the same list `install-deps`/`--with-deps` targets), so this
+# doesn't need to be rediscovered one crash at a time.
+[phases.setup]
+nixPkgs = [
+  "glib",
+  "nss",
+  "nspr",
+  "at-spi2-atk",
+  "at-spi2-core",
+  "dbus",
+  "mesa",
+  "expat",
+  "libxkbcommon",
+  "alsa-lib",
+  "cairo",
+  "pango",
+  "fontconfig",
+  "freetype",
+  "xorg.libX11",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libxcb",
+]
