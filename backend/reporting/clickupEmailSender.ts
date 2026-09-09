@@ -177,12 +177,24 @@ export function createClickUpEmailSender({
         if (!commentDropdown) {
           throw new Error('Could not find the "Comment" mode control on the ClickUp task, and not already in Email mode -- page layout may have changed.');
         }
-        // This exact click has crashed the renderer ("Target crashed") on
-        // multiple live runs -- a post-crash screenshot can't show anything
-        // (the renderer's already dead by then), so capture state
-        // immediately before it instead.
+        // A prior live crash's Playwright call log showed the REAL resolved
+        // element here: <button cu3button="" ... aria-haspopup="menu" ...
+        // class="cdk-menu-trigger" data-cdk-menu-stack-id="...">. That
+        // confirms the locator above already finds the right element --
+        // its accessible name matched "Comment" and Playwright proceeded to
+        // click it. So this was never a wrong-selector problem; swapping in
+        // a different attribute-based selector to find the SAME element
+        // wouldn't change anything. The crash is triggered by the CLICK
+        // itself: aria-haspopup="menu" + cdk-menu-trigger means clicking
+        // this mounts a whole new Angular CDK overlay panel into the DOM.
+        // Playwright's normal .click() simulates a real pointer (hover to
+        // the element, mousedown, mouseup) via CDP -- dispatchEvent fires
+        // the native 'click' event directly, with no pointer simulation, no
+        // hover state change. Angular's (click) binding responds to either
+        // identically, but this skips whatever in the real-pointer path is
+        // crashing the renderer specifically when this overlay mounts.
         await captureDebugArtifactsBefore(page, sessionStatePath, "comment-click");
-        await commentDropdown.click();
+        await commentDropdown.dispatchEvent("click");
         await page.waitForTimeout(500);
 
         const emailOption = await firstMatch(page, [
@@ -192,9 +204,10 @@ export function createClickUpEmailSender({
         ]);
         if (!emailOption) throw new Error('Could not find "Email" in the Comment mode menu -- Email mode may not be enabled for this task/workspace.');
         // Same reasoning as above -- this is the other click that's crashed
-        // the renderer on a separate live run.
+        // the renderer on a separate live run (also a CDK menu item inside
+        // the same overlay).
         await captureDebugArtifactsBefore(page, sessionStatePath, "email-click");
-        await emailOption.click();
+        await emailOption.dispatchEvent("click");
         await page.waitForTimeout(1000);
       }
 
@@ -473,10 +486,19 @@ async function captureDebugArtifactsBefore(page: Page, sessionStatePath: string,
   const dir = path.dirname(sessionStatePath);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const screenshotPath = path.join(dir, `debug-before-${label}-${stamp}.png`);
+  const htmlPath = path.join(dir, `debug-before-${label}-${stamp}.html`);
   await page
     .screenshot({ path: screenshotPath, fullPage: true })
     .then(() => console.error(`[clickupEmailSender] pre-action debug screenshot saved: ${screenshotPath}`))
     .catch((e) => console.error(`[clickupEmailSender] pre-action debug screenshot failed: ${(e as Error).message}`));
+  // A screenshot alone can't show real attributes/structure -- the whole
+  // point of this capture is to stop guessing at selectors, which needs the
+  // actual markup, not just a picture of it.
+  await page
+    .content()
+    .then((html) => writeFile(htmlPath, html, "utf8"))
+    .then(() => console.error(`[clickupEmailSender] pre-action debug HTML saved: ${htmlPath}`))
+    .catch((e) => console.error(`[clickupEmailSender] pre-action debug HTML failed: ${(e as Error).message}`));
 }
 
 /**
