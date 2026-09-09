@@ -5,7 +5,7 @@
     "buildCommand": "npm install && npx playwright install --with-deps chromium && npx prisma generate"
   },
   "deploy": {
-    "startCommand": "npx prisma migrate deploy && taskset -c 0,1 npm run backend",
+    "startCommand": "npx prisma migrate deploy && npm run backend:prod",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",

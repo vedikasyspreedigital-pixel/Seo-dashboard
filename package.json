@@ -10,6 +10,7 @@
   "scripts": {
     "backend": "tsx backend/server.ts",
     "backend:dev": "tsx watch backend/server.ts",
+    "backend:prod": "taskset -c 0,1 tsx backend/server.ts",
     "frontend": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
     "frontend:preview": "npm --prefix frontend run preview",
