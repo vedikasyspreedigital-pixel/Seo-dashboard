@@ -137,15 +137,19 @@ export function createClickUpEmailSender({
 
       // ClickUp is a heavy SPA -- the URL resolving and the task panel
       // actually rendering are two different things, so this polls for
-      // real task-view content rather than trusting a fixed sleep.
+      // real task-view content rather than trusting a fixed sleep. 45s (up
+      // from an original 20s) -- a live run on Railway's container hit this
+      // exact timeout with no crash/error, just ClickUp's heavy Angular SPA
+      // genuinely taking longer than 20s to render on a cold, GPU-less
+      // headless load than it ever did testing locally on a desktop.
       const taskViewLoaded = await page
         .getByText(/^(Status|Assignees|Priority)$/i)
         .first()
-        .waitFor({ state: "visible", timeout: 20000 })
+        .waitFor({ state: "visible", timeout: 45000 })
         .then(() => true)
         .catch(() => false);
       if (!taskViewLoaded) {
-        throw new Error(`Task panel never rendered recognizable content (Status/Assignees/Priority) within 20s at ${page.url()}.`);
+        throw new Error(`Task panel never rendered recognizable content (Status/Assignees/Priority) within 45s at ${page.url()}.`);
       }
 
       // The mode selector is sticky per user/workspace -- it may already be
@@ -360,7 +364,7 @@ export function createClickUpEmailSender({
       const verified = await page
         .getByText(params.subject, { exact: false })
         .first()
-        .waitFor({ state: "visible", timeout: 20000 })
+        .waitFor({ state: "visible", timeout: 45000 })
         .then(() => true)
         .catch(() => false);
       if (!verified) {
