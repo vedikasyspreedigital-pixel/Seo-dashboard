@@ -97,45 +97,34 @@ export function createClickUpEmailSender({
 
     try {
       // --disable-dev-shm-usage: Docker containers (Railway included) default
-      // to a 64MB /dev/shm, far too small for a heavy Angular SPA like
-      // ClickUp -- Chromium's renderer hits it and dies mid-interaction
-      // ("Target crashed") instead of raising a normal error. This makes
-      // Chromium fall back to /tmp for shared memory files. --no-sandbox is
-      // paired with it because the sandbox needs kernel privileges this
-      // container doesn't grant (it isn't Playwright's own preconfigured
-      // Docker image) -- without it, launch can fail outright rather than
-      // just the renderer crashing under load.
+      // to a 64MB /dev/shm -- Chromium can hit that ceiling and crash a
+      // renderer mid-interaction ("Target crashed") instead of raising a
+      // normal error. This makes Chromium fall back to /tmp for shared
+      // memory files. --no-sandbox/--disable-setuid-sandbox are paired with
+      // it because the sandbox needs kernel privileges this container
+      // doesn't grant (it isn't Playwright's own preconfigured Docker
+      // image) -- without them, launch can fail outright.
       //
-      // That alone wasn't enough: a live run still hit "Target crashed",
-      // but on a DIFFERENT click (the Comment dropdown, not the Email menu
-      // item) than the previous attempt -- a crash that moves to a
-      // different, essentially random interaction each run is the
-      // signature of overall memory pressure in a constrained container,
-      // not a bug in a specific selector/step. The flags below are the
-      // standard set for running Chromium headless in a low-memory
-      // container (trims the GPU/compositor process, background timers,
-      // extensions, and other subsystems this send never uses) -- if
-      // crashes persist after this, the container's actual memory limit
-      // needs raising on Railway, which isn't something a launch flag can
-      // work around.
+      // Confirmed NOT a memory-limit problem: Railway's own Metrics tab
+      // showed ~300MB used of a 1000MB limit, and low CPU, during a run
+      // that still hit "Target crashed" -- so a wider set of "low-memory"
+      // flags (--disable-gpu, --no-zygote, etc.) was tried and removed
+      // again here. That guess was actively counterproductive: this
+      // Playwright version resolves to a recent Chromium (1.62.x) using
+      // "new" headless mode, where --disable-gpu forces software rendering
+      // paths that new headless doesn't expect, which can itself destabilize
+      // compositor-heavy UI -- and the crash was reproducibly on ClickUp's
+      // animated CDK dropdown menu (Comment/Email mode switcher) both
+      // before and after adding those flags. reducedMotion below targets
+      // that directly: many Angular CDK components skip their open/close
+      // transition entirely under prefers-reduced-motion, which sidesteps
+      // whatever in that transition is crashing the renderer without
+      // needing to identify the exact Chromium bug.
       browser = await chromium.launch({
         headless,
-        args: [
-          "--disable-dev-shm-usage",
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-gpu",
-          "--no-zygote",
-          "--disable-extensions",
-          "--disable-background-networking",
-          "--disable-background-timer-throttling",
-          "--disable-backgrounding-occluded-windows",
-          "--disable-renderer-backgrounding",
-          "--disable-breakpad",
-          "--mute-audio",
-        ],
+        args: ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"],
       });
-      const context = await browser.newContext({ storageState: sessionStatePath });
+      const context = await browser.newContext({ storageState: sessionStatePath, reducedMotion: "reduce" });
       const page = await context.newPage();
 
       await page.goto(params.clickupTaskUrl, { waitUntil: "domcontentloaded" });
