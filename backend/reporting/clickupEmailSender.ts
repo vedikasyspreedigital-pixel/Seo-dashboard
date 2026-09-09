@@ -105,7 +105,36 @@ export function createClickUpEmailSender({
       // container doesn't grant (it isn't Playwright's own preconfigured
       // Docker image) -- without it, launch can fail outright rather than
       // just the renderer crashing under load.
-      browser = await chromium.launch({ headless, args: ["--disable-dev-shm-usage", "--no-sandbox"] });
+      //
+      // That alone wasn't enough: a live run still hit "Target crashed",
+      // but on a DIFFERENT click (the Comment dropdown, not the Email menu
+      // item) than the previous attempt -- a crash that moves to a
+      // different, essentially random interaction each run is the
+      // signature of overall memory pressure in a constrained container,
+      // not a bug in a specific selector/step. The flags below are the
+      // standard set for running Chromium headless in a low-memory
+      // container (trims the GPU/compositor process, background timers,
+      // extensions, and other subsystems this send never uses) -- if
+      // crashes persist after this, the container's actual memory limit
+      // needs raising on Railway, which isn't something a launch flag can
+      // work around.
+      browser = await chromium.launch({
+        headless,
+        args: [
+          "--disable-dev-shm-usage",
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-gpu",
+          "--no-zygote",
+          "--disable-extensions",
+          "--disable-background-networking",
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--disable-breakpad",
+          "--mute-audio",
+        ],
+      });
       const context = await browser.newContext({ storageState: sessionStatePath });
       const page = await context.newPage();
 
