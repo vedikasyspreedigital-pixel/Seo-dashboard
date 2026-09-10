@@ -458,6 +458,42 @@ export function createClickUpEmailSender({
         if (tempAttachmentPaths.length > 0) {
           const attached = await attachFile(page, tempAttachmentPaths);
           if (!attached) throw new Error("Could not attach the report/Excel files via the composer's own attachment dropdown.");
+
+          // Confirmed live: attachOneFile() resolving (the native file
+          // chooser accepted the file) only means the UPLOAD STARTED, not
+          // that it finished -- a real ~50KB PDF visibly still showed an
+          // in-progress upload bar in a screenshot taken right after the
+          // old flat 500ms wait, matching a real "attached, but the
+          // attachment disappeared from the sent email" report.
+          //
+          // First attempt at a fix waited for data-temp="true" to clear --
+          // WRONG, confirmed by a real timeout: a follow-up debug HTML
+          // capture, taken after the upload had visibly finished (progress
+          // bar gone, data-id/data-url_w_host populated with the real
+          // clickup-attachments.com URL), still showed data-temp="true".
+          // That attribute means "belongs to an unsent draft comment", not
+          // "still uploading" -- it never clears before Send. The actual
+          // real signal ClickUp adds once upload genuinely completes is
+          // the "comment-attachment_success" class (confirmed present
+          // exactly where data-id/data-url_w_host first appeared).
+          // Checked per-file (not just the last one) -- when both an HTML
+          // and a PDF attachment are configured, the first one has a head
+          // start by the time the last one is attached, but that's not a
+          // guarantee, so each is verified independently.
+          for (const attachedPath of tempAttachmentPaths) {
+            const filename = path.basename(attachedPath);
+            const uploadFinished = await page
+              .locator(`[data-test="comment-attachment__blot"].comment-attachment_success[data-file*="${filename}"]`)
+              .first()
+              .waitFor({ state: "visible", timeout: 20000 })
+              .then(() => true)
+              .catch(() => false);
+            if (!uploadFinished) {
+              throw new Error(
+                `Attachment "${filename}" never showed the "comment-attachment_success" class within 20s -- refusing to send with a possibly-incomplete attachment rather than risk it silently dropping.`,
+              );
+            }
+          }
         }
 
         // Extension point for whatever else a given client's ClickUp workflow
@@ -472,6 +508,7 @@ export function createClickUpEmailSender({
           // touches the Send button, never posts the audit comment.
           if (dryRunScreenshotPath) {
             await page.screenshot({ path: dryRunScreenshotPath, fullPage: false }).catch(() => {});
+            await page.content().then((html) => writeFile(dryRunScreenshotPath.replace(/\.png$/, ".html"), html, "utf8")).catch(() => {});
           }
           return { messageId: `clickup-dry-run:${Date.now()}` };
         }
