@@ -176,6 +176,62 @@ test("rate limit (40202) is retryable despite being in the 40000s range", () => 
   assert.equal(mapped.retryable, true);
 });
 
+// Regression tests for the retry-classification bug found via real
+// production data: a run's 9 rows all failed permanently (FAILED, only 1
+// attempt each) on task-level codes 40101/40106, then succeeded when the
+// SAME request was manually resubmitted later -- direct proof these are
+// transient, not permanent, contradicting the old blanket "40000-49999 =
+// permanent" assumption. DataForSEO's own docs confirm both codes (plus
+// 40103, same category, not yet seen in production but documented the
+// same way) are meant to be retried.
+test("Internal SE Server Error (40101) is retryable -- confirmed transient via production data + DataForSEO docs", () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [{ status_code: 40101, status_message: "Internal SE Server Error." }],
+  };
+  const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+  assert.equal(mapped.taskStatusCode, 40101);
+});
+
+test("Task Execution Failed (40103) is retryable per DataForSEO docs", () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [{ status_code: 40103, status_message: "Task Execution Failed." }],
+  };
+  const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+  assert.equal(mapped.taskStatusCode, 40103);
+});
+
+test("Task Completed with Partial Results (40106) is retryable -- confirmed transient via production data + DataForSEO docs", () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [{ status_code: 40106, status_message: "Task completed with partial results." }],
+  };
+  const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+  assert.equal(mapped.taskStatusCode, 40106);
+});
+
+test("No Search Results (40102) is still SUCCESS/Not-in-100, untouched by the retryable-code fix", () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [{ status_code: 40102, status_message: "No Search Results.", result: null }],
+  };
+  const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.retryable, false);
+  assert.equal(mapped.rankValue, null);
+});
+
 test("transport/network failure (no response body) -> API_ERROR, retryable", () => {
   const mapped = mapDataForSeoResponse({
     transportError: new Error("ETIMEDOUT"),

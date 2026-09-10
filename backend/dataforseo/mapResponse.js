@@ -1,16 +1,40 @@
 import { NOT_IN_100 } from '../excel/mapping.js';
 
-// DataForSEO status code ranges (docs.dataforseo.com/v3/appendix/errors):
-// 20000        success
-// 40102        "no results matching the details of your request have been
-//              found" -- a valid empty-result outcome, not a failure
-// 40202        rate limit -- transient, safe to retry
-// 40000-49999  other client/request errors -- permanent, do not retry
+// DataForSEO status codes (docs.dataforseo.com/v3/appendix/errors, and
+// confirmed per-code against dataforseo.com/help-center/what-does-the-*
+// -error-mean for the ones that actually showed up in production data --
+// see the investigation that added 40101/40103/40106 below). The
+// 40000-49999 range is NOT uniformly "permanent, do not retry" -- that was
+// the bug: several codes in that range are DataForSEO's own documented
+// transient/retryable outcomes despite the 4xxxx numbering. Each retryable
+// code here is deliberately enumerated, not inferred from its numeric
+// range, since the range alone doesn't reliably indicate permanence.
+// 20000  success
+// 40101  "Internal SE Server Error" -- the search engine itself errored
+//        processing the request. DataForSEO's own docs: "Transient server
+//        error... Retry: Yes, safe to retry." Confirmed in production: 2
+//        rows that failed with this code both succeeded on a later retry
+//        with the identical request.
+// 40102  "No Search Results" -- a confirmed, valid empty-result outcome,
+//        NOT a failure. Handled separately below (notFoundSuccess) --
+//        deliberately excluded from this retryable check entirely.
+// 40103  "Task Execution Failed" -- DataForSEO's docs: "try posting
+//        another task with similar parameters... Retry: Yes, recommended
+//        to resubmit." Not yet seen in production data, but documented
+//        the same way as 40101/40106 -- included for the same reason.
+// 40106  "Task Completed with Partial Results" -- DataForSEO's docs:
+//        "Transient/degraded success... Retry: Yes, safe to retry for
+//        missing pages." Confirmed in production: 7 of the 9 rows in the
+//        run that prompted this investigation failed with this exact
+//        code, then succeeded on a later retry with the identical
+//        request -- direct evidence this is transient, not permanent.
+// 40202  rate limit -- transient, safe to retry
 // 50000-59999  server-side errors -- transient, safe to retry
 const NO_SEARCH_RESULTS_STATUS_CODE = 40102;
+const RETRYABLE_STATUS_CODES = new Set([40101, 40103, 40106, 40202]);
 
 export function isRetryableDataForSeoStatusCode(code) {
-  if (code === 40202) return true;
+  if (RETRYABLE_STATUS_CODES.has(code)) return true;
   return code >= 50000 && code < 60000;
 }
 
