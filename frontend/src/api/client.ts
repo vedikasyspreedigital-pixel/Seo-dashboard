@@ -263,6 +263,7 @@ export interface UpdateReportDraftInput {
   resolvedRecipients?: string[];
   resolvedCc?: string[];
   resolvedClickupTaskUrl?: string | null;
+  attachmentSource?: 'generated' | 'custom';
 }
 
 export async function updateReportDraft(reportId: string, edits: UpdateReportDraftInput): Promise<RankingReport> {
@@ -271,6 +272,14 @@ export async function updateReportDraft(reportId: string, edits: UpdateReportDra
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(edits),
   });
+  return handle<RankingReport>(res);
+}
+
+/** Uploads a custom PDF to attach instead of the generated report -- switches attachmentSource to "custom" server-side as part of the same request. */
+export async function uploadCustomPdf(reportId: string, file: File): Promise<RankingReport> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await apiFetch(`/reports/${reportId}/custom-pdf`, { method: 'POST', body: formData });
   return handle<RankingReport>(res);
 }
 

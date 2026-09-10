@@ -22,6 +22,8 @@ export interface ReportDraftEdits {
   resolvedRecipients?: string[];
   resolvedCc?: string[];
   resolvedClickupTaskUrl?: string | null;
+  /** "generated" | "custom" -- which PDF approveAndSendReport attaches. Switching back to "generated" never deletes a previously-uploaded custom PDF, it just stops being the one used. */
+  attachmentSource?: string;
 }
 
 export async function updateReportDraft(reportId: string, edits: ReportDraftEdits) {
@@ -32,6 +34,23 @@ export async function updateReportDraft(reportId: string, edits: ReportDraftEdit
   if (edits.resolvedRecipients !== undefined) data.resolvedRecipients = edits.resolvedRecipients as Prisma.InputJsonValue;
   if (edits.resolvedCc !== undefined) data.resolvedCc = edits.resolvedCc as Prisma.InputJsonValue;
   if (edits.resolvedClickupTaskUrl !== undefined) data.resolvedClickupTaskUrl = edits.resolvedClickupTaskUrl;
+  if (edits.attachmentSource !== undefined) data.attachmentSource = edits.attachmentSource;
 
   return guardedUpdate(reportId, [ReportStatus.PENDING_APPROVAL], data, "edit draft (report must be PENDING_APPROVAL)");
+}
+
+/**
+ * Records a newly-uploaded custom PDF and switches attachmentSource to
+ * "custom" in the same guarded update -- uploading implies intent to use
+ * it immediately, matching how every other draft edit here takes effect
+ * right away. Never touches clientPdfPath: the generated PDF stays on
+ * record regardless of which one ends up attached.
+ */
+export async function setCustomPdfAttachment(reportId: string, customPdfPath: string, customPdfFilename: string) {
+  return guardedUpdate(
+    reportId,
+    [ReportStatus.PENDING_APPROVAL],
+    { customPdfPath, customPdfFilename, attachmentSource: "custom" },
+    "upload custom PDF (report must be PENDING_APPROVAL)",
+  );
 }

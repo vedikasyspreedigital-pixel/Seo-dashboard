@@ -4,6 +4,7 @@ import { Button } from '../ui/Button';
 import { Spinner } from '../ui/Spinner';
 import { TextInput, Textarea } from '../ui/TextInput';
 import { isDraftEditable, parseRecipientsInput, resolveSaveButtonLabel } from './reportStatus';
+import { updateReportDraft, uploadCustomPdf } from '../../api/client';
 import type { RankingReport } from '../../api/types';
 import type { UpdateReportDraftInput } from '../../api/client';
 
@@ -16,14 +17,25 @@ interface Props {
   disabled: boolean;
   /** True right after a successful Save Changes call, until the user edits anything else. */
   justSaved: boolean;
+  /** Called after the attachment choice (radio switch or upload) is confirmed persisted server-side -- separate from onSave/handleSave since both take effect immediately rather than going through the shared Save Changes button. */
+  onReportUpdated: (report: RankingReport) => void;
 }
 
-export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }: Props) {
+export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved, onReportUpdated }: Props) {
   const [subject, setSubject] = useState(report.emailSubject ?? '');
   const [body, setBody] = useState(report.emailBody ?? '');
   const [recipientsInput, setRecipientsInput] = useState((report.resolvedRecipients ?? []).join(', '));
   const [ccInput, setCcInput] = useState((report.resolvedCc ?? []).join(', '));
   const [clickupTaskUrl, setClickupTaskUrl] = useState(report.resolvedClickupTaskUrl ?? '');
+  const [uploadingPdf, setUploadingPdf] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  // Purely a UI reveal flag for the file picker -- deliberately separate
+  // from report.attachmentSource, which only changes once a file actually
+  // finishes uploading (or the user switches back to "generated"). Without
+  // this, the file picker had no way to show up BEFORE a file existed:
+  // clicking "Upload custom PDF" needs to reveal "Choose File" immediately,
+  // not wait for a round-trip that hasn't happened yet.
+  const [attachmentMode, setAttachmentMode] = useState<'generated' | 'custom'>(report.attachmentSource === 'custom' ? 'custom' : 'generated');
 
   // Reset local form state whenever the server-side draft actually changes
   // (Regenerate, a prior Save) -- not on every keystroke, since those never
@@ -36,7 +48,8 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
     setRecipientsInput((report.resolvedRecipients ?? []).join(', '));
     setCcInput((report.resolvedCc ?? []).join(', '));
     setClickupTaskUrl(report.resolvedClickupTaskUrl ?? '');
-  }, [report.id, report.emailSubject, report.emailBody, report.resolvedRecipients, report.resolvedCc, report.resolvedClickupTaskUrl]);
+    setAttachmentMode(report.attachmentSource === 'custom' ? 'custom' : 'generated');
+  }, [report.id, report.emailSubject, report.emailBody, report.resolvedRecipients, report.resolvedCc, report.resolvedClickupTaskUrl, report.attachmentSource]);
 
   const editable = isDraftEditable(report.status);
   const { recipients, invalid } = parseRecipientsInput(recipientsInput);
@@ -56,6 +69,32 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
     ccInput !== (report.resolvedCc ?? []).join(', ') ||
     clickupTaskUrl !== (report.resolvedClickupTaskUrl ?? '');
   const saveLabel = resolveSaveButtonLabel({ saving, justSaved, isDirty });
+
+  async function handleSelectGenerated() {
+    setAttachmentMode('generated'); // always reflect the click locally, even if there's nothing to persist yet
+    if (!editable || disabled || report.attachmentSource === 'generated') return;
+    setAttachmentError(null);
+    try {
+      const updated = await updateReportDraft(report.id, { attachmentSource: 'generated' });
+      onReportUpdated(updated);
+    } catch (err) {
+      setAttachmentError((err as Error).message);
+    }
+  }
+
+  async function handleUploadCustomPdf(file: File) {
+    if (!editable || disabled) return;
+    setAttachmentError(null);
+    setUploadingPdf(true);
+    try {
+      const updated = await uploadCustomPdf(report.id, file);
+      onReportUpdated(updated);
+    } catch (err) {
+      setAttachmentError((err as Error).message);
+    } finally {
+      setUploadingPdf(false);
+    }
+  }
 
   return (
     <Card className="p-6">
@@ -119,6 +158,53 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
             placeholder="https://app.clickup.com/t/xxxxxxx"
           />
           <p className="mt-1.5 text-xs text-[var(--color-ink-faint)]">Optional -- if empty, sending falls back to whatever email provider is configured.</p>
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Attachment</label>
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm text-[var(--color-ink)]">
+              <input
+                type="radio"
+                name={`attachment-source-${report.id}`}
+                checked={attachmentMode === 'generated'}
+                disabled={!editable || disabled}
+                onChange={handleSelectGenerated}
+              />
+              Use generated report PDF
+              {report.clientPdfPath && <span className="text-[var(--color-ink-faint)]">(Report-{report.id.slice(0, 8)}.pdf)</span>}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-[var(--color-ink)]">
+              <input
+                type="radio"
+                name={`attachment-source-${report.id}`}
+                checked={attachmentMode === 'custom'}
+                disabled={!editable || disabled}
+                onChange={() => setAttachmentMode('custom')}
+              />
+              Upload custom PDF
+              {report.attachmentSource === 'custom' && report.customPdfFilename && (
+                <span className="text-[var(--color-ink-faint)]">({report.customPdfFilename})</span>
+              )}
+            </label>
+            {editable && attachmentMode === 'custom' && (
+              <div className="ml-6">
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  disabled={disabled || uploadingPdf}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleUploadCustomPdf(file);
+                    e.target.value = '';
+                  }}
+                  className="text-xs text-[var(--color-ink-faint)]"
+                />
+                {uploadingPdf && <span className="ml-2 text-xs text-[var(--color-ink-faint)]">Uploading...</span>}
+              </div>
+            )}
+            {attachmentError && <p className="text-xs font-medium text-rose-300">{attachmentError}</p>}
+          </div>
         </div>
 
         {editable && (

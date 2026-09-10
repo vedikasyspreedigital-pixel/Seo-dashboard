@@ -1,7 +1,11 @@
 import { Router } from "express";
+import multer from "multer";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { prisma } from "../../db/client.js";
 import { rejectReport } from "../../reporting/reportTransitions.js";
-import { updateReportDraft } from "../../reporting/editReportDraft.js";
+import { updateReportDraft, setCustomPdfAttachment } from "../../reporting/editReportDraft.js";
 import { approveAndSendReport } from "../../reporting/approveAndSend.js";
 import { generateEmailDraft, regenerateEmailDraft } from "../../reporting/generateEmailDraft.js";
 import { createReportForRun } from "../../reporting/createReport.js";
@@ -18,6 +22,15 @@ import { findOwnedClientOrRespond, findOwnedRunOrRespond, findOwnedReportOrRespo
 // so a malformed address can't reach the database (and therefore the
 // eventual send) via a direct API call that skips the UI.
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Same env-var/fallback convention as buildReport.ts and runs.ts -- a
+// persistent disk mounted here in production, a repo-relative folder
+// locally. Custom PDFs live alongside the generated ones, distinguished
+// by the "-custom" suffix so neither ever collides with or overwrites
+// the other.
+const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, "../../../reports");
+const uploadCustomPdf = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 export interface ReportsRouterDeps {
   sendEmail: SendEmailFn;
@@ -139,7 +152,18 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   // validating and persisting here IS what the eventual send uses.
   router.patch("/:id", async (req, res) => {
     if (!(await findOwnedReportOrRespond(req, res, req.params.id, { requireActive: true }))) return;
-    const { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedCc, resolvedClickupTaskUrl } = req.body ?? {};
+    const { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedCc, resolvedClickupTaskUrl, attachmentSource } = req.body ?? {};
+    if (attachmentSource !== undefined && attachmentSource !== "generated" && attachmentSource !== "custom") {
+      res.status(400).json({ error: 'attachmentSource must be "generated" or "custom"' });
+      return;
+    }
+    if (attachmentSource === "custom") {
+      const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: req.params.id } });
+      if (!report.customPdfPath) {
+        res.status(409).json({ error: "No custom PDF has been uploaded yet -- upload one before switching attachmentSource to \"custom\"." });
+        return;
+      }
+    }
     if (resolvedRecipients !== undefined) {
       if (!Array.isArray(resolvedRecipients)) {
         res.status(400).json({ error: "resolvedRecipients must be an array of email addresses" });
@@ -169,7 +193,44 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
       return;
     }
     try {
-      const updated = await updateReportDraft(req.params.id, { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedCc, resolvedClickupTaskUrl });
+      const updated = await updateReportDraft(req.params.id, { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedCc, resolvedClickupTaskUrl, attachmentSource });
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof InvalidReportTransitionError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // Upload a custom PDF to attach instead of the generated report. Never
+  // touches clientPdfPath -- the generated PDF is a permanent record,
+  // stored separately from customPdfPath, regardless of which one this
+  // report ends up sending with. Uploading immediately switches
+  // attachmentSource to "custom" (see setCustomPdfAttachment); switching
+  // back to "generated" is a plain PATCH and doesn't require re-uploading
+  // later if the user changes their mind again.
+  router.post("/:id/custom-pdf", uploadCustomPdf.single("file"), async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: "file is required" });
+      return;
+    }
+    // Checked by content, not just filename/mimetype (both are trivially
+    // spoofable from a raw multipart request) -- a real PDF always starts
+    // with this exact 5-byte signature.
+    if (!file.buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+      res.status(400).json({ error: "File does not look like a valid PDF (missing %PDF- signature)." });
+      return;
+    }
+    try {
+      await mkdir(REPORTS_DIR, { recursive: true });
+      const storedPath = path.join(REPORTS_DIR, `${reportId}-custom.pdf`);
+      await writeFile(storedPath, file.buffer);
+      const updated = await setCustomPdfAttachment(reportId, storedPath, file.originalname);
       res.json(updated);
     } catch (err) {
       if (err instanceof InvalidReportTransitionError) {

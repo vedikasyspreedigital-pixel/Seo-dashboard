@@ -194,6 +194,11 @@ export interface RankingReport {
   analysisJson: AnalystOutput | null;
   reportHtml: string | null;
   clientPdfPath: string | null;
+  /** "generated" | "custom" -- which PDF approveAndSendReport actually attaches. Switching this never deletes/replaces clientPdfPath or customPdfPath. */
+  attachmentSource: string;
+  customPdfPath: string | null;
+  /** Original uploaded filename -- shown in the UI and used as the attachment's display name when sending, since customPdfPath itself is a generated on-disk name. */
+  customPdfFilename: string | null;
   emailSubject: string | null;
   emailBody: string | null;
   emailBodyHtml: string | null;

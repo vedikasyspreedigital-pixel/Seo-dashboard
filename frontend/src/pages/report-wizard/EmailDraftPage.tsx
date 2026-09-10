@@ -142,7 +142,17 @@ export function EmailDraftPage() {
       )}
 
       <div className="mt-6">
-        <EmailDraftEditor report={report} onSave={handleSave} saving={savingDraft} disabled={busy} justSaved={justSaved} />
+        <EmailDraftEditor
+          report={report}
+          onSave={handleSave}
+          saving={savingDraft}
+          disabled={busy}
+          justSaved={justSaved}
+          onReportUpdated={(updated) => {
+            setReport(updated);
+            setJustSaved(false); // a different action ran -- any prior "Saved" label is stale
+          }}
+        />
       </div>
 
       {(canRegenerate(report.status) || canApproveOrReject(report.status)) && (

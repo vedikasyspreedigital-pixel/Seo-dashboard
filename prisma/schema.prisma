@@ -299,6 +299,16 @@ model RankingReport {
   analysisJson       Json?   @map("analysis_json") // Claude Report Analyst's schema-validated output
   reportHtml         String? @map("report_html") // deterministic Report Generator output (legacy full-narrative report path)
   clientPdfPath      String? @map("client_pdf_path") // deterministic client-facing PDF (Summary + Keyword Table) written to disk by buildReport -- the SAME file streamed by GET /:id/pdf and attached to the email; generated once, never regenerated
+  // Optional human override of the email attachment -- NEVER replaces or
+  // deletes clientPdfPath, which stays the permanent generated-report
+  // record regardless of which one gets sent. attachmentSource picks which
+  // file approveAndSendReport actually attaches; customPdfPath/Filename are
+  // only ever read when it's "custom". If "custom" is selected but the file
+  // is missing on disk at send time, the send fails loudly rather than
+  // silently falling back to the generated PDF (see approveAndSend.ts).
+  attachmentSource   String  @default("generated") @map("attachment_source") // "generated" | "custom"
+  customPdfPath      String? @map("custom_pdf_path")
+  customPdfFilename  String? @map("custom_pdf_filename") // original uploaded filename -- used as the attachment's display name when sending, since customPdfPath itself is a generated on-disk name
   emailSubject       String? @map("email_subject") // Claude Email Draft Generator's output (subject)
   emailBody          String? @map("email_body") // Claude Email Draft Generator's output (bodyText)
   emailBodyHtml      String? @map("email_body_html") // Claude Email Draft Generator's output (bodyHtml)

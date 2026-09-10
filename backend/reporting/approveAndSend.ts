@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { prisma } from "../db/client.js";
 import { ReportStatus } from "@prisma/client";
 import { approveReport, markSending, markSendFailed, markSent } from "./reportTransitions.js";
@@ -80,9 +82,32 @@ export async function approveAndSendReport(
     // generateExcelAttachment is optional (like sendEmail/callClaudeAnalyst
     // elsewhere) so tests with fixture reports aren't forced to launch a
     // real Playwright browser just to approve a report.
+    //
+    // attachmentSource picks which PDF actually gets attached -- the
+    // generated one (default) or a human-uploaded override (see
+    // editReportDraft.ts's setCustomPdfAttachment). Deliberately never
+    // falls back to the generated PDF when "custom" is selected but its
+    // file is missing: a silent substitution here would mean the client
+    // gets a DIFFERENT report than the one that was actually approved,
+    // with no indication anything went wrong. Throwing surfaces this as an
+    // ordinary SEND_FAILED (report reverts to APPROVED, safe to retry
+    // after re-uploading or switching back to "generated"), same as any
+    // other send failure.
     let excelPdfBuffer: Buffer | undefined;
     let excelPdfFilename: string | undefined;
-    if (generateExcelAttachment) {
+    if (current.attachmentSource === "custom") {
+      if (!current.customPdfPath) {
+        throw new Error(`Report ${reportId} has attachmentSource "custom" but no customPdfPath is set -- upload a custom PDF or switch back to "Use generated report PDF" before sending.`);
+      }
+      try {
+        excelPdfBuffer = await readFile(current.customPdfPath);
+      } catch (err) {
+        throw new Error(
+          `Report ${reportId}'s custom PDF is missing on disk (${current.customPdfPath}) -- refusing to fall back to the generated PDF. Re-upload the custom PDF or switch back to "Use generated report PDF" before sending. (${(err as Error).message})`,
+        );
+      }
+      excelPdfFilename = current.customPdfFilename ?? path.basename(current.customPdfPath);
+    } else if (generateExcelAttachment) {
       const excelAttachment = await generateExcelAttachment(current.id);
       excelPdfBuffer = excelAttachment.buffer;
       excelPdfFilename = excelAttachment.filename;
