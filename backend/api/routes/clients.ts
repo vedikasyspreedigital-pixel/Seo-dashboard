@@ -20,10 +20,22 @@ const DEFAULT_REPORT_CONFIG = {
   templateId: 'standard-v1',
 };
 
-function flattenClient<T extends { id: string; reportConfigs?: { clickupTaskId: string | null; clickupTaskUrl: string | null }[] }>(client: T) {
-  const { reportConfigs, ...rest } = client;
+function flattenClient<
+  T extends {
+    id: string;
+    reportConfigs?: { clickupTaskId: string | null; clickupTaskUrl: string | null }[];
+    baselines?: { baselineDate: Date; createdAt: Date }[];
+  },
+>(client: T) {
+  const { reportConfigs, baselines, ...rest } = client;
   const config = reportConfigs?.[0];
-  return { ...rest, clickupTaskId: config?.clickupTaskId ?? null, clickupTaskUrl: config?.clickupTaskUrl ?? null };
+  const latest = baselines?.[0];
+  return {
+    ...rest,
+    clickupTaskId: config?.clickupTaskId ?? null,
+    clickupTaskUrl: config?.clickupTaskUrl ?? null,
+    latestBaseline: latest ? { baselineDate: latest.baselineDate, uploadedAt: latest.createdAt } : null,
+  };
 }
 
 // Scoped to the workspace the caller explicitly asks for (mirrors the
@@ -63,7 +75,13 @@ clientsRouter.get('/', async (req, res) => {
   const clients = await prisma.client.findMany({
     where: { isTestData: false, workspaceId, ...(includeArchived ? {} : { archivedAt: null }) },
     orderBy: { name: 'asc' },
-    include: { reportConfigs: { where: { isActive: true }, take: 1 } },
+    include: {
+      reportConfigs: { where: { isActive: true }, take: 1 },
+      // Most recent baseline only -- Client Management shows upload status
+      // per client (badge + date), not the full history (that's what
+      // GET /clients/:id/baselines is for).
+      baselines: { orderBy: { createdAt: 'desc' }, take: 1, select: { baselineDate: true, createdAt: true } },
+    },
   });
   res.json(clients.map(flattenClient));
 });

@@ -13,6 +13,9 @@ export interface ClientRecord {
   archivedAt?: string | null;
   clickupTaskId?: string | null;
   clickupTaskUrl?: string | null;
+  // Most recent uploaded previous-rank baseline, if any -- only present via
+  // getClientsForManagement, same as the fields above.
+  latestBaseline?: { baselineDate: string; uploadedAt: string } | null;
 }
 
 export interface CreateClientInput {

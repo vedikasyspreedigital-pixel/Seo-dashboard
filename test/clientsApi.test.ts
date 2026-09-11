@@ -258,6 +258,37 @@ test("PATCH /api/clients/:id/archive then /restore: archiving also deactivates a
   }
 });
 
+test("GET /api/clients?includeInactive=true: latestBaseline is null with no upload, and reflects only the most recent one once uploaded", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  const client = await prisma.client.create({ data: { name: `Baseline Status ${randomUUID()}`, workspaceId: auth.workspace.id } });
+  try {
+    const beforeRes = await request(app).get(`/api/clients?workspaceId=${auth.workspace.id}&includeInactive=true`).set("Cookie", auth.cookieHeader);
+    const beforeClient = beforeRes.body.find((c: { id: string }) => c.id === client.id);
+    assert.equal(beforeClient.latestBaseline, null, "a client with no uploaded baseline must show latestBaseline: null");
+
+    await prisma.rankingBaseline.create({
+      data: { clientId: client.id, sourceFilename: "older.xlsx", sourceType: "EXCEL", baselineDate: new Date("2026-08-01") },
+    });
+    const newest = await prisma.rankingBaseline.create({
+      data: { clientId: client.id, sourceFilename: "newest.xlsx", sourceType: "EXCEL", baselineDate: new Date("2026-09-01") },
+    });
+
+    const afterRes = await request(app).get(`/api/clients?workspaceId=${auth.workspace.id}&includeInactive=true`).set("Cookie", auth.cookieHeader);
+    const afterClient = afterRes.body.find((c: { id: string }) => c.id === client.id);
+    assert.ok(afterClient.latestBaseline, "latestBaseline must be populated once a baseline exists");
+    assert.equal(
+      new Date(afterClient.latestBaseline.uploadedAt).getTime(),
+      newest.createdAt.getTime(),
+      "latestBaseline must reflect the most recently UPLOADED baseline (by createdAt), not the oldest or the baseline data's own date",
+    );
+  } finally {
+    await prisma.rankingBaseline.deleteMany({ where: { clientId: client.id } });
+    await cleanupClient(client.id);
+    await auth.cleanup();
+  }
+});
+
 test.after(async () => {
   await prisma.$disconnect();
 });

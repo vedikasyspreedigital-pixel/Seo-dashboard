@@ -35,6 +35,16 @@ function clientStatusBadge(client: ClientRecord) {
   return <StatusBadge label="Inactive" toneClassName="bg-amber-500/10 text-amber-300" />;
 }
 
+/** Previous-rank baseline upload status -- shows when the most recently
+ * uploaded baseline was added, not the baseline's own date column (that's
+ * the ranking data's date, not the upload date -- the two can differ when
+ * someone uploads an older report). */
+function baselineStatusBadge(client: ClientRecord) {
+  if (!client.latestBaseline) return <StatusBadge label="No baseline" toneClassName="bg-[var(--color-surface-3)] text-[var(--color-ink-faint)]" />;
+  const uploadedLabel = new Date(client.latestBaseline.uploadedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return <StatusBadge label={`Uploaded ${uploadedLabel}`} toneClassName="bg-brand-500/15 text-brand-300" />;
+}
+
 export function ClientsPage() {
   const { activeWorkspace } = useSession();
   const { refetch: refetchDropdown } = useActiveClient();
@@ -198,6 +208,7 @@ export function ClientsPage() {
                 <th className="cell-compact">Name</th>
                 <th className="cell-compact">ClickUp Task ID</th>
                 <th className="cell-compact">Status</th>
+                <th className="cell-compact">Previous Rank</th>
                 <th className="cell-compact">Notes</th>
                 <th className="cell-compact" />
               </tr>
@@ -208,6 +219,7 @@ export function ClientsPage() {
                   <td className="cell-cozy text-[var(--color-ink)]">{client.name}</td>
                   <td className="cell-cozy font-mono text-[var(--color-ink-muted)]">{client.clickupTaskId ?? '—'}</td>
                   <td className="cell-cozy">{clientStatusBadge(client)}</td>
+                  <td className="cell-cozy">{baselineStatusBadge(client)}</td>
                   <td className="cell-cozy max-w-xs truncate text-[var(--color-ink-muted)]" title={client.notes ?? undefined}>
                     {client.notes ?? '—'}
                   </td>
@@ -308,7 +320,7 @@ export function ClientsPage() {
           open={baselineTarget !== null}
           clientId={baselineTarget.id}
           onClose={() => setBaselineTarget(null)}
-          onConfirmed={() => {}}
+          onConfirmed={load}
         />
       )}
     </AppShell>
