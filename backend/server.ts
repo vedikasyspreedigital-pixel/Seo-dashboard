@@ -5,6 +5,7 @@ import { createMockDataForSeoClient } from './dataforseo/mockClient.js';
 import { createMockEmailSender } from './reporting/mockEmailSender.js';
 import { createClickUpEmailSender, verifyChromiumLaunch } from './reporting/clickupEmailSender.js';
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
+import { recoverStaleProcessingRows } from './worker/recoverStaleRuns.js';
 
 if (typeof process.loadEnvFile === 'function') {
   try {
@@ -75,6 +76,13 @@ async function start() {
       console.error(`Chromium startup check: FAILED -- ${check.message} -- ClickUp sends will fail until this is fixed.`);
     }
   }
+
+  // Recovers any run left stuck PROCESSING by the previous process (crash,
+  // OOM kill, manual restart, or a hung request killed along with it) --
+  // awaited here so the DB is already consistent before the server starts
+  // accepting requests; the actual resumed DataForSEO calls run in the
+  // background and don't block startup.
+  await recoverStaleProcessingRows(callDataForSeo);
 
   const app = createApp(callDataForSeo, useLive ? 'live' : 'mock', useLive ? LIVE_ENDPOINT_URL : undefined, {
     sendEmail,

@@ -31,6 +31,29 @@ export async function dequeueRow(rowId) {
   return prisma.rankingRow.findUniqueOrThrow({ where: { id: rowId } });
 }
 
+/**
+ * PROCESSING -> ERROR_RETRY (if a real attempt was already recorded) or
+ * PENDING (if it was dequeued for its very first attempt and never even
+ * got that far) -- for a row found orphaned at server startup (see
+ * backend/worker/recoverStaleRuns.ts): the process that dequeued it is
+ * gone, so it can never itself transition this row again. Deliberately
+ * does NOT increment retry_count or touch last_error_message -- unlike
+ * failRowAttempt, this isn't a failed attempt, it's an interrupted one; we
+ * genuinely don't know whether it would have succeeded, so it isn't
+ * charged against the retry budget.
+ */
+export async function recoverOrphanedRow(rowId) {
+  const row = await prisma.rankingRow.findUnique({ where: { id: rowId } });
+  if (!row || row.status !== 'PROCESSING') return row; // already handled by someone else, or gone
+  const targetStatus = row.retryCount > 0 ? 'ERROR_RETRY' : 'PENDING';
+  const { count } = await prisma.rankingRow.updateMany({
+    where: { id: rowId, status: 'PROCESSING' },
+    data: { status: targetStatus },
+  });
+  if (count === 0) return prisma.rankingRow.findUniqueOrThrow({ where: { id: rowId } }); // raced with something else -- fine, just report current state
+  return prisma.rankingRow.findUniqueOrThrow({ where: { id: rowId } });
+}
+
 /** PROCESSING -> COMPLETED. Rejected if the row isn't currently PROCESSING. */
 export async function completeRow(rowId, { rankValue = null, rankDisplay = null, rankingUrl = null, attemptId = null }) {
   const { count } = await prisma.rankingRow.updateMany({
