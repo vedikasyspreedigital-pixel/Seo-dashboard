@@ -123,6 +123,18 @@ export function UploadDropIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Arrow points UP (into a tray) -- for an "upload this" action button,
+ * as opposed to UploadDropIcon's downward arrow (for a drag-and-drop
+ * illustration, where content drops down INTO the zone). */
+export function UploadIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M10 12.5V3M6.2 6.8L10 3l3.8 3.8" />
+      <path d="M4 14.5v1a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5v-1" />
+    </svg>
+  );
+}
+
 export function LayoutIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base(props)}>

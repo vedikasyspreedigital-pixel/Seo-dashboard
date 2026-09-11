@@ -10,7 +10,7 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { InlineError } from '../components/ui/InlineError';
-import { PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon, UploadDropIcon } from '../components/ui/icons';
+import { PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon, UploadIcon } from '../components/ui/icons';
 import { BaselineUploadModal } from '../components/baselines/BaselineUploadModal';
 import { useSession } from '../context/SessionContext';
 import { useActiveClient } from '../context/ClientContext';
@@ -240,7 +240,7 @@ export function ClientsPage() {
                             onClick={() => setBaselineTarget(client)}
                             className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
                           >
-                            <UploadDropIcon className="h-4 w-4" />
+                            <UploadIcon className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
