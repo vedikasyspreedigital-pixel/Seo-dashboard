@@ -116,20 +116,34 @@ test("totals: a run with zero ranked rows has averageRank null, not NaN or 0", a
   }
 });
 
-test("without a previousRunId, movements are all empty but totals are still computed", async () => {
+test("without a previousRunId (a brand-new client's first run): every row is newlyTracked, not silently dropped", async () => {
+  // Regression test: computeRunAnalytics used to skip computeMovements
+  // entirely when there was no previousRunId, leaving ALL movement arrays
+  // empty -- which meant generateClientReportPdf's buildRowsAndSummary
+  // (which only ever reads from analytics.movements, never raw rows) had
+  // nothing to render, producing an empty report for exactly the case
+  // that matters most: a client's very first-ever run.
   const client = await makeClient(`Analytics Test - no baseline ${randomUUID()}`);
   try {
     const { run } = await makeRun(client.id);
-    await makeRows(client.id, run.id, [{ keyword: "solo-kw", rankValue: 5, rankDisplay: "5" }]);
+    await makeRows(client.id, run.id, [
+      { keyword: "solo-kw", rankValue: 5, rankDisplay: "5" },
+      { keyword: "not-in-100-kw", rankValue: null, rankDisplay: "Not in 100" },
+    ]);
 
     const analytics = await computeRunAnalytics(run.id);
 
     assert.equal(analytics.previousRunId, null);
-    assert.equal(analytics.totals.totalKeywords, 1);
+    assert.equal(analytics.previousTotals, null, "no previous run means no previous totals to summarize");
+    assert.equal(analytics.totals.totalKeywords, 2);
     assert.deepEqual(analytics.movements.improved, []);
     assert.deepEqual(analytics.movements.declined, []);
     assert.deepEqual(analytics.movements.unchanged, []);
-    assert.deepEqual(analytics.movements.newlyTracked, []);
+    assert.equal(analytics.movements.newlyTracked.length, 2, "every current-run row must appear as newlyTracked when there's no previous side at all");
+    assert.deepEqual(
+      analytics.movements.newlyTracked.map((m) => [m.keyword, m.currentRank]).sort(),
+      [["not-in-100-kw", null], ["solo-kw", 5]],
+    );
   } finally {
     await cleanupClient(client.id);
   }

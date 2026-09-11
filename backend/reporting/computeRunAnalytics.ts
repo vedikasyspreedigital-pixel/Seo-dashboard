@@ -133,22 +133,26 @@ export async function computeRunAnalytics(runId: string, previousRunId?: string)
 
   const totals = computeTotals(currentRows);
 
-  let movements = {
-    improved: [] as KeywordMovement[],
-    declined: [] as KeywordMovement[],
-    unchanged: [] as KeywordMovement[],
-    newlyTracked: [] as NewlyTrackedKeyword[],
-  };
+  // No previous run (a brand-new client's very first run) is NOT "nothing to
+  // report" -- every current keyword must still show up, classified as
+  // newlyTracked, exactly like compareRunToBaseline.ts already does when
+  // there's no baseline either. computeMovements handles an empty
+  // previousRows correctly on its own (every current row falls through to
+  // newlyTracked); previousTotals staying null is the only thing that's
+  // genuinely specific to "no previous side" -- there's no previous data to
+  // summarize.
+  let previousRows: RankRow[] = [];
   let previousTotals: AnalyticsTotals | null = null;
 
   if (previousRunId) {
-    const previousRows: RankRow[] = await prisma.rankingRow.findMany({
+    previousRows = await prisma.rankingRow.findMany({
       where: { runId: previousRunId },
       select: { keyword: true, rowUid: true, rankValue: true, rankDisplay: true },
     });
-    movements = computeMovements(currentRows, previousRows);
     previousTotals = computeTotals(previousRows);
   }
+
+  const movements = computeMovements(currentRows, previousRows);
 
   return { runId, previousRunId: previousRunId ?? null, totals, previousTotals, movements };
 }
