@@ -105,10 +105,12 @@ test('not found within depth 100: empty items array maps to "Not in 100"', () =>
   assert.equal(mapped.rankingUrl, null);
 });
 
-test('task status 40102 "No Search Results" (items: null) -> SUCCESS, "Not in 100", not an error', () => {
+test('task status 40102 "No Search Results" with a full-depth crawl (items: null, pages_count: 10) -> SUCCESS, "Not in 100", not an error', () => {
   // Observed on a real DataForSEO response for a local/suburb-level keyword:
   // task-level status_code 40102 with result[0].items: null, instead of the
-  // usual status_code 20000 + items: []. Both mean the same thing.
+  // usual status_code 20000 + items: []. Both mean the same thing -- as long
+  // as pages_count shows the crawl actually reached the requested depth (see
+  // the "insufficient depth coverage" tests below for when it doesn't).
   const body = {
     status_code: 20000,
     status_message: "Ok.",
@@ -117,18 +119,84 @@ test('task status 40102 "No Search Results" (items: null) -> SUCCESS, "Not in 10
         status_code: 40102,
         status_message: "No Search Results.",
         result: [
-          { keyword: "cash for cars rockingham", type: "organic", items: null },
+          { keyword: "cash for cars rockingham", type: "organic", items: null, pages_count: 10 },
         ],
       },
     ],
   };
-  const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body,
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
+  });
   assert.equal(mapped.outcome, "SUCCESS");
   assert.equal(mapped.retryable, false);
   assert.equal(mapped.rankValue, null);
   assert.equal(mapped.rankDisplay, "Not in 100");
   assert.equal(mapped.rankingUrl, null);
   assert.equal(mapped.matchedItemCount, 0);
+});
+
+// Regression tests for the false "Not in 100" bug found via real production
+// data: the exact same keyword/target, run a day apart, came back 40102 with
+// a shallow crawl (pages_count far short of the ~10 pages depth=100 implies)
+// on one day, then found a real rank on a full-depth crawl the next.
+test('task status 40102 with a shallow crawl (pages_count: 1 of ~10) -> retryable API_ERROR, NOT "Not in 100"', () => {
+  // Modeled directly on the real response for "car steerio abu dhabi" /
+  // emiratessound.com (2026-09-10): pages_count 1, written as "Not in 100"
+  // by the old mapper, then found at rank 12 on a full-depth retry.
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [
+      {
+        status_code: 40102,
+        status_message: "No Search Results.",
+        result: [{ keyword: "car steerio abu dhabi", type: "organic", items: null, pages_count: 1 }],
+      },
+    ],
+  };
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body,
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW), // depth: 100, same as the real row
+  });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+  assert.equal(mapped.rankValue, null);
+  assert.notEqual(mapped.rankDisplay, "Not in 100");
+});
+
+test('task status 40102 with no pages_count at all -> retryable API_ERROR (no completeness evidence to trust "Not in 100")', () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [{ status_code: 40102, status_message: "No Search Results.", result: null }],
+  };
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body,
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
+  });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+});
+
+test('task status 40102 with pages_count one short of full depth (9 of ~10) -> still SUCCESS, "Not in 100" (allowed shortfall)', () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [
+      { status_code: 40102, status_message: "No Search Results.", result: [{ items: null, pages_count: 9 }] },
+    ],
+  };
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body,
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
+  });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.rankDisplay, "Not in 100");
 });
 
 test("task-level non-retryable error (malformed post data, 40501) -> API_ERROR, not retryable", () => {
@@ -208,7 +276,7 @@ test("Task Execution Failed (40103) is retryable per DataForSEO docs", () => {
   assert.equal(mapped.taskStatusCode, 40103);
 });
 
-test("Task Completed with Partial Results (40106) is retryable -- confirmed transient via production data + DataForSEO docs", () => {
+test("Task Completed with Partial Results (40106) with no items is still retryable -- confirmed transient via production data + DataForSEO docs", () => {
   const body = {
     status_code: 20000,
     status_message: "Ok.",
@@ -220,13 +288,77 @@ test("Task Completed with Partial Results (40106) is retryable -- confirmed tran
   assert.equal(mapped.taskStatusCode, 40106);
 });
 
-test("No Search Results (40102) is still SUCCESS/Not-in-100, untouched by the retryable-code fix", () => {
+// Regression test for the discarded-valid-match bug found via real
+// production data: row "autopsy headrest australia" / pangalark.com.au got
+// task status 40106 twice in a row, BOTH times with a confident rank_group=1
+// match already present in items -- but the old mapper threw the match away
+// unconditionally because it branched on status_code before ever looking at
+// items, and the row ended up permanently FAILED once retries ran out.
+test("Task Completed with Partial Results (40106) WITH a matching item -> accepted as SUCCESS with the matched rank_group/url", () => {
   const body = {
     status_code: 20000,
     status_message: "Ok.",
-    tasks: [{ status_code: 40102, status_message: "No Search Results.", result: null }],
+    tasks: [
+      {
+        status_code: 40106,
+        status_message:
+          "Task completed with partial results. Some pages could not be retrieved after several retry attempts.",
+        result: [
+          {
+            items: [
+              organicItem({
+                rank_group: 1,
+                rank_absolute: 2,
+                url: "https://www.pangalark.com.au/product/headrest-rubber-ba025/",
+              }),
+            ],
+          },
+        ],
+      },
+    ],
   };
   const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.retryable, false);
+  assert.equal(mapped.rankValue, 1);
+  assert.equal(mapped.rankDisplay, "1");
+  assert.equal(mapped.rankingUrl, "https://www.pangalark.com.au/product/headrest-rubber-ba025/");
+});
+
+test("Task Completed with Partial Results (40106) with an unusable item (missing rank_group) still falls back to retryable API_ERROR", () => {
+  const badItem = organicItem();
+  delete badItem.rank_group;
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [
+      {
+        status_code: 40106,
+        status_message: "Task completed with partial results.",
+        result: [{ items: [badItem] }],
+      },
+    ],
+  };
+  const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+});
+
+test("No Search Results (40102) with a full-depth crawl is still SUCCESS/Not-in-100, untouched by the retryable-code fix", () => {
+  // 40102 was deliberately kept OUT of RETRYABLE_STATUS_CODES by the original
+  // retryable-code fix -- this still holds today, as long as the crawl
+  // reached the requested depth (see the depth-coverage tests above for the
+  // separate, later fix covering the shallow-crawl case).
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [{ status_code: 40102, status_message: "No Search Results.", result: [{ items: null, pages_count: 10 }] }],
+  };
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body,
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
+  });
   assert.equal(mapped.outcome, "SUCCESS");
   assert.equal(mapped.retryable, false);
   assert.equal(mapped.rankValue, null);

@@ -36,6 +36,7 @@ for (const row of rows) {
   const remapped = mapDataForSeoResponse({
     httpStatus: attempt.httpStatus,
     body: attempt.rawResponse,
+    requestPayload: attempt.requestPayload,
   });
 
   console.log(

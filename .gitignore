@@ -7,3 +7,8 @@ reports
 frontend/dist
 frontend/node_modules
 tsconfig.tsbuildinfo
+
+# Tesseract OCR model, downloaded/generated locally for baseline PDF
+# parsing (backend/baselines/ocrExtractTable.ts) -- a 5MB+ runtime asset,
+# not source, never meant to live in git history.
+eng.traineddata

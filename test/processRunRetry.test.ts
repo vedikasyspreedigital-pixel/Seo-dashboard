@@ -154,7 +154,7 @@ test("a permanent (non-retryable) error still fails immediately after just 1 att
   }
 });
 
-test("40102 (No Search Results) still completes immediately as Not-in-100, no retry triggered", async () => {
+test("40102 (No Search Results) with a full-depth crawl still completes immediately as Not-in-100, no retry triggered", async () => {
   const client = await makeClient();
   try {
     const run = await makeRun(client.id);
@@ -163,7 +163,20 @@ test("40102 (No Search Results) still completes immediately as Not-in-100, no re
     let callCount = 0;
     const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => {
       callCount++;
-      return { httpStatus: 200, body: okBody(40102, "No Search Results.") };
+      return {
+        httpStatus: 200,
+        body: {
+          status_code: 20000,
+          status_message: "Ok.",
+          tasks: [
+            {
+              status_code: 40102,
+              status_message: "No Search Results.",
+              result: [{ items: null, pages_count: 10 }],
+            },
+          ],
+        },
+      };
     };
 
     await processRun(run.id, callDataForSeo);
@@ -173,6 +186,119 @@ test("40102 (No Search Results) still completes immediately as Not-in-100, no re
     assert.equal(finalRow.status, "COMPLETED");
     assert.equal(finalRow.rankValue, null);
     assert.equal(finalRow.rankDisplay, "Not in 100");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+// Regression test for the false "Not in 100" bug, reproduced end-to-end
+// through processRun's real retry loop. Modeled on the real "car steerio abu
+// dhabi" / emiratessound.com row: a shallow first crawl (pages_count 1) came
+// back 40102 and was wrongly written as "Not in 100"; a full-depth crawl the
+// next day found rank 12. With the fix, the shallow crawl must be retried
+// in place instead of being trusted.
+test("40102 with a shallow crawl (pages_count short of depth) is retried, then succeeds once a full-depth crawl finds the target", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    const row = await makeRow(run.id, { maxRetries: 3 });
+
+    let callCount = 0;
+    const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          httpStatus: 200,
+          body: {
+            status_code: 20000,
+            status_message: "Ok.",
+            tasks: [
+              { status_code: 40102, status_message: "No Search Results.", result: [{ items: null, pages_count: 1 }] },
+            ],
+          },
+        };
+      }
+      return {
+        httpStatus: 200,
+        body: {
+          status_code: 20000,
+          status_message: "Ok.",
+          tasks: [
+            {
+              status_code: 20000,
+              status_message: "Ok.",
+              result: [{ items: [{ type: "organic", rank_group: 12, rank_absolute: 17, url: "https://emiratessound.com/" }] }],
+            },
+          ],
+        },
+      };
+    };
+
+    await processRun(run.id, callDataForSeo);
+
+    assert.equal(callCount, 2, "shallow 40102 crawl must be retried, not trusted as Not-in-100");
+    const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(finalRow.status, "COMPLETED");
+    assert.equal(finalRow.rankValue, 12);
+    assert.equal(finalRow.rankDisplay, "12");
+
+    const attempts = await prisma.rankingRowAttempt.findMany({ where: { rankingRowId: row.id }, orderBy: { attemptNumber: "asc" } });
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].outcome, "API_ERROR", "shallow crawl must be recorded as retryable, not a SUCCESS Not-in-100");
+    assert.equal(attempts[1].outcome, "SUCCESS");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+// Regression test for the discarded-valid-match bug, reproduced end-to-end.
+// Modeled on the real "autopsy headrest australia" / pangalark.com.au row:
+// task status 40106 came back with a confident rank_group=1 match in items,
+// but the old mapper discarded it and retried until FAILED. With the fix,
+// the match is accepted on the very first attempt -- no retry needed.
+test("40106 with a matching item is accepted immediately -- no retry needed, rank written on the first attempt", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    const row = await makeRow(run.id, { maxRetries: 3 });
+
+    let callCount = 0;
+    const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => {
+      callCount++;
+      return {
+        httpStatus: 200,
+        body: {
+          status_code: 20000,
+          status_message: "Ok.",
+          tasks: [
+            {
+              status_code: 40106,
+              status_message: "Task completed with partial results.",
+              result: [
+                {
+                  items: [
+                    {
+                      type: "organic",
+                      rank_group: 1,
+                      rank_absolute: 2,
+                      url: "https://www.pangalark.com.au/product/headrest-rubber-ba025/",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      };
+    };
+
+    await processRun(run.id, callDataForSeo);
+
+    assert.equal(callCount, 1, "a confident match in a partial-results response must be accepted, not retried");
+    const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(finalRow.status, "COMPLETED");
+    assert.equal(finalRow.rankValue, 1);
+    assert.equal(finalRow.rankingUrl, "https://www.pangalark.com.au/product/headrest-rubber-ba025/");
   } finally {
     await cleanup(client.id);
   }

@@ -16,7 +16,7 @@ import { mapDataForSeoResponse } from './mapResponse.js';
  * @param {{ requestPayload: object, transportError?: Error, httpStatus?: number, responseBody?: any }} input
  */
 export async function recordAttemptAndApply(rowId, { requestPayload, transportError, httpStatus, responseBody }) {
-  const mapped = mapDataForSeoResponse({ transportError, httpStatus, body: responseBody });
+  const mapped = mapDataForSeoResponse({ transportError, httpStatus, body: responseBody, requestPayload });
 
   const attemptNumber = (await prisma.rankingRowAttempt.count({ where: { rankingRowId: rowId } })) + 1;
 
