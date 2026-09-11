@@ -42,7 +42,15 @@ export interface RunAnalytics {
   };
 }
 
-interface RankRow {
+// Exported so compareRunToBaseline.ts (backend/baselines/) can reuse the
+// exact same rank-delta classification against a differently-sourced
+// "previous" side (a RankingBaseline's rows, keyed by normalized keyword
+// instead of rowUid) without reimplementing the improved/declined/
+// unchanged/newlyTracked rules. `rowUid` here is just "the join key used
+// for this comparison" -- for a real run-to-run comparison that's the
+// actual RankingRow.rowUid; for a baseline comparison the caller populates
+// it with the normalized keyword instead.
+export interface RankRow {
   keyword: string;
   rowUid: string;
   rankValue: number | null;
@@ -53,7 +61,7 @@ function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-function computeTotals(rows: RankRow[]): AnalyticsTotals {
+export function computeTotals(rows: RankRow[]): AnalyticsTotals {
   const ranked = rows.filter((r) => r.rankValue !== null);
   const notIn100 = rows.filter((r) => r.rankDisplay === NOT_IN_100);
 
@@ -71,7 +79,7 @@ function computeTotals(rows: RankRow[]): AnalyticsTotals {
   };
 }
 
-function computeMovements(currentRows: RankRow[], previousRows: RankRow[]) {
+export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]) {
   const previousByUid = new Map(previousRows.map((r) => [r.rowUid, r]));
 
   const improved: KeywordMovement[] = [];

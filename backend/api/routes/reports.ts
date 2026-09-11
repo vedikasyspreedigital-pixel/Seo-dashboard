@@ -49,12 +49,21 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   router.post("/", async (req, res) => {
     const runId = req.body?.runId;
     const previousRunId = req.body?.previousRunId;
+    const previousBaselineId = req.body?.previousBaselineId;
     if (typeof runId !== "string" || runId.length === 0) {
       res.status(400).json({ error: "runId is required" });
       return;
     }
     if (previousRunId !== undefined && typeof previousRunId !== "string") {
       res.status(400).json({ error: "previousRunId must be a string when provided" });
+      return;
+    }
+    if (previousBaselineId !== undefined && typeof previousBaselineId !== "string") {
+      res.status(400).json({ error: "previousBaselineId must be a string when provided" });
+      return;
+    }
+    if (previousRunId !== undefined && previousBaselineId !== undefined) {
+      res.status(400).json({ error: "previousRunId and previousBaselineId are mutually exclusive" });
       return;
     }
     if (!(await findOwnedRunOrRespond(req, res, runId, { requireActive: true }))) return;
@@ -65,8 +74,19 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     // active (checked above), diffing against an older run is fine even if
     // that older run happens to predate the client being archived later.
     if (previousRunId !== undefined && !(await findOwnedRunOrRespond(req, res, previousRunId))) return;
+    // previousBaselineId: workspace-level ownership only here (no
+    // findOwned*OrRespond helper exists for baselines) -- createReportForRun
+    // itself additionally scopes the lookup by clientId, the same
+    // defense-in-depth already relied on for previousRunId above.
+    if (previousBaselineId !== undefined) {
+      const baseline = await prisma.rankingBaseline.findUnique({ where: { id: previousBaselineId }, include: { client: true } });
+      if (!baseline || !baseline.client.workspaceId || !req.authUser!.workspaceIds.includes(baseline.client.workspaceId)) {
+        res.status(404).json({ error: "Baseline not found" });
+        return;
+      }
+    }
 
-    const result = await createReportForRun(runId, previousRunId);
+    const result = await createReportForRun(runId, previousRunId, previousBaselineId);
     switch (result.outcome) {
       case "RUN_NOT_FOUND":
         res.status(404).json({ error: "Run not found" });

@@ -191,6 +191,7 @@ model Client {
   runs          RankingRun[]
   reportConfigs ClientReportConfig[]
   reports       RankingReport[]
+  baselines     RankingBaseline[]
 
   @@index([workspaceId, isActive])
   @@map("clients")
@@ -250,6 +251,58 @@ model RankingRun {
   reportsAsPreviousRun RankingReport[] @relation("ReportPreviousRun")
 
   @@map("ranking_runs")
+}
+
+// A client's historical ranking baseline, imported from an agency's existing
+// Excel/PDF report (not from this app's own DataForSEO pipeline) -- kept
+// deliberately separate from RankingRun/RankingRow rather than reusing them,
+// because the real source data (confirmed against an actual sample PDF) is
+// only {keyword, rank} per dated column: it has no targetUrl/locationName/
+// seDomain/languageName, which RankingRow requires as non-null. A client can
+// have multiple uploaded baselines over time (nothing is ever overwritten);
+// the most recently created one is what comparisons use unless a specific
+// one is chosen. Never touches ranking_runs/ranking_rows in any way.
+enum BaselineSourceType {
+  EXCEL
+  PDF
+}
+
+model RankingBaseline {
+  id             String             @id @default(uuid())
+  clientId       String             @map("client_id")
+  client         Client             @relation(fields: [clientId], references: [id])
+  sourceFilename String             @map("source_filename")
+  sourceType     BaselineSourceType @map("source_type")
+  // The single date column (out of however many were detected in the
+  // source file) used as the comparison baseline -- always the newest one
+  // found, chosen deterministically server-side, never user-picked.
+  baselineDate DateTime @map("baseline_date")
+  createdBy    String?  @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  rows                RankingBaselineRow[]
+  reportsAsPreviousBaseline RankingReport[] @relation("ReportPreviousBaseline")
+
+  @@index([clientId, createdAt])
+  @@map("ranking_baselines")
+}
+
+model RankingBaselineRow {
+  id                String          @id @default(uuid())
+  baselineId        String          @map("baseline_id")
+  baseline          RankingBaseline @relation(fields: [baselineId], references: [id])
+  keyword           String
+  // Lowercased, trimmed, whitespace-collapsed -- the join key used to match
+  // this baseline against a later real run's rows, per the explicit
+  // "match by normalized keyword" requirement (the baseline has no
+  // targetUrl/locationName/seDomain/languageName to match on, unlike
+  // RankingRow's rowUid-based cross-run matching).
+  normalizedKeyword String  @map("normalized_keyword")
+  rankValue         Int?    @map("rank_value")
+  rankDisplay       String? @map("rank_display")
+
+  @@index([baselineId, normalizedKeyword])
+  @@map("ranking_baseline_rows")
 }
 
 model RankingRow {
@@ -326,6 +379,12 @@ model RankingReport {
   run            RankingRun   @relation("ReportRun", fields: [runId], references: [id])
   previousRunId  String?      @map("previous_run_id")
   previousRun    RankingRun?  @relation("ReportPreviousRun", fields: [previousRunId], references: [id])
+  // Mutually exclusive with previousRunId at the application level -- a
+  // report compares against either a prior real run or an imported
+  // baseline, never both. Populated by createReportForRun's fallback when a
+  // client has no prior completed run yet but does have an uploaded baseline.
+  previousBaselineId String?          @map("previous_baseline_id")
+  previousBaseline   RankingBaseline? @relation("ReportPreviousBaseline", fields: [previousBaselineId], references: [id])
   clientId       String       @map("client_id")
   client         Client       @relation(fields: [clientId], references: [id])
 

@@ -237,3 +237,29 @@ export interface NotificationsResponse {
   notifications: NotificationRecord[];
   unreadCount: number;
 }
+
+export type BaselineSourceType = 'EXCEL' | 'PDF';
+
+export interface BaselinePreviewRow {
+  keyword: string;
+  rankValue: number | null;
+  rankDisplay: string | null;
+}
+
+export interface BaselinePreview {
+  detectedDates: { label: string; isoDate: string }[];
+  baselineDate: string;
+  baselineDateLabel: string;
+  rows: BaselinePreviewRow[];
+  sourceFilename: string;
+  sourceType: BaselineSourceType;
+}
+
+export interface BaselineRecord {
+  id: string;
+  sourceFilename: string;
+  sourceType: BaselineSourceType;
+  baselineDate: string;
+  createdAt: string;
+  rowCount: number;
+}

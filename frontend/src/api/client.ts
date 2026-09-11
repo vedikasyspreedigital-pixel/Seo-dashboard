@@ -1,4 +1,6 @@
 import type {
+  BaselinePreview,
+  BaselineRecord,
   ClientRecord,
   CreateClientInput,
   CreateRunResult,
@@ -321,4 +323,34 @@ export async function markNotificationsRead(workspaceId: string): Promise<void> 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workspaceId }),
   });
+}
+
+// -- Previous-ranking baselines ---------------------------------------------
+
+/** Parses the file and returns the extraction preview -- writes nothing to the DB. */
+export async function previewBaseline(clientId: string, file: File): Promise<BaselinePreview> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await apiFetch(`/clients/${clientId}/baselines/preview`, { method: 'POST', body: formData });
+  return handle<BaselinePreview>(res);
+}
+
+/** Persists exactly the (possibly user-reviewed) preview data -- never re-parses the file. */
+export async function confirmBaseline(clientId: string, preview: BaselinePreview): Promise<BaselineRecord> {
+  const res = await apiFetch(`/clients/${clientId}/baselines`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sourceFilename: preview.sourceFilename,
+      sourceType: preview.sourceType,
+      baselineDate: preview.baselineDate,
+      rows: preview.rows,
+    }),
+  });
+  return handle<BaselineRecord>(res);
+}
+
+export async function getBaselines(clientId: string): Promise<BaselineRecord[]> {
+  const res = await apiFetch(`/clients/${clientId}/baselines`);
+  return handle<BaselineRecord[]>(res);
 }

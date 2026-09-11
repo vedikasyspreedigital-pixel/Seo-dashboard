@@ -37,7 +37,7 @@ const BUILDABLE_STATUSES: ReportStatus[] = [ReportStatus.PENDING_ANALYSIS, Repor
 export async function buildReport(reportId: string): Promise<BuildReportResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
-    include: { client: true, run: true, previousRun: true },
+    include: { client: true, run: true, previousRun: true, previousBaseline: true },
   });
 
   if (!BUILDABLE_STATUSES.includes(report.status)) {
@@ -51,7 +51,14 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
   const pdfBuffer = await generateClientReportPdf({
     clientName: report.client.name,
     currentRunDate: report.run.completedAt ?? report.run.createdAt,
-    previousRunDate: report.previousRun ? (report.previousRun.completedAt ?? report.previousRun.createdAt) : null,
+    // A report's "previous" side is either a prior real run OR an imported
+    // baseline, never both (see createReportForRun) -- whichever is set
+    // supplies the comparison date shown in the PDF header.
+    previousRunDate: report.previousRun
+      ? (report.previousRun.completedAt ?? report.previousRun.createdAt)
+      : report.previousBaseline
+        ? report.previousBaseline.baselineDate
+        : null,
     analytics,
   });
 

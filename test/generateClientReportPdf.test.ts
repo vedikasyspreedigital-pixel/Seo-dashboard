@@ -119,6 +119,40 @@ test("buildRowsAndSummary: the 6 non-overlapping summary counts always sum to To
   assert.equal(summary.enteredTop100, 2);
 });
 
+test("buildRowsAndSummary: ranked keywords come first in ascending rank order, then a 'Not in 100' tail -- never interleaved", () => {
+  const a = analytics({
+    improved: [
+      { keyword: "improved-high-rank", rowUid: "1", previousRank: 50, currentRank: 42, delta: 8 },
+      { keyword: "improved-low-rank", rowUid: "2", previousRank: 20, currentRank: 3, delta: 17 },
+    ],
+    declined: [
+      { keyword: "declined-mid-rank", rowUid: "3", previousRank: 5, currentRank: 15, delta: -10 },
+      { keyword: "fell-out-of-100", rowUid: "4", previousRank: 8, currentRank: null, delta: null },
+    ],
+    unchanged: [{ keyword: "steady-rank", rowUid: "5", previousRank: 3, currentRank: 3, delta: 0 }],
+    newlyTracked: [{ keyword: "still-not-ranked", rowUid: "6", currentRank: null }],
+  });
+  a.totals.totalKeywords = 6;
+
+  const { rows } = buildRowsAndSummary(a);
+
+  // Ranked rows (currentRank !== null) must all appear before any "Not in
+  // 100" row (currentRank === null), and must be ascending by rank.
+  const firstNotIn100Index = rows.findIndex((r) => r.currentRank === null);
+  assert.notEqual(firstNotIn100Index, -1);
+  const rankedSlice = rows.slice(0, firstNotIn100Index);
+  const notIn100Slice = rows.slice(firstNotIn100Index);
+
+  assert.ok(rankedSlice.every((r) => r.currentRank !== null), "no Not-in-100 row appears before the tail starts");
+  assert.ok(notIn100Slice.every((r) => r.currentRank === null), "no ranked row appears after the tail starts");
+  assert.deepEqual(
+    rankedSlice.map((r) => r.currentRank),
+    [3, 3, 15, 42],
+    "ranked rows are ascending by currentRank",
+  );
+  assert.equal(notIn100Slice.length, 2);
+});
+
 test("buildRowsAndSummary: previous/current average rank and the overall change come from previousTotals/totals directly", () => {
   const a = analytics({}, 20.5);
   a.totals.averageRank = 14.3;

@@ -27,6 +27,7 @@ interface TableRow {
   currentRankLabel: string;
   movementLabel: string;
   kind: MovementKind;
+  currentRank: number | null;
 }
 
 const MOVEMENT_COLOR: Record<MovementKind, string> = {
@@ -77,37 +78,46 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
   for (const m of analytics.movements.improved) {
     if (m.previousRank === null) {
       enteredTop100Count++;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new" });
+      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
     } else {
       improvedCount++;
       const delta = m.delta ?? 0;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↑ +${delta}`, kind: "improved" });
+      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↑ +${delta}`, kind: "improved", currentRank: m.currentRank });
     }
   }
 
   for (const m of analytics.movements.declined) {
     if (m.currentRank === null) {
       droppedOutOfTop100Count++;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↓ Lost", kind: "lost" });
+      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↓ Lost", kind: "lost", currentRank: m.currentRank });
     } else {
       droppedCount++;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↓ ${m.delta ?? 0}`, kind: "dropped" });
+      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↓ ${m.delta ?? 0}`, kind: "dropped", currentRank: m.currentRank });
     }
   }
 
   for (const m of analytics.movements.unchanged) {
-    rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "→ 0", kind: "unchanged" });
+    rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "→ 0", kind: "unchanged", currentRank: m.currentRank });
   }
 
   for (const m of analytics.movements.newlyTracked) {
     enteredTop100Count++;
-    rows.push({ keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new" });
+    rows.push({ keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
   }
 
-  rows.sort((a, b) => a.keyword.localeCompare(b.keyword));
+  // Ranked keywords first (rank ascending, 1..100), then a clearly separated
+  // "Not in Top 100" tail (alphabetical) -- never interleaved. Previously
+  // this was a single alphabetical sort across everything, which mixed
+  // "Not in 100" rows in among ranked ones in whatever order their keyword
+  // happened to fall. Kept as one flat, already-grouped array (rather than
+  // two separate arrays) so `rows.find(...)`-style lookups elsewhere don't
+  // need to know about the split -- buildHtml locates the boundary itself
+  // (first row with currentRank === null) to render the section heading.
+  const ranked = rows.filter((r) => r.currentRank !== null).sort((a, b) => (a.currentRank as number) - (b.currentRank as number));
+  const notInTop100 = rows.filter((r) => r.currentRank === null).sort((a, b) => a.keyword.localeCompare(b.keyword));
 
   return {
-    rows,
+    rows: [...ranked, ...notInTop100],
     summary: {
       totalKeywords: analytics.totals.totalKeywords,
       improved: improvedCount,
@@ -156,15 +166,25 @@ function buildHtml(input: ClientReportPdfInput): string {
       .join("") +
     `<div class="stat stat-wide"><p class="stat-label">Overall Ranking Change</p><p class="stat-value stat-value-text" style="color:${changeColor}">${escapeHtml(summary.overallRankingChange)}</p></div>`;
 
+  // rows is already grouped ranked-first (see buildRowsAndSummary) -- find
+  // where the "Not in Top 100" tail starts so a section-break row can be
+  // injected right before it, rather than letting those rows blend into the
+  // ranked list with no visual distinction.
+  const notInTop100StartIndex = rows.findIndex((r) => r.currentRank === null);
+
   const tableRows = rows
-    .map(
-      (r) => `<tr>
+    .map((r, i) => {
+      const sectionBreak =
+        i === notInTop100StartIndex
+          ? `<tr class="section-break"><td colspan="4">Not in Top 100</td></tr>`
+          : "";
+      return `${sectionBreak}<tr>
         <td>${escapeHtml(r.keyword)}</td>
         <td class="num">${escapeHtml(r.previousRankLabel)}</td>
         <td class="num">${escapeHtml(r.currentRankLabel)}</td>
         <td class="num" style="color:${MOVEMENT_COLOR[r.kind]}; font-weight:600;">${escapeHtml(r.movementLabel)}</td>
-      </tr>`,
-    )
+      </tr>`;
+    })
     .join("");
 
   return `<!doctype html>
@@ -192,6 +212,7 @@ function buildHtml(input: ClientReportPdfInput): string {
   td { padding: 6px 10px; border-bottom: 1px solid #eceef1; }
   td.num, th.num { text-align: right; }
   tr:nth-child(even) td { background: #fafafa; }
+  tr.section-break td { background: #eef0f3; color: #374151; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 8px 10px; border-bottom: 1px solid #d1d5db; border-top: 2px solid #d1d5db; }
 </style>
 </head>
 <body>

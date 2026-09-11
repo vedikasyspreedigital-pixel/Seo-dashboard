@@ -10,7 +10,8 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { InlineError } from '../components/ui/InlineError';
-import { PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon } from '../components/ui/icons';
+import { PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon, UploadDropIcon } from '../components/ui/icons';
+import { BaselineUploadModal } from '../components/baselines/BaselineUploadModal';
 import { useSession } from '../context/SessionContext';
 import { useActiveClient } from '../context/ClientContext';
 import { activateClient, archiveClient, createClient, deactivateClient, getClientsForManagement, restoreClient, updateClient } from '../api/client';
@@ -50,6 +51,7 @@ export function ClientsPage() {
   const [archiveTarget, setArchiveTarget] = useState<ClientRecord | null>(null);
   const [archiving, setArchiving] = useState(false);
   const [rowActionError, setRowActionError] = useState<string | null>(null);
+  const [baselineTarget, setBaselineTarget] = useState<ClientRecord | null>(null);
 
   function load() {
     if (!activeWorkspace) return;
@@ -222,6 +224,14 @@ export function ClientsPage() {
                           </button>
                           <button
                             type="button"
+                            title="Upload Previous Ranking"
+                            onClick={() => setBaselineTarget(client)}
+                            className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
+                          >
+                            <UploadDropIcon className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
                             title={client.isActive ? 'Deactivate' : 'Activate'}
                             onClick={() => handleToggleActive(client)}
                             className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
@@ -292,6 +302,15 @@ export function ClientsPage() {
           This archives <span className="font-semibold text-[var(--color-ink)]">{archiveTarget?.name}</span> -- it disappears from this list and from run/report dropdowns, but every existing run and report stays intact and can be restored later from the Archived filter.
         </p>
       </Modal>
+
+      {baselineTarget && (
+        <BaselineUploadModal
+          open={baselineTarget !== null}
+          clientId={baselineTarget.id}
+          onClose={() => setBaselineTarget(null)}
+          onConfirmed={() => {}}
+        />
+      )}
     </AppShell>
   );
 }
