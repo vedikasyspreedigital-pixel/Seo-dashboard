@@ -49,5 +49,5 @@ export async function compareRunToBaseline(runId: string, baselineId: string): P
   const previousTotals = computeTotals(previousRows);
   const movements = computeMovements(currentRows, previousRows);
 
-  return { runId, previousRunId: null, totals, previousTotals, movements };
+  return { runId, previousRunId: null, totals, previousTotals, hasComparison: true, movements };
 }

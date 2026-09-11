@@ -135,6 +135,7 @@ test("without a previousRunId (a brand-new client's first run): every row is new
 
     assert.equal(analytics.previousRunId, null);
     assert.equal(analytics.previousTotals, null, "no previous run means no previous totals to summarize");
+    assert.equal(analytics.hasComparison, false, "no previous run at all means this report has nothing to compare against");
     assert.equal(analytics.totals.totalKeywords, 2);
     assert.deepEqual(analytics.movements.improved, []);
     assert.deepEqual(analytics.movements.declined, []);
@@ -180,6 +181,7 @@ test("movements: improved / declined / unchanged / newlyTracked, including Not-i
     const analytics = await computeRunAnalytics(currentRun.id, previousRun.id);
 
     assert.equal(analytics.previousRunId, previousRun.id);
+    assert.equal(analytics.hasComparison, true);
 
     const byKeyword = <T extends { keyword: string }>(list: T[], kw: string) => list.find((x) => x.keyword === kw);
 

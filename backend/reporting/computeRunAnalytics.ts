@@ -34,6 +34,17 @@ export interface RunAnalytics {
   totals: AnalyticsTotals;
   /** The previous run's own totals (same shape as `totals`), computed from the same rows already fetched for movements -- null when there's no previous run to compare against. */
   previousTotals: AnalyticsTotals | null;
+  /**
+   * True when this run was actually compared against something (a prior run
+   * or an imported baseline) -- false for a brand-new client's first-ever
+   * run, which has real current-ranking data but nothing to compare it
+   * against. Distinct from previousRunId/previousTotals being null: a
+   * report renderer needs this to decide whether "newlyTracked" rows mean
+   * "genuinely new since the last comparison" (real movement) or "there was
+   * no comparison at all" (movement language would be misleading -- see
+   * generateClientReportPdf.ts).
+   */
+  hasComparison: boolean;
   movements: {
     improved: KeywordMovement[];
     declined: KeywordMovement[];
@@ -154,5 +165,5 @@ export async function computeRunAnalytics(runId: string, previousRunId?: string)
 
   const movements = computeMovements(currentRows, previousRows);
 
-  return { runId, previousRunId: previousRunId ?? null, totals, previousTotals, movements };
+  return { runId, previousRunId: previousRunId ?? null, totals, previousTotals, hasComparison: previousRunId != null, movements };
 }

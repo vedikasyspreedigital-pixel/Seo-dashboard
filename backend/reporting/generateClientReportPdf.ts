@@ -69,6 +69,8 @@ function round1(value: number): number {
  * sums them separately for the summary.
  */
 export function buildRowsAndSummary(analytics: RunAnalytics) {
+  if (!analytics.hasComparison) return buildCurrentOnlyRowsAndSummary(analytics);
+
   const rows: TableRow[] = [];
   let improvedCount = 0;
   let enteredTop100Count = 0;
@@ -119,6 +121,7 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
   return {
     rows: [...ranked, ...notInTop100],
     summary: {
+      hasComparison: true as const,
       totalKeywords: analytics.totals.totalKeywords,
       improved: improvedCount,
       dropped: droppedCount,
@@ -128,6 +131,51 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
       previousAverageRank: analytics.previousTotals?.averageRank ?? null,
       currentAverageRank: analytics.totals.averageRank,
       overallRankingChange: describeOverallRankingChange(analytics.previousTotals?.averageRank ?? null, analytics.totals.averageRank),
+      top3Count: analytics.totals.top3Count,
+      top10Count: analytics.totals.top10Count,
+      notIn100Count: analytics.totals.notIn100Count,
+    },
+  };
+}
+
+/**
+ * A brand-new client's first-ever run: real current-ranking data, but
+ * nothing to compare it against (no prior run, no imported baseline). Every
+ * keyword still shows its current rank -- this is what buildRowsAndSummary
+ * silently produced as an EMPTY report before, and what movements-based
+ * comparison language would misrepresent as "everything just entered the
+ * top 100" if reused as-is (there was no previous state to have entered
+ * from). Renders a plain current-standing table/summary instead.
+ */
+function buildCurrentOnlyRowsAndSummary(analytics: RunAnalytics) {
+  const rows: TableRow[] = analytics.movements.newlyTracked.map((m) => ({
+    keyword: m.keyword,
+    previousRankLabel: "—",
+    currentRankLabel: RANK_DISPLAY(m.currentRank),
+    movementLabel: "—",
+    kind: "unchanged",
+    currentRank: m.currentRank,
+  }));
+
+  const ranked = rows.filter((r) => r.currentRank !== null).sort((a, b) => (a.currentRank as number) - (b.currentRank as number));
+  const notInTop100 = rows.filter((r) => r.currentRank === null).sort((a, b) => a.keyword.localeCompare(b.keyword));
+
+  return {
+    rows: [...ranked, ...notInTop100],
+    summary: {
+      hasComparison: false as const,
+      totalKeywords: analytics.totals.totalKeywords,
+      improved: 0,
+      dropped: 0,
+      unchanged: 0,
+      enteredTop100: 0,
+      droppedOutOfTop100: 0,
+      previousAverageRank: null,
+      currentAverageRank: analytics.totals.averageRank,
+      overallRankingChange: "No change",
+      top3Count: analytics.totals.top3Count,
+      top10Count: analytics.totals.top10Count,
+      notIn100Count: analytics.totals.notIn100Count,
     },
   };
 }
@@ -149,22 +197,36 @@ function buildHtml(input: ClientReportPdfInput): string {
       ? MOVEMENT_COLOR.dropped
       : MOVEMENT_COLOR.unchanged;
 
-  const summaryCards =
-    [
-      { label: "Total Keywords Tracked", value: String(summary.totalKeywords), color: "#111827" },
-      { label: "Keywords Improved ↑", value: String(summary.improved), color: MOVEMENT_COLOR.improved },
-      { label: "Keywords Dropped ↓", value: String(summary.dropped), color: MOVEMENT_COLOR.dropped },
-      { label: "Keywords Unchanged", value: String(summary.unchanged), color: MOVEMENT_COLOR.unchanged },
-      { label: "Entered Top 100", value: String(summary.enteredTop100), color: MOVEMENT_COLOR.improved },
-      { label: "Dropped Out of Top 100", value: String(summary.droppedOutOfTop100), color: MOVEMENT_COLOR.dropped },
-      { label: "Previous Average Rank", value: summary.previousAverageRank === null ? "—" : String(summary.previousAverageRank), color: "#111827" },
-      { label: "Current Average Rank", value: summary.currentAverageRank === null ? "—" : String(summary.currentAverageRank), color: "#111827" },
-    ]
-      .map(
-        (c) => `<div class="stat"><p class="stat-label">${escapeHtml(c.label)}</p><p class="stat-value" style="color:${c.color}">${escapeHtml(c.value)}</p></div>`,
-      )
-      .join("") +
-    `<div class="stat stat-wide"><p class="stat-label">Overall Ranking Change</p><p class="stat-value stat-value-text" style="color:${changeColor}">${escapeHtml(summary.overallRankingChange)}</p></div>`;
+  // No previous run/baseline to compare against -- movement-language cards
+  // ("Entered Top 100", "Overall Ranking Change", ...) would misrepresent a
+  // first-ever run as if it had a before-state. Show current standing only.
+  const summaryCards = summary.hasComparison
+    ? [
+        { label: "Total Keywords Tracked", value: String(summary.totalKeywords), color: "#111827" },
+        { label: "Keywords Improved ↑", value: String(summary.improved), color: MOVEMENT_COLOR.improved },
+        { label: "Keywords Dropped ↓", value: String(summary.dropped), color: MOVEMENT_COLOR.dropped },
+        { label: "Keywords Unchanged", value: String(summary.unchanged), color: MOVEMENT_COLOR.unchanged },
+        { label: "Entered Top 100", value: String(summary.enteredTop100), color: MOVEMENT_COLOR.improved },
+        { label: "Dropped Out of Top 100", value: String(summary.droppedOutOfTop100), color: MOVEMENT_COLOR.dropped },
+        { label: "Previous Average Rank", value: summary.previousAverageRank === null ? "—" : String(summary.previousAverageRank), color: "#111827" },
+        { label: "Current Average Rank", value: summary.currentAverageRank === null ? "—" : String(summary.currentAverageRank), color: "#111827" },
+      ]
+        .map(
+          (c) => `<div class="stat"><p class="stat-label">${escapeHtml(c.label)}</p><p class="stat-value" style="color:${c.color}">${escapeHtml(c.value)}</p></div>`,
+        )
+        .join("") +
+      `<div class="stat stat-wide"><p class="stat-label">Overall Ranking Change</p><p class="stat-value stat-value-text" style="color:${changeColor}">${escapeHtml(summary.overallRankingChange)}</p></div>`
+    : [
+        { label: "Total Keywords Tracked", value: String(summary.totalKeywords), color: "#111827" },
+        { label: "Current Average Rank", value: summary.currentAverageRank === null ? "—" : String(summary.currentAverageRank), color: "#111827" },
+        { label: "Top 3 Rankings", value: String(summary.top3Count), color: MOVEMENT_COLOR.improved },
+        { label: "Top 10 Rankings", value: String(summary.top10Count), color: MOVEMENT_COLOR.improved },
+        { label: "Not in Top 100", value: String(summary.notIn100Count), color: MOVEMENT_COLOR.dropped },
+      ]
+        .map(
+          (c) => `<div class="stat"><p class="stat-label">${escapeHtml(c.label)}</p><p class="stat-value" style="color:${c.color}">${escapeHtml(c.value)}</p></div>`,
+        )
+        .join("");
 
   // rows is already grouped ranked-first (see buildRowsAndSummary) -- find
   // where the "Not in Top 100" tail starts so a section-break row can be

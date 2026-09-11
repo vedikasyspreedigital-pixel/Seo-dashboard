@@ -12,7 +12,28 @@ function analytics(overrides: Partial<RunAnalytics["movements"]>, previousAverag
     previousRunId: "run-0",
     totals: { totalKeywords: 0, averageRank: null, top3Count: 0, top10Count: 0, notIn100Count: 0 },
     previousTotals: previousAverageRank === null ? null : { totalKeywords: 0, averageRank: previousAverageRank, top3Count: 0, top10Count: 0, notIn100Count: 0 },
+    hasComparison: true,
     movements: { improved: [], declined: [], unchanged: [], newlyTracked: [], ...overrides },
+  };
+}
+
+/** A brand-new client's first-ever run -- real current data, no comparison side at all. */
+function noComparisonAnalytics(newlyTracked: RunAnalytics["movements"]["newlyTracked"]): RunAnalytics {
+  const totalKeywords = newlyTracked.length;
+  const ranked = newlyTracked.filter((m) => m.currentRank !== null).map((m) => m.currentRank as number);
+  return {
+    runId: "run-1",
+    previousRunId: null,
+    totals: {
+      totalKeywords,
+      averageRank: ranked.length > 0 ? Math.round((ranked.reduce((a, b) => a + b, 0) / ranked.length) * 10) / 10 : null,
+      top3Count: ranked.filter((r) => r <= 3).length,
+      top10Count: ranked.filter((r) => r <= 10).length,
+      notIn100Count: newlyTracked.filter((m) => m.currentRank === null).length,
+    },
+    previousTotals: null,
+    hasComparison: false,
+    movements: { improved: [], declined: [], unchanged: [], newlyTracked },
   };
 }
 
@@ -183,4 +204,35 @@ test("describeOverallRankingChange: human-readable, never raw signed arithmetic 
 test("describeOverallRankingChange: singular 'position' for exactly 1", () => {
   assert.equal(describeOverallRankingChange(15, 14), "↑ Improved by 1 position");
   assert.equal(describeOverallRankingChange(14, 15), "↓ Declined by 1 position");
+});
+
+// Regression tests for the "new client, no previous ranking" requirement:
+// the report must show a normal, populated current-ranking table -- NOT an
+// empty one (the original bug), and NOT one dressed up in comparison
+// language like "Entered Top 100" / "↑ New" (a subtler version of the same
+// bug: implying a before-state that never existed).
+test("buildRowsAndSummary: hasComparison=false renders every current keyword with its real rank, no comparison labels", () => {
+  const a = noComparisonAnalytics([
+    { keyword: "first-ever-kw", rowUid: "first-ever-kw", currentRank: 4 },
+    { keyword: "another-kw", rowUid: "another-kw", currentRank: 22 },
+    { keyword: "not-ranked-kw", rowUid: "not-ranked-kw", currentRank: null },
+  ]);
+
+  const { rows, summary } = buildRowsAndSummary(a);
+
+  assert.equal(rows.length, 3, "a first-ever run's report must show every keyword, not an empty table");
+  const first = rows.find((r) => r.keyword === "first-ever-kw")!;
+  assert.equal(first.currentRankLabel, "4");
+  assert.equal(first.previousRankLabel, "—", "no previous rank should be asserted -- there was no previous run to have one");
+  assert.equal(first.movementLabel, "—", "no movement/comparison label should be asserted -- nothing was compared");
+
+  assert.equal(summary.hasComparison, false);
+  assert.equal(summary.totalKeywords, 3);
+  assert.equal(summary.improved, 0);
+  assert.equal(summary.dropped, 0);
+  assert.equal(summary.enteredTop100, 0, "must not claim keywords 'entered' the top 100 -- there's no before-state they entered from");
+  assert.equal(summary.previousAverageRank, null);
+  assert.equal(summary.top3Count, 0);
+  assert.equal(summary.top10Count, 1);
+  assert.equal(summary.notIn100Count, 1);
 });

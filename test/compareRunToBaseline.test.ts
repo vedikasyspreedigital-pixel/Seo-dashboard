@@ -94,6 +94,7 @@ test("compareRunToBaseline: handles ranked->ranked, Not-in-100->ranked, ranked->
     const analytics = await compareRunToBaseline(run.id, baseline.id);
 
     assert.equal(analytics.previousRunId, null);
+    assert.equal(analytics.hasComparison, true, "a baseline comparison always has something to compare against");
     assert.equal(analytics.totals.totalKeywords, 4);
     assert.equal(analytics.previousTotals?.totalKeywords, 4);
 
