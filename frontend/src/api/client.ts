@@ -2,6 +2,7 @@ import type {
   ClientRecord,
   CreateClientInput,
   CreateRunResult,
+  NotificationsResponse,
   OverviewData,
   RankingReport,
   RankingReportListItem,
@@ -305,4 +306,19 @@ export async function approveAndSendReport(reportId: string): Promise<ApproveAnd
 export async function rejectReport(reportId: string): Promise<RankingReport> {
   const res = await apiFetch(`/reports/${reportId}/reject`, { method: 'POST' });
   return handle<RankingReport>(res);
+}
+
+// -- Notifications ----------------------------------------------------------
+
+export async function getNotifications(workspaceId: string): Promise<NotificationsResponse> {
+  const res = await apiFetch(`/notifications?workspaceId=${encodeURIComponent(workspaceId)}`);
+  return handle<NotificationsResponse>(res);
+}
+
+export async function markNotificationsRead(workspaceId: string): Promise<void> {
+  await apiFetch('/notifications/mark-read', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId }),
+  });
 }

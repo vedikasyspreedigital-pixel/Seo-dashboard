@@ -4,6 +4,7 @@ import { prisma } from "../db/client.js";
 import { ReportStatus } from "@prisma/client";
 import { approveReport, markSending, markSendFailed, markSent } from "./reportTransitions.js";
 import { InvalidReportTransitionError } from "./errors.js";
+import { notifyReportSent, notifyReportSendFailed } from "../notifications/createNotification.js";
 import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
 
@@ -126,6 +127,7 @@ export async function approveAndSendReport(
       excelPdfFilename,
     });
     await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
+    await notifyReportSent(current);
     return { outcome: "SENT", messageId: sendResult.messageId };
   } catch (err) {
     // Logged server-side (with stack -- the message alone doesn't say WHICH
@@ -140,6 +142,7 @@ export async function approveAndSendReport(
     // If the revert itself somehow fails, the ORIGINAL send error is still
     // what the caller needs to see and act on, not the revert failure.
     await markSendFailed(reportId, { errorMessage: (err as Error).message }).catch(() => {});
+    await notifyReportSendFailed(current, (err as Error).message).catch(() => {});
     return { outcome: "SEND_FAILED", errorMessage: (err as Error).message };
   }
 }

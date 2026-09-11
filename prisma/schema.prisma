@@ -68,10 +68,46 @@ model Workspace {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  clients     Client[]
-  memberships WorkspaceMembership[]
+  clients       Client[]
+  memberships   WorkspaceMembership[]
+  notifications Notification[]
 
   @@map("workspaces")
+}
+
+// One event = one row, shared read-state across everyone in the workspace
+// (not per-user) -- matches how every other resource in this app is scoped
+// (by workspace/client, not individual ownership), and this is a small
+// multi-user agency tool, not a per-user inbox product. clientId/runId/
+// reportId are plain denormalized references (same pattern as
+// RankingReport.previousRunId below), just enough to deep-link from a
+// notification to its source -- no FK constraint, since a notification
+// about a run/report should outlive that row being pruned/reorganized later.
+enum NotificationType {
+  RUN_COMPLETED
+  RUN_COMPLETED_WITH_ERRORS
+  REPORT_SENT
+  REPORT_SEND_FAILED
+}
+
+model Notification {
+  id          String           @id @default(uuid())
+  workspaceId String           @map("workspace_id")
+  // Cascades unlike RankingRun/RankingReport's ON DELETE RESTRICT into
+  // Client -- those are real business records deliberately preserved even
+  // if a client is deleted; a notification is disposable log-like data with
+  // no independent value once its workspace is gone.
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  type        NotificationType
+  message     String
+  clientId    String?          @map("client_id")
+  runId       String?          @map("run_id")
+  reportId    String?          @map("report_id")
+  read        Boolean          @default(false)
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  @@index([workspaceId, read])
+  @@map("notifications")
 }
 
 model User {

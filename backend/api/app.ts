@@ -2,6 +2,7 @@ import express from "express";
 import { authRouter } from "./routes/auth.js";
 import { clientsRouter } from "./routes/clients.js";
 import { overviewRouter } from "./routes/overview.js";
+import { notificationsRouter } from "./routes/notifications.js";
 import { createRunsRouter } from "./routes/runs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
 import { createMockEmailSender } from "../reporting/mockEmailSender.js";
@@ -55,6 +56,7 @@ export function createApp(
   app.use("/api/auth", authRouter);
   app.use("/api/clients", clientsRouter);
   app.use("/api/overview", overviewRouter);
+  app.use("/api/notifications", notificationsRouter);
   app.use("/api/runs", createRunsRouter(callDataForSeo));
   app.use("/api/reports", createReportsRouter(reportingDeps));
 

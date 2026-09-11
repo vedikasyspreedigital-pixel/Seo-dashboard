@@ -3,6 +3,7 @@ import { buildDataForSeoRequest } from '../dataforseo/buildRequest.js';
 import { recordAttemptAndApply } from '../dataforseo/recordAttemptAndApply.js';
 import { dequeueRow } from '../statemachine/rowTransitions.js';
 import { recomputeRunCompletion } from '../statemachine/runTransitions.js';
+import { notifyRunCompletion } from '../notifications/createNotification.js';
 import type { DataForSeoCallResult, DataForSeoRequestPayload } from '../dataforseo/client.js';
 
 export type CallDataForSeoFn = (payload: DataForSeoRequestPayload) => Promise<DataForSeoCallResult>;
@@ -90,5 +91,6 @@ export async function processRun(runId: string, callDataForSeo: CallDataForSeoFn
     }
   }
 
-  await recomputeRunCompletion(runId);
+  const completedRun = await recomputeRunCompletion(runId);
+  if (completedRun) await notifyRunCompletion(completedRun);
 }

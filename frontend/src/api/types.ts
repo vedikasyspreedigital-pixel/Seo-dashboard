@@ -218,3 +218,22 @@ export interface RankingReport {
 export interface RankingReportListItem extends RankingReport {
   run: Pick<RankingRun, 'id' | 'sourceFilename' | 'createdAt'>;
 }
+
+export type NotificationType = 'RUN_COMPLETED' | 'RUN_COMPLETED_WITH_ERRORS' | 'REPORT_SENT' | 'REPORT_SEND_FAILED';
+
+export interface NotificationRecord {
+  id: string;
+  workspaceId: string;
+  type: NotificationType;
+  message: string;
+  clientId: string | null;
+  runId: string | null;
+  reportId: string | null;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface NotificationsResponse {
+  notifications: NotificationRecord[];
+  unreadCount: number;
+}
