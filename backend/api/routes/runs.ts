@@ -12,6 +12,7 @@ import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
+import { expensiveActionRateLimit } from '../rateLimit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Configurable so a persistent disk (e.g. Render) can be mounted somewhere
@@ -21,6 +22,18 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_D
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+// .xlsx is a zip archive -- every valid one starts with this 4-byte local
+// file header signature. Checked by content, not filename/mimetype (both
+// trivially spoofable from a raw multipart request), same principle as the
+// existing custom-PDF-upload's "%PDF-" check (reports.ts). Previously this
+// route accepted anything up to 25MB and relied entirely on ExcelJS
+// throwing later inside parseRankingExcel -- cheap to reject obviously
+// wrong files before spending any parsing effort on them.
+const XLSX_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+function looksLikeXlsx(buffer: Buffer): boolean {
+  return buffer.subarray(0, 4).equals(XLSX_MAGIC);
+}
+
 function countFor(counts: { status: string; _count: { _all: number } }[], status: string): number {
   return counts.find((c) => c.status === status)?._count._all ?? 0;
 }
@@ -29,7 +42,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   const router = Router();
   router.use(requireAuth);
 
-  router.post('/', upload.single('file'), async (req, res) => {
+  router.post('/', expensiveActionRateLimit, upload.single('file'), async (req, res) => {
     const clientId = req.body?.clientId as string | undefined;
     const file = req.file;
     if (!clientId || !file) {
@@ -37,6 +50,27 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       return;
     }
     if (!(await findOwnedClientOrRespond(req, res, clientId, { requireActive: true }))) return;
+    if (!looksLikeXlsx(file.buffer)) {
+      res.status(400).json({ error: "File does not look like a valid .xlsx workbook." });
+      return;
+    }
+
+    // Idempotency guard against a rapid duplicate submission (double-click,
+    // a slow request retried by the browser/network) creating two separate
+    // runs for the same upload -- not a full dedupe (re-uploading the same
+    // filename later, deliberately, must still work), just a short window
+    // that catches genuine accidental double-submits. Returns the
+    // already-created run rather than erroring, so a duplicate click just
+    // silently resolves to the one real run instead of surfacing a
+    // confusing error to the user.
+    const recentDuplicate = await prisma.rankingRun.findFirst({
+      where: { clientId, sourceFilename: file.originalname, createdAt: { gte: new Date(Date.now() - 10_000) } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (recentDuplicate) {
+      res.status(200).json({ run: recentDuplicate, insertedRowCount: recentDuplicate.totalRows, rowErrors: [] });
+      return;
+    }
 
     try {
       const { run, insertedRowCount, rowErrors } = await ingestExcelRun({
@@ -69,6 +103,10 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       return;
     }
     if (!(await findOwnedClientOrRespond(req, res, clientId, { requireActive: true }))) return;
+    if (!looksLikeXlsx(file.buffer)) {
+      res.status(400).json({ error: "File does not look like a valid .xlsx workbook." });
+      return;
+    }
 
     try {
       const { rows, rowErrors } = await parseRankingExcel(file.buffer, { clientId });
@@ -84,10 +122,10 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     }
   });
 
-  router.post('/:id/start', async (req, res) => {
-    if (!(await findOwnedRunOrRespond(req, res, req.params.id, { requireActive: true }))) return;
+  router.post('/:id/start', expensiveActionRateLimit, async (req, res) => {
+    if (!(await findOwnedRunOrRespond(req, res, req.params.id as string, { requireActive: true }))) return;
     try {
-      const run = await startRun(req.params.id);
+      const run = await startRun(req.params.id as string);
       // Fire-and-forget: the HTTP response returns immediately, the
       // dashboard polls /progress. A failure here is logged, not thrown at
       // the client -- the affected rows simply stay in whatever state

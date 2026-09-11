@@ -15,6 +15,7 @@ import type { SendEmailFn } from "../../reporting/emailSender.js";
 import type { GenerateExcelAttachmentFn } from "../../reporting/generateExcelAttachment.js";
 import { requireAuth } from "../../auth/requireAuth.js";
 import { findOwnedClientOrRespond, findOwnedRunOrRespond, findOwnedReportOrRespond } from "../../auth/ownership.js";
+import { expensiveActionRateLimit } from "../rateLimit.js";
 
 // Mirrors frontend/src/components/report/reportStatus.ts's isValidEmailAddress
 // exactly -- the frontend already blocks invalid entries before Save Changes
@@ -267,10 +268,10 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   // approvedBy is likewise never client-supplied -- it's the authenticated
   // session's own email, so the audit trail can't be spoofed by whatever a
   // request happens to send.
-  router.post("/:id/approve-and-send", async (req, res) => {
-    if (!(await findOwnedReportOrRespond(req, res, req.params.id, { requireActive: true }))) return;
+  router.post("/:id/approve-and-send", expensiveActionRateLimit, async (req, res) => {
+    if (!(await findOwnedReportOrRespond(req, res, req.params.id as string, { requireActive: true }))) return;
     const approvedBy = req.authUser!.email;
-    const result = await approveAndSendReport(req.params.id, { approvedBy, sendEmail, generateExcelAttachment });
+    const result = await approveAndSendReport(req.params.id as string, { approvedBy, sendEmail, generateExcelAttachment });
     const statusCode = result.outcome === "SENT" ? 200 : result.outcome === "ALREADY_PROCESSED" ? 409 : result.outcome === "NO_RECIPIENTS" ? 422 : 502;
     res.status(statusCode).json(result);
   });

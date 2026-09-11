@@ -2,10 +2,11 @@ import { Router } from "express";
 import { prisma } from "../../db/client.js";
 import { verifyPassword } from "../../auth/password.js";
 import { createSession, deleteSession, getSessionIdFromRequest, getUserForSession, setSessionCookie, clearSessionCookie } from "../../auth/session.js";
+import { loginRateLimit } from "../rateLimit.js";
 
 export const authRouter = Router();
 
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", loginRateLimit, async (req, res) => {
   const { email, password } = req.body ?? {};
   if (typeof email !== "string" || typeof password !== "string" || email.length === 0 || password.length === 0) {
     res.status(400).json({ error: "email and password are required" });
