@@ -11,6 +11,11 @@ interface Props {
   onChange: (value: string) => void;
   placeholder: string;
   disabled?: boolean;
+  /** Renders a filter input at the top of the open listbox, substring-matched
+   * against option labels (same case-insensitive approach as ClientsPage's
+   * existing search). Off by default -- only the client switcher needs it
+   * today; every other Select usage is unaffected. */
+  searchable?: boolean;
 }
 
 /**
@@ -26,12 +31,18 @@ export function Select({
   onChange,
   placeholder,
   disabled,
+  searchable = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
+  const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selected = options.find((o) => o.value === value);
+  const filteredOptions = searchable && query.trim()
+    ? options.filter((o) => o.label.toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
 
   useEffect(() => {
     if (!open) return;
@@ -54,6 +65,7 @@ export function Select({
     if (disabled) return;
     const currentIndex = options.findIndex((o) => o.value === value);
     setHighlighted(currentIndex >= 0 ? currentIndex : 0);
+    setQuery("");
     setOpen(true);
   }
 
@@ -71,13 +83,13 @@ export function Select({
   function handleMenuKeyDown(event: React.KeyboardEvent) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setHighlighted((i) => Math.min(i + 1, options.length - 1));
+      setHighlighted((i) => Math.min(i + 1, filteredOptions.length - 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setHighlighted((i) => Math.max(i - 1, 0));
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      const option = options[highlighted];
+      const option = filteredOptions[highlighted];
       if (option) {
         onChange(option.value);
         setOpen(false);
@@ -115,33 +127,62 @@ export function Select({
       </button>
 
       {open && (
-        <ul
-          role="listbox"
-          tabIndex={-1}
-          onKeyDown={handleMenuKeyDown}
-          className="scrollbar-hidden absolute z-20 mt-2 max-h-64 w-full overflow-auto rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.5)] focus:outline-none"
-          ref={(el) => el?.focus()}
+        <div
+          className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] shadow-[0_16px_40px_rgba(0,0,0,0.5)]"
         >
-          {options.map((option, index) => (
-            <li
-              key={option.value}
-              role="option"
-              aria-selected={option.value === value}
-              onMouseEnter={() => setHighlighted(index)}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-              className={`cursor-pointer rounded-lg px-3 py-2 text-sm ${
-                index === highlighted
-                  ? "bg-[var(--color-surface-3)] text-[var(--color-ink)]"
-                  : "text-[var(--color-ink-muted)]"
-              } ${option.value === value ? "font-semibold text-brand-300" : ""}`}
-            >
-              {option.label}
-            </li>
-          ))}
-        </ul>
+          {searchable && (
+            <div className="border-b border-[var(--color-border)] p-1.5">
+              <input
+                ref={(el) => {
+                  searchInputRef.current = el;
+                  el?.focus();
+                }}
+                type="text"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setHighlighted(0);
+                }}
+                onKeyDown={handleMenuKeyDown}
+                placeholder="Search..."
+                className="w-full rounded-lg bg-transparent px-2 py-1.5 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:outline-none"
+              />
+            </div>
+          )}
+          <ul
+            role="listbox"
+            tabIndex={-1}
+            onKeyDown={searchable ? undefined : handleMenuKeyDown}
+            className="scrollbar-hidden max-h-64 overflow-auto p-1.5 focus:outline-none"
+            ref={(el) => {
+              if (!searchable) el?.focus();
+            }}
+          >
+            {filteredOptions.length === 0 ? (
+              <li className="px-3 py-2 text-sm text-[var(--color-ink-faint)]">No matches</li>
+            ) : (
+              filteredOptions.map((option, index) => (
+                <li
+                  key={option.value}
+                  role="option"
+                  aria-selected={option.value === value}
+                  onMouseEnter={() => setHighlighted(index)}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  className={`cursor-pointer rounded-lg px-3 py-2 text-sm ${
+                    index === highlighted
+                      ? "bg-[var(--color-surface-3)] text-[var(--color-ink)]"
+                      : "text-[var(--color-ink-muted)]"
+                  } ${option.value === value ? "font-semibold text-brand-300" : ""}`}
+                >
+                  {option.label}
+                </li>
+              ))
+            )}
+          </ul>
+        </div>
       )}
     </div>
   );

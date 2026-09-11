@@ -30,12 +30,35 @@ overviewRouter.get("/", async (req, res) => {
     res.status(403).json({ error: "You do not have access to this workspace" });
     return;
   }
+
+  // Optional client scope -- the dashboard's KPI tiles/chart/recent-runs
+  // reflect whichever client is currently active, not the whole workspace
+  // (previously this endpoint was always workspace-wide, which is what
+  // produced the "switching clients doesn't update the numbers" bug: the
+  // frontend's ClientDetailsCard reacted to the active client immediately,
+  // but every other tile on the same page silently kept showing
+  // workspace-wide totals). When omitted, falls back to the original
+  // workspace-wide aggregate (kept for any other consumer).
+  const clientId = req.query.clientId;
+  if (clientId !== undefined && (typeof clientId !== "string" || clientId.length === 0)) {
+    res.status(400).json({ error: "clientId query parameter must be a non-empty string when provided" });
+    return;
+  }
+  if (typeof clientId === "string") {
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    if (!client || client.workspaceId !== workspaceId) {
+      res.status(404).json({ error: "Client not found" });
+      return;
+    }
+  }
+
   // Same scoping as clients.ts: only this workspace's real (non-test)
-  // clients feed every aggregate below.
-  const clientScope = { workspaceId, isTestData: false } as const;
+  // clients feed every aggregate below, additionally narrowed to one
+  // client when clientId is given.
+  const clientScope = { workspaceId, isTestData: false, ...(typeof clientId === "string" ? { id: clientId } : {}) } as const;
 
   const [totalClients, totalRuns, totalSuccessfulRuns, recentRunsRaw, allReports] = await Promise.all([
-    prisma.client.count({ where: { isActive: true, ...clientScope } }),
+    prisma.client.count({ where: { isActive: true, workspaceId, isTestData: false } }), // deliberately always workspace-wide -- "how many clients total" doesn't mean anything scoped to one client
     prisma.rankingRun.count({ where: { client: clientScope } }),
     prisma.rankingRun.count({ where: { status: RunStatus.COMPLETED, client: clientScope } }),
     prisma.rankingRun.findMany({

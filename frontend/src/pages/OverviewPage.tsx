@@ -7,7 +7,7 @@ import { RecentRunsCard } from "../components/overview/RecentRunsCard";
 import { ClientDetailsCard } from "../components/overview/ClientDetailsCard";
 import { useActiveClient } from "../context/ClientContext";
 import { useSession } from "../context/SessionContext";
-import { getOverview, getRuns } from "../api/client";
+import { getOverview } from "../api/client";
 import type { OverviewData } from "../api/types";
 import {
   MinusCircleIcon,
@@ -21,29 +21,28 @@ export function OverviewPage() {
   const { activeClient } = useActiveClient();
   const { activeWorkspace } = useSession();
   const [overview, setOverview] = useState<OverviewData | null>(null);
-  const [clientRunCount, setClientRunCount] = useState<number | null>(null);
 
+  // Scoped to the active CLIENT (falls back to workspace-wide only if none
+  // is selected) -- every tile on this page must reflect whichever client
+  // is active, not a mix of scopes. Previously this only depended on
+  // activeWorkspace, so switching clients left every KPI/chart/recent-run
+  // number showing stale (workspace-wide, or the previous client's) data
+  // while only the ClientDetailsCard prop updated -- a real data-
+  // correctness bug, not just cosmetic. Re-fetching on activeClient change
+  // also means `overview.totalRuns` is already this client's real run
+  // count, so a separate getRuns() call for the ClientDetailsCard's "Total
+  // Runs" figure is no longer needed.
   useEffect(() => {
     if (!activeWorkspace) return;
     let cancelled = false;
-    getOverview(activeWorkspace.id).then((data) => {
+    setOverview(null); // clear stale data immediately -- never show the previous client's numbers while the new ones load
+    getOverview(activeWorkspace.id, activeClient?.id).then((data) => {
       if (!cancelled) setOverview(data);
     });
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspace]);
-
-  useEffect(() => {
-    if (!activeClient) return;
-    let cancelled = false;
-    getRuns(activeClient.id).then((runs) => {
-      if (!cancelled) setClientRunCount(runs.length);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeClient]);
+  }, [activeWorkspace, activeClient]);
 
   return (
     <AppShell wide>
@@ -59,7 +58,7 @@ export function OverviewPage() {
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <ClientDetailsCard
               client={activeClient}
-              totalRunsForClient={clientRunCount}
+              totalRunsForClient={activeClient ? overview.totalRuns : null}
             />
             <div className="grid grid-cols-2 grid-rows-2 gap-3.5">
               <KpiCard

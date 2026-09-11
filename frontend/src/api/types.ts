@@ -51,6 +51,13 @@ export interface SessionInfo {
 export interface RankingRun {
   id: string;
   clientId: string;
+  // The run's OWN client -- present on GET /runs/:id (which includes it),
+  // absent on GET /runs?clientId= (list already scoped to one known
+  // client, so it's redundant per-row there). Optional, not required, to
+  // honestly reflect that. Wherever shown, must be used instead of the
+  // currently-active client from ClientContext, which can differ if the
+  // user switches clients while still viewing this run.
+  client?: { name: string };
   sourceFilename: string;
   status: RunStatus;
   totalRows: number;

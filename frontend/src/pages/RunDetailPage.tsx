@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { IconButton } from '../components/ui/IconButton';
 import { Spinner } from '../components/ui/Spinner';
 import { StatTile } from '../components/ui/StatTile';
 import { InlineError } from '../components/ui/InlineError';
@@ -11,11 +12,13 @@ import { FilterPills } from '../components/ui/FilterPills';
 import { StatusBadge } from '../components/run/StatusBadge';
 import { ProcessingSummary } from '../components/run/ProcessingSummary';
 import { CompletedSummary } from '../components/run/CompletedSummary';
+import { RefreshIcon } from '../components/ui/icons';
 import { useRunProgress } from '../hooks/useRunProgress';
-import { useActiveClient } from '../context/ClientContext';
+import { useToast } from '../context/ToastContext';
 import { isRunReportable } from '../components/run/runStatus';
+import { resolveRunCompletionNotification } from '../components/run/runCompletionNotification';
 import { cancelRun, getExportUrl, getRun, getRunRows, startRun } from '../api/client';
-import type { RankingRun, RunRow } from '../api/types';
+import type { RankingRun, RunRow, RunStatus } from '../api/types';
 
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS', 'CANCELLED']);
 const FILTERS = ['All', 'Completed', 'Error-Retry', 'Failed'] as const;
@@ -31,16 +34,20 @@ const FILTER_TO_ROW_STATUS: Record<Filter, string | null> = {
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
   const navigate = useNavigate();
-  const { activeClient } = useActiveClient();
-  const { progress } = useRunProgress(runId ?? null);
+  const { progress, refresh: refreshProgress } = useRunProgress(runId ?? null);
+  const { showToast } = useToast();
 
   const [run, setRun] = useState<RankingRun | null>(null);
   const [rows, setRows] = useState<RunRow[]>([]);
   const [filter, setFilter] = useState<Filter>('All');
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [confirmingStart, setConfirmingStart] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Tracks the last-seen runStatus for THIS runId, purely to detect the edge
+  // into a terminal state for the completion toast -- reset alongside the
+  // other per-runId state below so switching runs never fires a stale toast.
+  const previousStatusRef = useRef<RunStatus | null>(null);
 
   useEffect(() => {
     // Runs ONLY when runId itself changes (not on every progress poll tick,
@@ -51,7 +58,19 @@ export function RunDetailPage() {
     setRun(null);
     setRows([]);
     setActionError(null);
+    previousStatusRef.current = null;
   }, [runId]);
+
+  useEffect(() => {
+    if (!progress) return;
+    const notification = resolveRunCompletionNotification(
+      previousStatusRef.current,
+      progress.runStatus,
+      run?.sourceFilename ?? 'run',
+    );
+    previousStatusRef.current = progress.runStatus;
+    if (notification) showToast(notification.message, notification.tone);
+  }, [progress, run?.sourceFilename, showToast]);
 
   useEffect(() => {
     if (!runId) return;
@@ -79,12 +98,14 @@ export function RunDetailPage() {
 
   async function handleStart() {
     if (!runId) return;
-    setConfirmingStart(false);
     setStarting(true);
     setActionError(null);
     try {
       const updated = await startRun(runId);
-      setRun(updated);
+      // Merge, don't replace -- startRun's response doesn't include the
+      // nested `client` relation (only /runs/:id does), so replacing
+      // outright would drop it and crash the client-name display above.
+      setRun((prev) => (prev ? { ...prev, ...updated } : updated));
     } catch (err) {
       setActionError((err as Error).message);
     } finally {
@@ -98,11 +119,28 @@ export function RunDetailPage() {
     setActionError(null);
     try {
       const updated = await cancelRun(runId);
-      setRun(updated);
+      // Same reason as handleStart -- cancelRun's response has no nested `client`.
+      setRun((prev) => (prev ? { ...prev, ...updated } : updated));
     } catch (err) {
       setActionError((err as Error).message);
     } finally {
       setCancelling(false);
+    }
+  }
+
+  // Manual fallback, not the fix -- the real fix is deriving all status-gated
+  // UI from `status` (above) instead of the stale one-time `run` fetch. This
+  // just re-fires both fetches immediately for anyone who wants to force a
+  // refresh rather than wait for the next poll tick.
+  async function handleRefresh() {
+    if (!runId) return;
+    setRefreshing(true);
+    try {
+      refreshProgress();
+      const updated = await getRun(runId);
+      setRun(updated);
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -118,20 +156,26 @@ export function RunDetailPage() {
       <PageHeader
         breadcrumbs={[{ label: 'Runs', to: '/runs' }, { label: run ? `#${run.id.slice(0, 8)}` : '...' }]}
         action={
-          run?.status === 'UPLOADED' || run?.status === 'PROCESSING' ? (
-            // Cancel Run stays mounted here regardless of confirmingStart
-            // (just disabled while confirming, same as it being absent
-            // before -- neither is clickable) so this action slot never
-            // collapses to empty when "Start Run" is clicked. That collapse
-            // was the other source of the page-load-position jump: with
-            // nothing here, the header row shrinks to the breadcrumb's
-            // height alone and everything below shifts up.
+          <div className="flex items-center gap-3">
+            <IconButton title="Refresh run status" onClick={() => void handleRefresh()} disabled={refreshing}>
+              <RefreshIcon className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </IconButton>
+            {!isTerminal ? (
+            // Branches on the poll-derived `status` (via isTerminal), not
+            // run?.status -- run is fetched once via getRun and never
+            // refetched, so gating on it directly left this stuck on
+            // whatever run.status was at page load (almost always
+            // PROCESSING) even after the poll reported a terminal state,
+            // permanently hiding Generate Report/Download Excel below. See
+            // isReportable's own comment for the same reasoning.
+            // No separate "Start Run" button here anymore -- a freshly
+            // uploaded run goes straight to the confirm bar below (see its
+            // own comment), removing the redundant extra click.
             <div className="flex items-center gap-3">
-              <Button variant="ghost" disabled={cancelling || confirmingStart} onClick={handleCancel}>
+              <Button variant="ghost" disabled={cancelling || starting} onClick={handleCancel}>
                 {cancelling && <Spinner />}
                 Cancel Run
               </Button>
-              {run.status === 'UPLOADED' && !confirmingStart && <Button onClick={() => setConfirmingStart(true)}>Start Run</Button>}
             </div>
           ) : (
             // Generate Report and Download Excel only appear once the run
@@ -153,32 +197,28 @@ export function RunDetailPage() {
                 </Button>
               </div>
             )
-          )
+          )}
+          </div>
         }
       />
 
       {/*
-        Always mounted (not just while confirmingStart is true) so this row's
-        space is reserved from the moment a Start-Run-eligible run loads --
-        toggling confirmingStart only flips visibility, never
-        mounts/unmounts the element, so the page never jumps when "Start
-        Run" is clicked. Only rendered at all while the run is UPLOADED,
-        since that's the only status this control is ever relevant for.
+        Shown immediately for any freshly-uploaded run -- no separate
+        "Start Run" click needed to reveal this first (that extra step was
+        removed: Upload -> Confirm Start Run is now the whole flow, not
+        Upload -> Start Run -> Confirm Start Run). "Cancel Run" in the
+        header above already covers backing out from here, so this bar only
+        needs the one forward action -- a second Cancel right next to it
+        would just be a redundant duplicate of the same button.
       */}
-      {run?.status === 'UPLOADED' && (
-        <div
-          className={`mt-3 flex items-center justify-end gap-3 text-sm ${confirmingStart ? '' : 'invisible'}`}
-          aria-hidden={!confirmingStart}
-        >
+      {status === 'UPLOADED' && run && (
+        <div className="mt-3 flex items-center justify-end gap-3 text-sm">
           <span className="font-medium text-amber-300">
             Process {run.totalRows} row{run.totalRows === 1 ? '' : 's'} &mdash; confirm?
           </span>
-          <Button disabled={!confirmingStart || starting} onClick={handleStart}>
+          <Button disabled={starting || cancelling} onClick={handleStart}>
             {starting && <Spinner />}
-            Confirm
-          </Button>
-          <Button variant="ghost" disabled={!confirmingStart || starting} onClick={() => setConfirmingStart(false)}>
-            Cancel
+            Confirm Start Run
           </Button>
         </div>
       )}
@@ -191,9 +231,15 @@ export function RunDetailPage() {
         </div>
       )}
 
-      {isTerminal && run && (
+      {isTerminal && run && status && (
         <div className="mt-6">
-          <CompletedSummary status={run.status} totalRows={totals.total} failedCount={totals.failed} completedAt={run.completedAt} />
+          {/* status (poll-derived), not run.status -- run.status can still
+              be stale here (e.g. PROCESSING) since run is only ever
+              re-fetched on user-initiated Start/Cancel, not on each poll
+              tick. Passing the stale value silently mislabeled a
+              COMPLETED_WITH_ERRORS run as plain "Completed" (falls through
+              to CompletedSummary's default tone). */}
+          <CompletedSummary status={status} totalRows={totals.total} failedCount={totals.failed} completedAt={run.completedAt} />
         </div>
       )}
 
@@ -203,7 +249,11 @@ export function RunDetailPage() {
             <div>
               <p className="font-semibold text-[var(--color-ink)]">{run?.sourceFilename ?? 'Loading...'}</p>
               <p className="mt-1 text-xs text-[var(--color-ink-faint)]">
-                {run && `Created ${new Date(run.createdAt).toLocaleString()} · ${activeClient?.name ?? ''}`}
+                {/* run.client.name -- this run's OWN client, never the
+                    currently-active one from the header switcher, which
+                    can differ if the user switches clients while still
+                    viewing this exact run. */}
+                {run && `Created ${new Date(run.createdAt).toLocaleString()}${run.client ? ` · ${run.client.name}` : ''}`}
               </p>
             </div>
             <div className="flex items-center gap-5">

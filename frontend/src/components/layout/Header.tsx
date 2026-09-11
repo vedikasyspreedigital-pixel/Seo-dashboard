@@ -38,6 +38,7 @@ export function Header() {
             onChange={setActiveClientId}
             placeholder="Select a client..."
             options={clients.map((c) => ({ value: c.id, label: c.name }))}
+            searchable
           />
         </div>
       </div>

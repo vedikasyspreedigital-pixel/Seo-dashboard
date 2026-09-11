@@ -96,6 +96,55 @@ test("GET /api/overview: totals are real counts, and KPI movements use only the 
   }
 });
 
+test("GET /api/overview?clientId=: scopes every aggregate to one client, not the whole workspace -- the fix for the client-switching stale-data bug", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  const clientA = await makeClient(`Overview Scope Test A - ${randomUUID()}`, auth.workspace.id);
+  const clientB = await makeClient(`Overview Scope Test B - ${randomUUID()}`, auth.workspace.id);
+  try {
+    const runA = await makeRun(clientA.id, "COMPLETED");
+    const runB = await makeRun(clientB.id, "COMPLETED");
+    await makeReportWithAnalytics(clientA.id, runA.id, 3, 0, 0, 3);
+    await makeReportWithAnalytics(clientB.id, runB.id, 0, 7, 0, 7);
+
+    const resA = await request(app).get(`/api/overview?workspaceId=${auth.workspace.id}&clientId=${clientA.id}`).set("Cookie", auth.cookieHeader);
+    assert.equal(resA.status, 200);
+    assert.equal(resA.body.totalRuns, 1, "must only count client A's run, not both clients'");
+    assert.equal(resA.body.rankingMovements.improved, 3);
+    assert.equal(resA.body.rankingMovements.declined, 0);
+    assert.equal(resA.body.recentRuns.length, 1);
+    assert.equal(resA.body.recentRuns[0].id, runA.id);
+
+    const resB = await request(app).get(`/api/overview?workspaceId=${auth.workspace.id}&clientId=${clientB.id}`).set("Cookie", auth.cookieHeader);
+    assert.equal(resB.body.totalRuns, 1, "must only count client B's run");
+    assert.equal(resB.body.rankingMovements.declined, 7);
+    assert.equal(resB.body.recentRuns[0].id, runB.id);
+
+    // No clientId at all -- still the original workspace-wide behavior.
+    const resAll = await request(app).get(`/api/overview?workspaceId=${auth.workspace.id}`).set("Cookie", auth.cookieHeader);
+    assert.equal(resAll.body.totalRuns, 2, "omitting clientId must still aggregate the whole workspace");
+  } finally {
+    await cleanupClient(clientA.id);
+    await cleanupClient(clientB.id);
+    await auth.cleanup();
+  }
+});
+
+test("GET /api/overview?clientId=: a foreign client is rejected (404), not silently ignored or leaking data", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  const otherWorkspace = await prisma.workspace.create({ data: { slug: `other-${randomUUID()}`, name: "Other" } });
+  const foreignClient = await makeClient(`Foreign Client - ${randomUUID()}`, otherWorkspace.id);
+  try {
+    const res = await request(app).get(`/api/overview?workspaceId=${auth.workspace.id}&clientId=${foreignClient.id}`).set("Cookie", auth.cookieHeader);
+    assert.equal(res.status, 404);
+  } finally {
+    await prisma.client.delete({ where: { id: foreignClient.id } });
+    await prisma.workspace.delete({ where: { id: otherWorkspace.id } });
+    await auth.cleanup();
+  }
+});
+
 test("GET /api/overview requires authentication", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const res = await request(app).get("/api/overview?workspaceId=whatever");

@@ -117,8 +117,10 @@ export async function restoreClient(clientId: string): Promise<ClientRecord> {
   return handle<ClientRecord>(res);
 }
 
-export async function getOverview(workspaceId: string): Promise<OverviewData> {
-  const res = await apiFetch(`/overview?workspaceId=${encodeURIComponent(workspaceId)}`);
+export async function getOverview(workspaceId: string, clientId?: string): Promise<OverviewData> {
+  const params = new URLSearchParams({ workspaceId });
+  if (clientId) params.set('clientId', clientId);
+  const res = await apiFetch(`/overview?${params.toString()}`);
   return handle<OverviewData>(res);
 }
 

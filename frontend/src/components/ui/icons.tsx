@@ -233,3 +233,12 @@ export function UndoIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+export function RefreshIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 10a6 6 0 0 1 10.5-4M16 10a6 6 0 0 1-10.5 4" />
+      <path d="M14.5 3.5v3h-3M5.5 16.5v-3h3" />
+    </svg>
+  );
+}
