@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prisma } from '../../db/client.js';
@@ -149,6 +149,47 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     if (!(await findOwnedClientOrRespond(req, res, clientId))) return;
     const runs = await prisma.rankingRun.findMany({ where: { clientId }, orderBy: { createdAt: 'desc' } });
     res.json(runs);
+  });
+
+  router.delete('/:id', async (req, res) => {
+    const run = await findOwnedRunOrRespond(req, res, req.params.id, { requireActive: true });
+    if (!run) return;
+    if (run.status === 'PROCESSING') {
+      res.status(409).json({ error: 'A run cannot be deleted while it is processing.' });
+      return;
+    }
+
+    // Reports whose SUBJECT is this run (RankingReport.runId, the
+    // "ReportRun" relation) have no independent existence once the run
+    // they report on is gone -- deleted along with it, artifacts included.
+    // This is intentionally different from a report that merely used this
+    // run as a historical COMPARISON for a different (still-existing) run
+    // -- see the previousRunId detach below, which leaves those reports and
+    // their own run completely untouched.
+    const dependentReports = await prisma.rankingReport.findMany({ where: { runId: run.id } });
+
+    await prisma.$transaction(async (tx) => {
+      // Detach reports that only reference this run as their historical
+      // comparison (RankingReport.previousRunId, the "ReportPreviousRun"
+      // relation) -- those reports belong to a different run and must
+      // survive; only the now-gone comparison reference is cleared, same
+      // principle as never touching a client's saved baseline files.
+      await tx.rankingReport.updateMany({ where: { previousRunId: run.id }, data: { previousRunId: null } });
+
+      await tx.rankingReport.deleteMany({ where: { runId: run.id } });
+      await tx.rankingRow.updateMany({ where: { runId: run.id }, data: { lastAttemptId: null } });
+      await tx.rankingRowAttempt.deleteMany({ where: { rankingRow: { runId: run.id } } });
+      await tx.rankingRow.deleteMany({ where: { runId: run.id } });
+      await tx.rankingRun.delete({ where: { id: run.id } });
+    });
+
+    await unlink(run.sourceFilePath).catch(() => undefined);
+    if (run.resultFilePath) await unlink(run.resultFilePath).catch(() => undefined);
+    for (const report of dependentReports) {
+      if (report.clientPdfPath) await unlink(report.clientPdfPath).catch(() => undefined);
+      if (report.customPdfPath) await unlink(report.customPdfPath).catch(() => undefined);
+    }
+    res.status(204).send();
   });
 
   // UPLOADED | PROCESSING -> CANCELLED. Was already implemented in the

@@ -4,10 +4,12 @@ import { AppShell } from '../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { Spinner } from '../components/ui/Spinner';
+import { EyeIcon, RefreshIcon, TrashIcon } from '../components/ui/icons';
 import { StatusBadge } from '../components/run/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useActiveClient } from '../context/ClientContext';
-import { getRuns } from '../api/client';
+import { deleteRun, getRuns } from '../api/client';
 import { formatDate, formatDateTime } from '../utils/formatters';
 import type { RankingRun } from '../api/types';
 
@@ -19,6 +21,8 @@ export function RunsListPage() {
   const { activeClient } = useActiveClient();
   const [runs, setRuns] = useState<RankingRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!activeClient) {
@@ -39,6 +43,25 @@ export function RunsListPage() {
       cancelled = true;
     };
   }, [activeClient]);
+
+  async function handleDelete(run: RankingRun) {
+    if (
+      !window.confirm(
+        `Delete run ${shortId(run.id)}? This also deletes any report generated from this run (including its PDF, and even if it was already sent to the client) and cannot be undone.`,
+      )
+    )
+      return;
+    setDeletingRunId(run.id);
+    setActionError(null);
+    try {
+      await deleteRun(run.id);
+      setRuns((currentRuns) => currentRuns.filter((currentRun) => currentRun.id !== run.id));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to delete this run.');
+    } finally {
+      setDeletingRunId(null);
+    }
+  }
 
   const lastRun = runs[0];
 
@@ -67,6 +90,7 @@ export function RunsListPage() {
       </div>
 
       <Card className="mt-6 overflow-hidden p-0">
+        {actionError && <p className="border-b border-rose-500/20 bg-rose-500/10 px-6 py-3 text-sm text-rose-200">{actionError}</p>}
         {loading ? (
           <EmptyState label="Loading..." />
         ) : runs.length === 0 ? (
@@ -94,9 +118,35 @@ export function RunsListPage() {
                     <StatusBadge status={run.status} />
                   </td>
                   <td className="cell-cozy text-right">
-                    <Link to={`/runs/${run.id}`} className="font-semibold text-brand-300 hover:text-brand-200">
-                      View &rarr;
-                    </Link>
+                    <div className="flex items-center justify-end gap-3">
+                      <Link
+                        to={`/runs/${run.id}`}
+                        title="View"
+                        aria-label={`View run ${shortId(run.id)}`}
+                        className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
+                      >
+                        <EyeIcon className="h-4 w-4" />
+                      </Link>
+                      <button
+                        type="button"
+                        title="Rerun (coming soon)"
+                        disabled
+                        aria-label={`Rerun ${shortId(run.id)} (coming soon)`}
+                        className="cursor-not-allowed rounded-full p-1.5 text-[var(--color-ink-muted)] opacity-40"
+                      >
+                        <RefreshIcon className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete"
+                        disabled={deletingRunId !== null}
+                        onClick={() => handleDelete(run)}
+                        aria-label={`Delete run ${shortId(run.id)}`}
+                        className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-50"
+                      >
+                        {deletingRunId === run.id ? <Spinner className="h-4 w-4" /> : <TrashIcon className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

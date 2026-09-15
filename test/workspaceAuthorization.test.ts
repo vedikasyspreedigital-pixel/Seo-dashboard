@@ -145,6 +145,22 @@ test("cross-workspace: SEO user cannot start or cancel an Advanced SEO run (-> 4
   }
 });
 
+test("cross-workspace: SEO user cannot delete an Advanced SEO run (-> 404, run left untouched)", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Workspace Auth Test - delete run ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, "COMPLETED");
+
+    const deleteRes = await seoApp(app).delete(`/api/runs/${run.id}`);
+    assert.equal(deleteRes.status, 404);
+
+    const untouched = await prisma.rankingRun.findUniqueOrThrow({ where: { id: run.id } });
+    assert.equal(untouched.status, "COMPLETED", "a rejected delete must never remove the run");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test("cross-workspace: a foreign clientId is rejected for run creation, validation, and listing (-> 404, nothing created)", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const client = await makeClient(`Workspace Auth Test - foreign clientId ${randomUUID()}`);

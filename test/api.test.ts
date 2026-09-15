@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
+import { writeFile, access } from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
 import ExcelJS from "exceljs";
 import { createApp } from "../backend/api/app.js";
 import { prisma } from "../backend/db/client.js";
@@ -230,6 +233,109 @@ test("GET /api/runs requires a clientId query parameter", async () => {
   const app = createApp(mockCallDataForSeo, 'mock');
   const res = await authedApp(app).get("/api/runs");
   assert.equal(res.status, 400);
+});
+
+test("DELETE /api/runs/:id removes an owned run and its rows", async () => {
+  const app = createApp(mockCallDataForSeo, 'mock');
+  const client = await prisma.client.create({ data: { name: `API Test - delete run ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  try {
+    const fileBuffer = await buildTestWorkbookBuffer();
+    const uploadRes = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "delete-test.xlsx");
+    const runId = uploadRes.body.run.id;
+
+    const deleteRes = await authedApp(app).delete(`/api/runs/${runId}`);
+    assert.equal(deleteRes.status, 204);
+    assert.equal((await prisma.rankingRun.findUnique({ where: { id: runId } })), null);
+    assert.equal(await prisma.rankingRow.count({ where: { runId } }), 0);
+    assert.equal((await authedApp(app).get(`/api/runs/${runId}`)).status, 404);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("DELETE /api/runs/:id refuses a run that is currently processing, and leaves it untouched", async () => {
+  const app = createApp(mockCallDataForSeo, 'mock');
+  const client = await prisma.client.create({ data: { name: `API Test - delete processing run ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  try {
+    const fileBuffer = await buildTestWorkbookBuffer();
+    const uploadRes = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "delete-processing-test.xlsx");
+    const runId = uploadRes.body.run.id;
+
+    // Force the PROCESSING state directly rather than racing the real
+    // worker (the mock DataForSEO call resolves almost immediately) -- this
+    // is purely exercising the delete route's own guard.
+    await prisma.rankingRun.update({ where: { id: runId }, data: { status: "PROCESSING" } });
+
+    const deleteRes = await authedApp(app).delete(`/api/runs/${runId}`);
+    assert.equal(deleteRes.status, 409);
+
+    const untouched = await prisma.rankingRun.findUniqueOrThrow({ where: { id: runId } });
+    assert.equal(untouched.status, "PROCESSING");
+    assert.equal(await prisma.rankingRow.count({ where: { runId } }), 2, "rows must survive a rejected delete");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("DELETE /api/runs/:id cascades: deletes a report generated FROM this run, including its PDF artifacts on disk", async () => {
+  const app = createApp(mockCallDataForSeo, 'mock');
+  const client = await prisma.client.create({ data: { name: `API Test - delete cascades to report ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  try {
+    const fileBuffer = await buildTestWorkbookBuffer();
+    const uploadRes = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "delete-cascade-test.xlsx");
+    const runId = uploadRes.body.run.id;
+    await prisma.rankingRun.update({ where: { id: runId }, data: { status: "COMPLETED", completedAt: new Date() } });
+
+    const clientPdfPath = path.join(os.tmpdir(), `delete-cascade-generated-${randomUUID()}.pdf`);
+    const customPdfPath = path.join(os.tmpdir(), `delete-cascade-custom-${randomUUID()}.pdf`);
+    await writeFile(clientPdfPath, "fake generated pdf");
+    await writeFile(customPdfPath, "fake custom pdf");
+    const report = await prisma.rankingReport.create({
+      data: { clientId: client.id, runId, analyticsJson: { totals: { totalKeywords: 2 } }, status: "SENT", clientPdfPath, customPdfPath, sentAt: new Date() },
+    });
+
+    const deleteRes = await authedApp(app).delete(`/api/runs/${runId}`);
+    assert.equal(deleteRes.status, 204);
+
+    assert.equal(await prisma.rankingRun.findUnique({ where: { id: runId } }), null, "the run must be gone");
+    assert.equal(await prisma.rankingReport.findUnique({ where: { id: report.id } }), null, "a report generated from the deleted run must be gone too, even if it was SENT");
+    await assert.rejects(() => access(clientPdfPath), "the generated PDF must be removed from disk");
+    await assert.rejects(() => access(customPdfPath), "the custom PDF must be removed from disk");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("DELETE /api/runs/:id detaches (never deletes) a report that only used this run as its historical comparison", async () => {
+  const app = createApp(mockCallDataForSeo, 'mock');
+  const client = await prisma.client.create({ data: { name: `API Test - delete detaches comparison run ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  try {
+    const fileBuffer = await buildTestWorkbookBuffer();
+
+    const comparisonUpload = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "comparison-run.xlsx");
+    const comparisonRunId = comparisonUpload.body.run.id;
+    await prisma.rankingRun.update({ where: { id: comparisonRunId }, data: { status: "COMPLETED", completedAt: new Date() } });
+
+    const currentUpload = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "current-run.xlsx");
+    const currentRunId = currentUpload.body.run.id;
+    await prisma.rankingRun.update({ where: { id: currentRunId }, data: { status: "COMPLETED", completedAt: new Date() } });
+
+    const report = await prisma.rankingReport.create({
+      data: { clientId: client.id, runId: currentRunId, previousRunId: comparisonRunId, analyticsJson: { totals: { totalKeywords: 2 } } },
+    });
+
+    const deleteRes = await authedApp(app).delete(`/api/runs/${comparisonRunId}`);
+    assert.equal(deleteRes.status, 204);
+
+    assert.equal(await prisma.rankingRun.findUnique({ where: { id: comparisonRunId } }), null, "the deleted comparison run must be gone");
+    assert.ok(await prisma.rankingRun.findUnique({ where: { id: currentRunId } }), "the unrelated current run must survive untouched");
+    const refetchedReport = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(refetchedReport.runId, currentRunId, "the report itself must survive -- it's not about the deleted run");
+    assert.equal(refetchedReport.previousRunId, null, "only the now-gone comparison reference is cleared");
+  } finally {
+    await prisma.rankingReport.deleteMany({ where: { clientId: client.id } });
+    await cleanupClient(client.id);
+  }
 });
 
 test("GET /api/runs requires authentication -- the whole runs router is gated, not just an individual route", async () => {
