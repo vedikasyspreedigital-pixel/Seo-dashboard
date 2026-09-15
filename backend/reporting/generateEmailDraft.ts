@@ -27,17 +27,30 @@ export type GenerateEmailDraftResult = { outcome: "SUCCESS"; subject: string; bo
 
 /**
  * The reporting period a report covers -- start is the prior comparison
- * run's completion (or, absent one, the same as end, e.g. a client's first
- * report with no prior run), end is this report's own run completion.
- * Shared by generateEmailDraft (for the subject/body dates) and the
- * duplicate-date check on report edit (findDuplicateDatedReport below), so
- * both always agree on what "this report's date range" means.
+ * run's completion, or (when compared against an imported baseline
+ * instead of a real prior run) the baseline's own recorded date, or
+ * (absent either) the same as end, e.g. a client's first report with
+ * nothing to compare against at all. End is this report's own run
+ * completion. Shared by generateEmailDraft (for the subject/body dates)
+ * and the duplicate-date check on report edit (findDuplicateDatedReport
+ * below), so both always agree on what "this report's date range" means.
+ *
+ * The previousBaseline branch matters: a real agency report is always
+ * titled/dated as a genuine range -- baseline date through current date
+ * (confirmed against an actual prior report, e.g. "17th August 2026 -
+ * 31st August 2026") -- never a single repeated day. Before this branch
+ * existed, a baseline-compared report's periodStart fell all the way
+ * through to report.run's own date (previousRun is null for a baseline
+ * comparison), producing a degenerate same-day-to-same-day range instead
+ * of the real one.
  */
 export function computeReportPeriod(report: {
   run: { completedAt: Date | null; createdAt: Date };
   previousRun: { completedAt: Date | null; createdAt: Date } | null;
+  previousBaseline?: { baselineDate: Date } | null;
 }): { periodStart: Date; periodEnd: Date } {
-  const periodStart = report.previousRun?.completedAt ?? report.previousRun?.createdAt ?? report.run.completedAt ?? report.run.createdAt;
+  const periodStart =
+    report.previousRun?.completedAt ?? report.previousRun?.createdAt ?? report.previousBaseline?.baselineDate ?? report.run.completedAt ?? report.run.createdAt;
   const periodEnd = report.run.completedAt ?? report.run.createdAt;
   return { periodStart, periodEnd };
 }
@@ -45,7 +58,7 @@ export function computeReportPeriod(report: {
 export async function generateEmailDraft(reportId: string): Promise<GenerateEmailDraftResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
-    include: { client: true, run: true, previousRun: true },
+    include: { client: true, run: true, previousRun: true, previousBaseline: true },
   });
 
   const config = await prisma.clientReportConfig.findFirst({

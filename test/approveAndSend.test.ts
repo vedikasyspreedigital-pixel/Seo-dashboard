@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
 import { approveAndSendReport } from "../backend/reporting/approveAndSend.js";
 import { updateReportDraft } from "../backend/reporting/editReportDraft.js";
+import { generateEmailDraft } from "../backend/reporting/generateEmailDraft.js";
 import { createMockEmailSender, createFailingMockEmailSender } from "../backend/reporting/mockEmailSender.js";
 import { ReportStatus } from "@prisma/client";
 
@@ -128,6 +129,88 @@ test("Save Changes -> Approve & Send: the send uses the edited To/Subject/Body, 
     assert.equal(sent.subject, "EDITED subject after Save Changes");
     assert.equal(sent.bodyText, "EDITED body after Save Changes");
   } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Stronger regression than the test above: that one starts from a
+// hand-built PENDING_APPROVAL fixture whose emailSubject/emailBody are
+// already arbitrary test strings, not the real template output. This one
+// drives the ACTUAL generateEmailDraft() step first (the same
+// buildDefaultEmailDraft template EmailDraftPage shows the user), captures
+// what it produced, then edits Subject/Body to something deliberately
+// different and traces the full path: generate -> Save Changes
+// (updateReportDraft) -> Approve & Send (approveAndSendReport) -> the
+// sender. Proves the edited values (not the generated ones) are what
+// ultimately reaches sendEmail() AND what's left persisted afterward --
+// nothing in between silently regenerates or reverts them.
+test("generated draft -> Save Changes edits Subject/Body -> Approve & Send: sender and persisted row get the edited values, never the originally generated draft", async () => {
+  const client = await makeClient(`Approve Send Test - edited vs generated ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, new Date("2026-09-01T00:00:00Z"));
+    await prisma.clientReportConfig.create({
+      data: {
+        clientId: client.id,
+        reportTone: "professional",
+        sectionsEnabled: ["summary"],
+        metricsEnabled: ["averageRank"],
+        recipients: ["ops@example.com"],
+        reportingFrequency: "manual",
+        templateId: "standard-v1",
+      },
+    });
+    const report = await prisma.rankingReport.create({
+      data: {
+        clientId: client.id,
+        runId: run.id,
+        status: ReportStatus.REPORT_READY,
+        analyticsJson: { totals: { totalKeywords: 1 } },
+        clientPdfPath: "/tmp/stub-report.pdf",
+      },
+    });
+
+    // Step 1: the REAL draft-generation pipeline -- the same deterministic
+    // template EmailDraftPage first shows the user, not a hand-picked
+    // fixture string.
+    const generated = await generateEmailDraft(report.id);
+    assert.equal(generated.outcome, "SUCCESS");
+    const generatedSubject = generated.subject;
+    const generatedBody = generated.bodyText;
+
+    // Step 2: the user edits Subject/Body in EmailDraftEditor and clicks
+    // Save Changes -- exactly what PATCH /api/reports/:id -> updateReportDraft
+    // performs.
+    const editedSubject = "Manually rewritten subject -- does not match the template";
+    const editedBody = "Manually rewritten body -- completely different wording from the generated draft.";
+    await updateReportDraft(report.id, { emailSubject: editedSubject, emailBody: editedBody });
+
+    // Sanity: prove the edit is a REAL change from what was generated --
+    // otherwise every assertion below could pass "by accident" even if the
+    // send path silently fell back to the generated draft.
+    assert.notEqual(editedSubject, generatedSubject);
+    assert.notEqual(editedBody, generatedBody);
+
+    // Step 3: Approve & Send.
+    const sentCalls: { subject: string; bodyText: string }[] = [];
+    const sendEmail = createMockEmailSender((params) => sentCalls.push(params as { subject: string; bodyText: string }));
+    const result = await approveAndSendReport(report.id, { approvedBy: "om@syspreedigital.com", sendEmail });
+    assert.equal(result.outcome, "SENT");
+
+    assert.equal(sentCalls.length, 1);
+    assert.equal(sentCalls[0].subject, editedSubject, "sender must receive the EDITED subject");
+    assert.equal(sentCalls[0].bodyText, editedBody, "sender must receive the EDITED body");
+    assert.notEqual(sentCalls[0].subject, generatedSubject, "sender must NOT receive the originally generated subject");
+    assert.notEqual(sentCalls[0].bodyText, generatedBody, "sender must NOT receive the originally generated body");
+
+    // Step 4: nothing between Save Changes and the send silently
+    // regenerated or reverted Subject/Body -- the persisted row still holds
+    // exactly what was edited.
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.emailSubject, editedSubject);
+    assert.equal(persisted.emailBody, editedBody);
+    assert.equal(persisted.status, ReportStatus.SENT);
+  } finally {
+    await prisma.clientReportConfig.deleteMany({ where: { clientId: client.id } });
     await cleanupClient(client.id);
   }
 });

@@ -44,6 +44,7 @@ export async function findDuplicateDatedReport(report: {
   clientId: string;
   run: { completedAt: Date | null; createdAt: Date };
   previousRun: { completedAt: Date | null; createdAt: Date } | null;
+  previousBaseline?: { baselineDate: Date } | null;
 }) {
   const { periodStart, periodEnd } = computeReportPeriod(report);
   const startDay = periodStart.toDateString();
@@ -51,7 +52,7 @@ export async function findDuplicateDatedReport(report: {
 
   const siblings = await prisma.rankingReport.findMany({
     where: { clientId: report.clientId, id: { not: report.id }, status: ReportStatus.SENT },
-    include: { run: true, previousRun: true },
+    include: { run: true, previousRun: true, previousBaseline: true },
   });
 
   return siblings.find((sibling) => {
@@ -61,7 +62,7 @@ export async function findDuplicateDatedReport(report: {
 }
 
 export async function updateReportDraft(reportId: string, edits: ReportDraftEdits) {
-  const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { run: true, previousRun: true } });
+  const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { run: true, previousRun: true, previousBaseline: true } });
   const duplicate = await findDuplicateDatedReport(report);
   if (duplicate) {
     const { periodStart, periodEnd } = computeReportPeriod(report);

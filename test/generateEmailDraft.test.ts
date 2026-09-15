@@ -35,7 +35,7 @@ async function makeRun(clientId: string) {
   });
 }
 
-async function makeReportReadyReport(clientId: string, runId: string) {
+async function makeReportReadyReport(clientId: string, runId: string, extra: { previousRunId?: string; previousBaselineId?: string } = {}) {
   return prisma.rankingReport.create({
     data: {
       clientId,
@@ -43,6 +43,19 @@ async function makeReportReadyReport(clientId: string, runId: string) {
       status: ReportStatus.REPORT_READY,
       analyticsJson: SAMPLE_ANALYTICS,
       clientPdfPath: "/tmp/stub-report.pdf",
+      ...extra,
+    },
+  });
+}
+
+async function makeBaseline(clientId: string, baselineDate: Date) {
+  return prisma.rankingBaseline.create({
+    data: {
+      clientId,
+      sourceFilename: "baseline-test.xlsx",
+      sourceType: "EXCEL",
+      baselineDate,
+      rows: { create: [{ keyword: "test keyword", normalizedKeyword: "test keyword", rankValue: 5, rankDisplay: "5" }] },
     },
   });
 }
@@ -55,6 +68,9 @@ async function cleanupClient(clientId: string) {
   }
   await prisma.rankingRun.deleteMany({ where: { clientId } });
   await prisma.clientReportConfig.deleteMany({ where: { clientId } });
+  const baselines = await prisma.rankingBaseline.findMany({ where: { clientId } });
+  for (const b of baselines) await prisma.rankingBaselineRow.deleteMany({ where: { baselineId: b.id } });
+  await prisma.rankingBaseline.deleteMany({ where: { clientId } });
   await prisma.client.delete({ where: { id: clientId } });
 }
 
@@ -221,6 +237,79 @@ test("retryEmailDraft: EMAIL_DRAFT_FAILED -> REPORT_READY still works as a state
     assert.equal(succeeded.outcome, "SUCCESS");
     const final = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(final.status, ReportStatus.PENDING_APPROVAL);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Regression test confirmed against a real agency report (an actual prior
+// "Client Keyword Ranking Report" PDF, genuinely titled/dated as a range:
+// "17th August 2026 - 31st August 2026" -- baseline date through current
+// run date, never a single repeated day). Before this fix, a report
+// compared against an imported baseline (not a real prior run) had its
+// periodStart fall all the way through to the run's own date -- since
+// previousRun is null for a baseline comparison -- producing a degenerate
+// same-day-to-same-day subject/body instead of the real range.
+test("generateEmailDraft: a baseline comparison uses the baseline's OWN date as periodStart, not the run's date twice", async () => {
+  const client = await makeClient(`Email Draft Test - baseline period ${randomUUID()}`);
+  try {
+    const baseline = await makeBaseline(client.id, new Date("2026-08-17T00:00:00Z"));
+    const run = await prisma.rankingRun.create({
+      data: {
+        clientId: client.id,
+        sourceFilename: "email-draft-test.xlsx",
+        sourceFilePath: "local-test/email-draft-test.xlsx",
+        totalRows: 1,
+        status: "COMPLETED",
+        completedAt: new Date("2026-08-31T00:00:00Z"),
+      },
+    });
+    const report = await makeReportReadyReport(client.id, run.id, { previousBaselineId: baseline.id });
+
+    const result = await generateEmailDraft(report.id);
+    assert.equal(result.outcome, "SUCCESS");
+
+    // formatDate in emailDraft.ts renders as "Aug 17, 2026" / "Aug 31, 2026".
+    assert.match(result.subject, /Aug 17, 2026/, "subject must show the baseline's own date, not the run's date twice");
+    assert.match(result.subject, /Aug 31, 2026/);
+    assert.ok(!result.subject.includes("Aug 31, 2026 to Aug 31, 2026"), "must never collapse to the run's date on both sides");
+    assert.match(result.bodyText, /Aug 17, 2026 - Aug 31, 2026/);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Same principle, the pre-existing (already-correct) run-vs-run path --
+// kept alongside the baseline test above so both comparison paths are
+// covered by the same assertions in one place.
+test("generateEmailDraft: a real prior run's own completedAt is used as periodStart", async () => {
+  const client = await makeClient(`Email Draft Test - run period ${randomUUID()}`);
+  try {
+    const previousRun = await prisma.rankingRun.create({
+      data: {
+        clientId: client.id,
+        sourceFilename: "email-draft-test.xlsx",
+        sourceFilePath: "local-test/email-draft-test.xlsx",
+        totalRows: 1,
+        status: "COMPLETED",
+        completedAt: new Date("2026-08-17T00:00:00Z"),
+      },
+    });
+    const run = await prisma.rankingRun.create({
+      data: {
+        clientId: client.id,
+        sourceFilename: "email-draft-test.xlsx",
+        sourceFilePath: "local-test/email-draft-test.xlsx",
+        totalRows: 1,
+        status: "COMPLETED",
+        completedAt: new Date("2026-08-31T00:00:00Z"),
+      },
+    });
+    const report = await makeReportReadyReport(client.id, run.id, { previousRunId: previousRun.id });
+
+    const result = await generateEmailDraft(report.id);
+    assert.equal(result.outcome, "SUCCESS");
+    assert.match(result.subject, /Aug 17, 2026 to Aug 31, 2026/);
   } finally {
     await cleanupClient(client.id);
   }

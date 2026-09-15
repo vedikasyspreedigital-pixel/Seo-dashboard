@@ -53,7 +53,7 @@ export async function approveAndSendReport(
   // sendEmail call below knows which workspace's ClickUp session to use.
   const reportWithPeriod = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
-    include: { run: true, previousRun: true, client: { include: { workspace: true } } },
+    include: { run: true, previousRun: true, previousBaseline: true, client: { include: { workspace: true } } },
   });
   const workspaceSlug = reportWithPeriod.client.workspace?.slug ?? null;
   const duplicate = await findDuplicateDatedReport(reportWithPeriod);
