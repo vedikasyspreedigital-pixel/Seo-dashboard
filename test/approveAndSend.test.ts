@@ -14,7 +14,7 @@ async function makeClient(name: string) {
   return prisma.client.create({ data: { name } });
 }
 
-async function makeRun(clientId: string) {
+async function makeRun(clientId: string, completedAt?: Date) {
   return prisma.rankingRun.create({
     data: {
       clientId,
@@ -22,6 +22,7 @@ async function makeRun(clientId: string) {
       sourceFilePath: "local-test/approve-send-test.xlsx",
       totalRows: 1,
       status: "COMPLETED",
+      completedAt,
     },
   });
 }
@@ -407,6 +408,40 @@ test("audit-comment observability: a sender that doesn't model an audit-comment 
 
     const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(persisted.auditCommentPosted, null, "undefined from the sender must be stored as null, not misrepresented as false");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Regression coverage for the gap raised directly after shipping the
+// Save-Changes-only version of this guard: a report that's never had Save
+// Changes clicked on it (approved straight from a freshly generated draft)
+// would otherwise skip the duplicate-date check entirely and reach a real
+// send. This proves the send-time gate in approveAndSendReport itself
+// catches it, independent of updateReportDraft.
+test("approval is refused when another SENT report for the same client already covers the same date range, even without ever calling Save Changes", async () => {
+  const client = await makeClient(`Approve Send Test - duplicate date ${randomUUID()}`);
+  try {
+    const sameDay = new Date("2026-09-15T09:00:00.000Z");
+    const sentRun = await makeRun(client.id, sameDay);
+    const sentReport = await makePendingApprovalReport(client.id, sentRun.id);
+    await prisma.rankingReport.update({ where: { id: sentReport.id }, data: { status: ReportStatus.SENT, sentAt: new Date() } });
+
+    const laterSameDayRun = await makeRun(client.id, new Date("2026-09-15T15:30:00.000Z"));
+    const draftReport = await makePendingApprovalReport(client.id, laterSameDayRun.id);
+
+    const sentCalls: unknown[] = [];
+    const result = await approveAndSendReport(draftReport.id, {
+      approvedBy: "a@example.com",
+      sendEmail: createMockEmailSender((params) => sentCalls.push(params)),
+    });
+
+    assert.equal(result.outcome, "DUPLICATE_DATE");
+    if (result.outcome === "DUPLICATE_DATE") assert.equal(result.conflictingReportId, sentReport.id);
+    assert.equal(sentCalls.length, 0, "the sender must never be invoked once a duplicate is detected");
+
+    const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: draftReport.id } });
+    assert.equal(unchanged.status, ReportStatus.PENDING_APPROVAL, "a refused approval must never transition the report");
   } finally {
     await cleanupClient(client.id);
   }

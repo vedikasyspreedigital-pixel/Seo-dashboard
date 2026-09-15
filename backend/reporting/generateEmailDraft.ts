@@ -25,6 +25,23 @@ export function resolveClickupTaskUrl(config: { clickupTaskId?: string | null; c
 
 export type GenerateEmailDraftResult = { outcome: "SUCCESS"; subject: string; bodyText: string; bodyHtml?: string; recipients: unknown; cc: unknown };
 
+/**
+ * The reporting period a report covers -- start is the prior comparison
+ * run's completion (or, absent one, the same as end, e.g. a client's first
+ * report with no prior run), end is this report's own run completion.
+ * Shared by generateEmailDraft (for the subject/body dates) and the
+ * duplicate-date check on report edit (findDuplicateDatedReport below), so
+ * both always agree on what "this report's date range" means.
+ */
+export function computeReportPeriod(report: {
+  run: { completedAt: Date | null; createdAt: Date };
+  previousRun: { completedAt: Date | null; createdAt: Date } | null;
+}): { periodStart: Date; periodEnd: Date } {
+  const periodStart = report.previousRun?.completedAt ?? report.previousRun?.createdAt ?? report.run.completedAt ?? report.run.createdAt;
+  const periodEnd = report.run.completedAt ?? report.run.createdAt;
+  return { periodStart, periodEnd };
+}
+
 export async function generateEmailDraft(reportId: string): Promise<GenerateEmailDraftResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
@@ -36,8 +53,7 @@ export async function generateEmailDraft(reportId: string): Promise<GenerateEmai
     orderBy: { createdAt: "desc" },
   });
 
-  const periodStart = report.previousRun?.completedAt ?? report.previousRun?.createdAt ?? report.run.completedAt ?? report.run.createdAt;
-  const periodEnd = report.run.completedAt ?? report.run.createdAt;
+  const { periodStart, periodEnd } = computeReportPeriod(report);
 
   const draft = buildDefaultEmailDraft({ clientName: report.client.name, periodStart, periodEnd });
 

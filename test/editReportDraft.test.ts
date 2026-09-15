@@ -4,16 +4,16 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
 import { updateReportDraft } from "../backend/reporting/editReportDraft.js";
 import { rejectReport } from "../backend/reporting/reportTransitions.js";
-import { InvalidReportTransitionError } from "../backend/reporting/errors.js";
+import { InvalidReportTransitionError, DuplicateReportDateError } from "../backend/reporting/errors.js";
 import { ReportStatus } from "@prisma/client";
 
 async function makeClient(name: string) {
   return prisma.client.create({ data: { name } });
 }
 
-async function makeRun(clientId: string) {
+async function makeRun(clientId: string, completedAt?: Date) {
   return prisma.rankingRun.create({
-    data: { clientId, sourceFilename: "edit-draft-test.xlsx", sourceFilePath: "local-test/edit-draft-test.xlsx", totalRows: 1, status: "COMPLETED" },
+    data: { clientId, sourceFilename: "edit-draft-test.xlsx", sourceFilePath: "local-test/edit-draft-test.xlsx", totalRows: 1, status: "COMPLETED", completedAt },
   });
 }
 
@@ -140,6 +140,90 @@ test("concurrency: an edit racing a concurrent reject can never land on an alrea
     }
   } finally {
     await cleanupClient(client.id);
+  }
+});
+
+// Regression coverage for the duplicate-date-range guard: Save Changes must
+// catch the case a duplicate run/upload produces -- two separate reports
+// for the same client covering the same real-world period, one of which
+// already went out. Compared by calendar day (not exact timestamp), since
+// two runs completed minutes apart on the same day are still the same
+// reporting period to a client reading two identical-looking emails.
+test("Save Changes is refused when another SENT report for the same client covers the same date range", async () => {
+  const client = await makeClient(`Edit Draft Test - duplicate date ${randomUUID()}`);
+  try {
+    const sameDay = new Date("2026-09-15T09:00:00.000Z");
+    const sentRun = await makeRun(client.id, sameDay);
+    const sentReport = await makeReport(client.id, sentRun.id, ReportStatus.SENT);
+
+    const laterSameDayRun = await makeRun(client.id, new Date("2026-09-15T15:30:00.000Z"));
+    const draftReport = await makeReport(client.id, laterSameDayRun.id, ReportStatus.PENDING_APPROVAL);
+
+    await assert.rejects(
+      () => updateReportDraft(draftReport.id, { emailSubject: "Should not apply" }),
+      (err: unknown) => {
+        assert.ok(err instanceof DuplicateReportDateError);
+        assert.equal(err.conflictingReportId, sentReport.id);
+        return true;
+      },
+    );
+
+    const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: draftReport.id } });
+    assert.equal(unchanged.emailSubject, "Original subject", "a refused save must never partially apply");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("Save Changes proceeds when the date range differs from every SENT report for the client", async () => {
+  const client = await makeClient(`Edit Draft Test - different date ${randomUUID()}`);
+  try {
+    const sentRun = await makeRun(client.id, new Date("2026-08-01T09:00:00.000Z"));
+    await makeReport(client.id, sentRun.id, ReportStatus.SENT);
+
+    const laterRun = await makeRun(client.id, new Date("2026-09-15T09:00:00.000Z"));
+    const draftReport = await makeReport(client.id, laterRun.id, ReportStatus.PENDING_APPROVAL);
+
+    const updated = await updateReportDraft(draftReport.id, { emailSubject: "A genuinely new period" });
+    assert.equal(updated.emailSubject, "A genuinely new period");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("Save Changes proceeds when the matching-date sibling report was never SENT (only SENT reports count as a real duplicate)", async () => {
+  const client = await makeClient(`Edit Draft Test - unsent sibling same date ${randomUUID()}`);
+  try {
+    const sameDay = new Date("2026-09-15T09:00:00.000Z");
+    const otherRun = await makeRun(client.id, sameDay);
+    await makeReport(client.id, otherRun.id, ReportStatus.REJECTED);
+
+    const draftRun = await makeRun(client.id, sameDay);
+    const draftReport = await makeReport(client.id, draftRun.id, ReportStatus.PENDING_APPROVAL);
+
+    const updated = await updateReportDraft(draftReport.id, { emailSubject: "Fine, nothing was ever sent for this date" });
+    assert.equal(updated.emailSubject, "Fine, nothing was ever sent for this date");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("Save Changes ignores a same-date SENT report belonging to a different client", async () => {
+  const clientA = await makeClient(`Edit Draft Test - cross-client A ${randomUUID()}`);
+  const clientB = await makeClient(`Edit Draft Test - cross-client B ${randomUUID()}`);
+  try {
+    const sameDay = new Date("2026-09-15T09:00:00.000Z");
+    const sentRun = await makeRun(clientA.id, sameDay);
+    await makeReport(clientA.id, sentRun.id, ReportStatus.SENT);
+
+    const draftRun = await makeRun(clientB.id, sameDay);
+    const draftReport = await makeReport(clientB.id, draftRun.id, ReportStatus.PENDING_APPROVAL);
+
+    const updated = await updateReportDraft(draftReport.id, { emailSubject: "Different client, same date is fine" });
+    assert.equal(updated.emailSubject, "Different client, same date is fine");
+  } finally {
+    await cleanupClient(clientA.id);
+    await cleanupClient(clientB.id);
   }
 });
 

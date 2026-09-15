@@ -10,7 +10,7 @@ import { approveAndSendReport } from "../../reporting/approveAndSend.js";
 import { generateEmailDraft, regenerateEmailDraft } from "../../reporting/generateEmailDraft.js";
 import { createReportForRun } from "../../reporting/createReport.js";
 import { buildReport } from "../../reporting/buildReport.js";
-import { InvalidReportTransitionError } from "../../reporting/errors.js";
+import { InvalidReportTransitionError, DuplicateReportDateError } from "../../reporting/errors.js";
 import type { SendEmailFn } from "../../reporting/emailSender.js";
 import type { GenerateExcelAttachmentFn } from "../../reporting/generateExcelAttachment.js";
 import { requireAuth } from "../../auth/requireAuth.js";
@@ -161,7 +161,7 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     // shape exactly what the frontend has always gotten.
     const report = await prisma.rankingReport.findUniqueOrThrow({
       where: { id: req.params.id },
-      include: { client: true, run: true, previousRun: true },
+      include: { client: true, run: true, previousRun: true, previousBaseline: true },
     });
     res.json(report);
   });
@@ -221,6 +221,10 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
         res.status(409).json({ error: err.message });
         return;
       }
+      if (err instanceof DuplicateReportDateError) {
+        res.status(409).json({ error: err.message, conflictingReportId: err.conflictingReportId });
+        return;
+      }
       throw err;
     }
   });
@@ -272,7 +276,14 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     if (!(await findOwnedReportOrRespond(req, res, req.params.id as string, { requireActive: true }))) return;
     const approvedBy = req.authUser!.email;
     const result = await approveAndSendReport(req.params.id as string, { approvedBy, sendEmail, generateExcelAttachment });
-    const statusCode = result.outcome === "SENT" ? 200 : result.outcome === "ALREADY_PROCESSED" ? 409 : result.outcome === "NO_RECIPIENTS" ? 422 : 502;
+    const statusCode =
+      result.outcome === "SENT"
+        ? 200
+        : result.outcome === "ALREADY_PROCESSED" || result.outcome === "DUPLICATE_DATE"
+          ? 409
+          : result.outcome === "NO_RECIPIENTS"
+            ? 422
+            : 502;
     res.status(statusCode).json(result);
   });
 

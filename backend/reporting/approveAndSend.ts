@@ -5,6 +5,8 @@ import { ReportStatus } from "@prisma/client";
 import { approveReport, markSending, markSendFailed, markSent } from "./reportTransitions.js";
 import { InvalidReportTransitionError } from "./errors.js";
 import { notifyReportSent, notifyReportSendFailed } from "../notifications/createNotification.js";
+import { findDuplicateDatedReport } from "./editReportDraft.js";
+import { computeReportPeriod } from "./generateEmailDraft.js";
 import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
 
@@ -17,6 +19,7 @@ export type ApproveAndSendResult =
   | { outcome: "SENT"; messageId: string }
   | { outcome: "NO_RECIPIENTS"; errorMessage: string }
   | { outcome: "ALREADY_PROCESSED"; errorMessage: string }
+  | { outcome: "DUPLICATE_DATE"; errorMessage: string; conflictingReportId: string }
   | { outcome: "SEND_FAILED"; errorMessage: string };
 
 export async function approveAndSendReport(
@@ -34,6 +37,27 @@ export async function approveAndSendReport(
   // successful send (double-click, retried request) never reaches sendEmail.
   if (report.status !== ReportStatus.PENDING_APPROVAL && report.status !== ReportStatus.APPROVED) {
     return { outcome: "ALREADY_PROCESSED", errorMessage: `Report is ${report.status}, not awaiting approval.` };
+  }
+
+  // Same guard updateReportDraft's Save Changes enforces (see
+  // editReportDraft.ts) -- duplicated here because Save Changes is never
+  // guaranteed to run: a user who approves a freshly-generated draft
+  // without editing anything goes straight from generate to Approve & Send,
+  // which would otherwise skip the check entirely and let a real duplicate
+  // email out. This is the actual send-time gate; Save Changes is just an
+  // earlier opportunity to catch it. A separate query (rather than
+  // widening the `report`/`current` fetch above with run/previousRun) so
+  // `current` below stays the plain RankingReport shape every
+  // reportTransitions.ts update already returns.
+  const reportWithPeriod = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { run: true, previousRun: true } });
+  const duplicate = await findDuplicateDatedReport(reportWithPeriod);
+  if (duplicate) {
+    const { periodStart, periodEnd } = computeReportPeriod(reportWithPeriod);
+    return {
+      outcome: "DUPLICATE_DATE",
+      errorMessage: `A report for this client covering the same date range (${periodStart.toDateString()} - ${periodEnd.toDateString()}) was already sent (report ${duplicate.id}) -- resolve the duplicate before sending this one.`,
+      conflictingReportId: duplicate.id,
+    };
   }
 
   const recipients = Array.isArray(report.resolvedRecipients) ? (report.resolvedRecipients as string[]) : [];

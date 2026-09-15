@@ -1,6 +1,9 @@
 import type { Prisma } from "@prisma/client";
 import { ReportStatus } from "@prisma/client";
+import { prisma } from "../db/client.js";
 import { guardedUpdate } from "./reportTransitions.js";
+import { computeReportPeriod } from "./generateEmailDraft.js";
+import { DuplicateReportDateError } from "./errors.js";
 
 // Human editing of the draft (step 15 of the reporting design): only ever
 // permitted while a report is sitting in the approval queue -- editing a
@@ -26,7 +29,45 @@ export interface ReportDraftEdits {
   attachmentSource?: string;
 }
 
+/**
+ * Finds an already-SENT report for the same client covering the identical
+ * date range (compared by calendar day, not exact timestamp -- two runs
+ * completed minutes apart on the same day still count as the same
+ * reporting period) as `report`. This is what catches the case a duplicate
+ * upload/run produces: two separate runs, two separate reports, but the
+ * same real-world period -- one of which may already have gone out to the
+ * client. Returns null when there's nothing to warn about (including when
+ * `report` itself has no prior comparison and no other SENT report exists).
+ */
+export async function findDuplicateDatedReport(report: {
+  id: string;
+  clientId: string;
+  run: { completedAt: Date | null; createdAt: Date };
+  previousRun: { completedAt: Date | null; createdAt: Date } | null;
+}) {
+  const { periodStart, periodEnd } = computeReportPeriod(report);
+  const startDay = periodStart.toDateString();
+  const endDay = periodEnd.toDateString();
+
+  const siblings = await prisma.rankingReport.findMany({
+    where: { clientId: report.clientId, id: { not: report.id }, status: ReportStatus.SENT },
+    include: { run: true, previousRun: true },
+  });
+
+  return siblings.find((sibling) => {
+    const siblingPeriod = computeReportPeriod(sibling);
+    return siblingPeriod.periodStart.toDateString() === startDay && siblingPeriod.periodEnd.toDateString() === endDay;
+  }) ?? null;
+}
+
 export async function updateReportDraft(reportId: string, edits: ReportDraftEdits) {
+  const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { run: true, previousRun: true } });
+  const duplicate = await findDuplicateDatedReport(report);
+  if (duplicate) {
+    const { periodStart, periodEnd } = computeReportPeriod(report);
+    throw new DuplicateReportDateError(reportId, duplicate.id, periodStart, periodEnd);
+  }
+
   const data: Prisma.RankingReportUpdateManyMutationInput = {};
   if (edits.emailSubject !== undefined) data.emailSubject = edits.emailSubject;
   if (edits.emailBody !== undefined) data.emailBody = edits.emailBody;
