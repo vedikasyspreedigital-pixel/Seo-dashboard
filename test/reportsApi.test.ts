@@ -637,6 +637,67 @@ test("GET /api/reports requires authentication -- the whole reports router is ga
   assert.equal(res.status, 401);
 });
 
+// Regression test for a real report from a live send: an edited
+// subject/body, saved via Save Changes, was NOT what actually reached
+// ClickUp -- the send still used the original draft text. Traces the full
+// flow a user actually drives: generate the draft (REPORT_READY ->
+// PENDING_APPROVAL), edit it (PATCH, Save Changes), then Approve & Send.
+// Confirms the exact bytes handed to sendEmail() are the edited ones, not
+// whatever generateEmailDraft first produced. (Root cause traced to the
+// ClickUp browser automation itself -- clickupEmailSender.ts's
+// fillFirstMatch used to only click+type into a composer field, never
+// clearing pre-existing content first, so a field ClickUp didn't leave
+// empty got the new value typed alongside the old one instead of
+// replacing it. Fixed by selecting all existing content before typing.
+// This test covers the app-side data flow, which was already correct --
+// it guards against a regression there, not the browser-automation fix,
+// which isn't exercisable against a mock sender.)
+test("edited subject/body from Save Changes -- not the originally generated draft -- is exactly what approve-and-send passes to sendEmail", async () => {
+  const sentCalls: unknown[] = [];
+  const app = createApp(unusedDataForSeoMock, "mock", undefined, {
+    sendEmail: createMockEmailSender((p) => sentCalls.push(p)),
+  });
+  const client = await makeClient(`Reports API Test - edit then send ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makeReportReadyReport(client.id, run.id);
+
+    // Step 1: generate an email draft (REPORT_READY -> PENDING_APPROVAL).
+    const draftRes = await authedApp(app).post(`/api/reports/${report.id}/generate-email-draft`);
+    assert.equal(draftRes.status, 200, JSON.stringify(draftRes.body));
+    const originalSubject = draftRes.body.subject;
+    const originalBody = draftRes.body.bodyText;
+    assert.ok(originalSubject && originalBody, "generateEmailDraft must have produced a real subject/body to edit");
+
+    // Step 2 + 3: edit subject/body, Save Changes.
+    const patchRes = await authedApp(app)
+      .patch(`/api/reports/${report.id}`)
+      .send({ emailSubject: "EDITED SUBJECT -- not the original", emailBody: "EDITED BODY -- not the original" });
+    assert.equal(patchRes.status, 200);
+    assert.equal(patchRes.body.emailSubject, "EDITED SUBJECT -- not the original");
+    assert.equal(patchRes.body.emailBody, "EDITED BODY -- not the original");
+    assert.notEqual(patchRes.body.emailSubject, originalSubject);
+    assert.notEqual(patchRes.body.emailBody, originalBody);
+
+    // Also give it recipients -- generateEmailDraft resolves them from
+    // ClientReportConfig, which this test's client has none of.
+    await authedApp(app).patch(`/api/reports/${report.id}`).send({ resolvedRecipients: ["ops@example.com"] });
+
+    // Step 4: Approve & Send.
+    const sendRes = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
+    assert.equal(sendRes.status, 200, JSON.stringify(sendRes.body));
+    assert.equal(sendRes.body.outcome, "SENT");
+
+    // Step 5: sendEmail() must have received the EDITED values, never the
+    // originally generated draft.
+    assert.equal(sentCalls.length, 1);
+    assert.equal((sentCalls[0] as { subject: string }).subject, "EDITED SUBJECT -- not the original");
+    assert.equal((sentCalls[0] as { bodyText: string }).bodyText, "EDITED BODY -- not the original");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test.after(async () => {
   await prisma.$disconnect();
 });

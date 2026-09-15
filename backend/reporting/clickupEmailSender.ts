@@ -850,6 +850,15 @@ async function fillFirstMatch(page: Page, candidates: Array<() => Locator>, valu
       try {
         await locator.click({ timeout: 3000 });
         if (options.settleMs) await page.waitForTimeout(options.settleMs);
+        // click() only moves the caret -- it never clears whatever is
+        // already in the field. Traced from a real report where an edited
+        // subject/body never reached the client: the composer's
+        // Subject/Body weren't actually empty (ClickUp appears to persist
+        // draft state per task across composer opens), so the edited value
+        // got typed in ALONGSIDE the stale one instead of replacing it,
+        // and the old text won out. Select-all first so typing always
+        // overwrites the full field, regardless of what was already there.
+        await page.keyboard.press("Control+A");
         await page.keyboard.type(value, { delay: 20 });
         await page.keyboard.press("Enter").catch(() => {});
         return true;
