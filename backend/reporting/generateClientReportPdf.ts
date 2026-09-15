@@ -32,14 +32,6 @@ interface TableRow {
   currentRank: number | null;
 }
 
-const MOVEMENT_COLOR: Record<MovementKind, string> = {
-  improved: "#1a7f37",
-  new: "#1a7f37",
-  dropped: "#c0362c",
-  lost: "#c0362c",
-  unchanged: "#6b7280",
-};
-
 const RANK_DISPLAY = (rank: number | null): string => (rank === null ? "Not in 100" : String(rank));
 
 /**
@@ -190,65 +182,28 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/**
+ * Matches the reference SySpree client report layout exactly: a gray
+ * branded banner (logo left, title/domain/date right), then a single
+ * keyword table with two orange header rows -- no summary stat cards, no
+ * movement/color column. Current rank is shown before previous rank
+ * (matching the reference's own column order), with the real dates as
+ * column headers rather than generic "Current"/"Previous" labels.
+ */
 function buildHtml(input: ClientReportPdfInput): string {
-  const { rows, summary } = buildRowsAndSummary(input.analytics);
+  const { rows } = buildRowsAndSummary(input.analytics);
 
-  const changeColor = summary.overallRankingChange.startsWith("↑")
-    ? MOVEMENT_COLOR.improved
-    : summary.overallRankingChange.startsWith("↓")
-      ? MOVEMENT_COLOR.dropped
-      : MOVEMENT_COLOR.unchanged;
-
-  // No previous run/baseline to compare against -- movement-language cards
-  // ("Entered Top 100", "Overall Ranking Change", ...) would misrepresent a
-  // first-ever run as if it had a before-state. Show current standing only.
-  const summaryCards = summary.hasComparison
-    ? [
-        { label: "Total Keywords Tracked", value: String(summary.totalKeywords), color: "#111827" },
-        { label: "Keywords Improved ↑", value: String(summary.improved), color: MOVEMENT_COLOR.improved },
-        { label: "Keywords Dropped ↓", value: String(summary.dropped), color: MOVEMENT_COLOR.dropped },
-        { label: "Keywords Unchanged", value: String(summary.unchanged), color: MOVEMENT_COLOR.unchanged },
-        { label: "Entered Top 100", value: String(summary.enteredTop100), color: MOVEMENT_COLOR.improved },
-        { label: "Dropped Out of Top 100", value: String(summary.droppedOutOfTop100), color: MOVEMENT_COLOR.dropped },
-        { label: "Previous Average Rank", value: summary.previousAverageRank === null ? "—" : String(summary.previousAverageRank), color: "#111827" },
-        { label: "Current Average Rank", value: summary.currentAverageRank === null ? "—" : String(summary.currentAverageRank), color: "#111827" },
-      ]
-        .map(
-          (c) => `<div class="stat"><p class="stat-label">${escapeHtml(c.label)}</p><p class="stat-value" style="color:${c.color}">${escapeHtml(c.value)}</p></div>`,
-        )
-        .join("") +
-      `<div class="stat stat-wide"><p class="stat-label">Overall Ranking Change</p><p class="stat-value stat-value-text" style="color:${changeColor}">${escapeHtml(summary.overallRankingChange)}</p></div>`
-    : [
-        { label: "Total Keywords Tracked", value: String(summary.totalKeywords), color: "#111827" },
-        { label: "Current Average Rank", value: summary.currentAverageRank === null ? "—" : String(summary.currentAverageRank), color: "#111827" },
-        { label: "Top 3 Rankings", value: String(summary.top3Count), color: MOVEMENT_COLOR.improved },
-        { label: "Top 10 Rankings", value: String(summary.top10Count), color: MOVEMENT_COLOR.improved },
-        { label: "Not in Top 100", value: String(summary.notIn100Count), color: MOVEMENT_COLOR.dropped },
-      ]
-        .map(
-          (c) => `<div class="stat"><p class="stat-label">${escapeHtml(c.label)}</p><p class="stat-value" style="color:${c.color}">${escapeHtml(c.value)}</p></div>`,
-        )
-        .join("");
-
-  // rows is already grouped ranked-first (see buildRowsAndSummary) -- find
-  // where the "Not in Top 100" tail starts so a section-break row can be
-  // injected right before it, rather than letting those rows blend into the
-  // ranked list with no visual distinction.
-  const notInTop100StartIndex = rows.findIndex((r) => r.currentRank === null);
+  const currentDateLabel = formatDate(input.currentRunDate);
+  const previousDateLabel = input.previousRunDate ? formatDate(input.previousRunDate) : "No prior run";
 
   const tableRows = rows
-    .map((r, i) => {
-      const sectionBreak =
-        i === notInTop100StartIndex
-          ? `<tr class="section-break"><td colspan="4">Not in Top 100</td></tr>`
-          : "";
-      return `${sectionBreak}<tr>
+    .map(
+      (r) => `<tr>
         <td>${escapeHtml(r.keyword)}</td>
-        <td class="num">${escapeHtml(r.previousRankLabel)}</td>
         <td class="num">${escapeHtml(r.currentRankLabel)}</td>
-        <td class="num" style="color:${MOVEMENT_COLOR[r.kind]}; font-weight:600;">${escapeHtml(r.movementLabel)}</td>
-      </tr>`;
-    })
+        <td class="num">${escapeHtml(r.previousRankLabel)}</td>
+      </tr>`,
+    )
     .join("");
 
   return `<!doctype html>
@@ -256,60 +211,46 @@ function buildHtml(input: ClientReportPdfInput): string {
 <head>
 <meta charset="utf-8">
 <style>
-  @page { size: A4; margin: 16mm 14mm; }
+  @page { size: A4; margin: 14mm 14mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #111827; margin: 0; }
-  .brand-header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #111827; padding-bottom: 10px; margin-bottom: 16px; }
-  .brand-wordmark { font-size: 20px; font-weight: 800; letter-spacing: 0.03em; color: #111827; }
-  .brand-wordmark span { color: #1a7f37; }
-  .brand-tagline { font-size: 9px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
-  h1 { font-size: 16px; letter-spacing: 0.03em; margin: 0 0 14px; text-transform: uppercase; }
-  .meta { font-size: 11px; color: #4b5563; line-height: 1.6; margin-bottom: 18px; }
-  .meta b { color: #111827; }
-  .summary-title { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; margin: 0 0 10px; color: #111827; }
-  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 22px; }
-  .stat { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; }
-  .stat-wide { grid-column: 1 / -1; }
-  .stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: #6b7280; margin: 0 0 4px; }
-  .stat-value { font-size: 20px; font-weight: 700; margin: 0; }
-  .stat-value-text { font-size: 14px; }
+  .brand-header { display: flex; align-items: center; justify-content: space-between; background: #58595b; color: #ffffff; padding: 14px 18px; margin-bottom: 18px; }
+  .brand-wordmark { font-size: 26px; font-weight: 800; letter-spacing: 0.01em; color: #ffffff; }
+  .brand-wordmark span { color: #1a1a1a; -webkit-text-stroke: 0.5px #f2a71b; }
+  .brand-meta { text-align: right; line-height: 1.5; }
+  .brand-meta .title { font-size: 13px; font-weight: 700; }
+  .brand-meta .line { font-size: 11px; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
   thead { display: table-header-group; }
   tr { page-break-inside: avoid; }
-  th { text-align: left; background: #f3f4f6; padding: 7px 10px; border-bottom: 1px solid #d1d5db; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #374151; }
+  th { text-align: left; background: #e8791a; color: #ffffff; padding: 7px 10px; font-size: 10.5px; font-weight: 700; border: 1px solid #ffffff; }
+  th.label-row { background: #e8791a; }
   td { padding: 6px 10px; border-bottom: 1px solid #eceef1; }
-  td.num, th.num { text-align: right; }
+  td.num, th.num { text-align: center; }
   tr:nth-child(even) td { background: #fafafa; }
-  tr.section-break td { background: #eef0f3; color: #374151; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 8px 10px; border-bottom: 1px solid #d1d5db; border-top: 2px solid #d1d5db; }
 </style>
 </head>
 <body>
   <div class="brand-header">
-    <div>
-      <div class="brand-wordmark">Sy<span>Spree</span></div>
-      <div class="brand-tagline">SySpree Digital Pvt. Limited &middot; SySpree Digital PTE. Limited</div>
+    <div class="brand-wordmark">Sy<span>spree</span></div>
+    <div class="brand-meta">
+      <div class="title">Client Keyword Ranking Report</div>
+      ${input.clientDomain ? `<div class="line">${escapeHtml(input.clientDomain)}</div>` : ""}
+      <div class="line">${currentDateLabel}</div>
     </div>
   </div>
 
-  <h1>Client Keyword Ranking Report</h1>
-  <p class="meta">
-    <b>Client:</b> ${escapeHtml(input.clientName)}<br>
-    ${input.clientDomain ? `<b>Domain:</b> ${escapeHtml(input.clientDomain)}<br>` : ""}
-    <b>Current Report Date:</b> ${formatDate(input.currentRunDate)}<br>
-    <b>Compared With:</b> ${input.previousRunDate ? formatDate(input.previousRunDate) : "No prior run"}
-  </p>
-
-  <p class="summary-title">Ranking Performance Summary</p>
-  <div class="stats">${summaryCards}</div>
-
-  <p class="summary-title">Keyword Ranking Table</p>
   <table>
     <thead>
       <tr>
+        <th class="label-row">Current Ranking Status:</th>
+        <th class="num label-row">Google.ae</th>
+        <th class="num label-row">Google.ae</th>
+      </tr>
+      <tr>
         <th>Keyword</th>
-        <th class="num">Previous Rank</th>
-        <th class="num">Current Rank</th>
-        <th class="num">Improvement / Dropped</th>
+        <th class="num">${currentDateLabel}</th>
+        <th class="num">${previousDateLabel}</th>
       </tr>
     </thead>
     <tbody>${tableRows}</tbody>
