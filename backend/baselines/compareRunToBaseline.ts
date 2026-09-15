@@ -1,5 +1,5 @@
 import { prisma } from "../db/client.js";
-import { computeMatchedPreviousTotals, computeMovements, computeTotals, type RankRow } from "../reporting/computeRunAnalytics.js";
+import { computeMatchedPreviousTotals, computeMovements, computeTotals, hasAnyMatch, type RankRow } from "../reporting/computeRunAnalytics.js";
 import type { RunAnalytics } from "../reporting/computeRunAnalytics.js";
 import { normalizeKeyword } from "./normalizeKeyword.js";
 
@@ -46,8 +46,14 @@ export async function compareRunToBaseline(runId: string, baselineId: string): P
   }));
 
   const totals = computeTotals(currentRows);
-  const previousTotals = computeMatchedPreviousTotals(currentRows, previousRows);
   const movements = computeMovements(currentRows, previousRows);
+  // hasComparison reflects whether anything actually MATCHED, not merely
+  // whether a baseline was selected -- a baseline that shares zero
+  // keywords with the current run (wrong file selected, or a genuinely
+  // unrelated comparison) must be indistinguishable from having selected
+  // nothing at all. See hasAnyMatch's doc comment in computeRunAnalytics.ts.
+  const hasComparison = hasAnyMatch(movements);
+  const previousTotals = hasComparison ? computeMatchedPreviousTotals(currentRows, previousRows) : null;
 
-  return { runId, previousRunId: null, totals, previousTotals, hasComparison: true, movements };
+  return { runId, previousRunId: null, totals, previousTotals, hasComparison, movements };
 }

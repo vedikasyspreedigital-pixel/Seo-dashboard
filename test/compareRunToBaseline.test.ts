@@ -175,16 +175,16 @@ test("compareRunToBaseline: duplicate normalized keywords on the baseline side c
   }
 });
 
-// Regression test for a real report: comparing a run against a baseline
-// with ZERO overlapping keywords (e.g. a baseline file uploaded for the
-// wrong client during testing) still showed a real-looking "Previous
-// Average Rank" on the generated PDF -- computeTotals(previousRows) used
-// to unconditionally average the baseline's OWN keywords regardless of
-// whether any of them matched anything in the current run. Every current
-// keyword correctly landed in newlyTracked (confirmed not the bug); the
-// bug was previousTotals.averageRank silently reflecting the unrelated
-// baseline's own average instead of being null ("nothing to compare").
-test("compareRunToBaseline: previousTotals.averageRank is null when the baseline shares NO keywords with the run, not the baseline's own unrelated average", async () => {
+// Regression coverage for the clarified rule (confirmed against a real
+// production report: client "demo testing", run keywords compared
+// against an unrelated "Emirates Sound" baseline of 35 car-accessories
+// keywords -- zero overlap, yet the PDF still showed a real-looking
+// "Previous Average Rank: 12.2" borrowed from that unrelated baseline's
+// own average). A comparison exists ONLY when at least one keyword
+// actually matches -- zero overlap must be indistinguishable from having
+// selected no baseline at all: no previous rank, no movement, no
+// previous average, current rank only.
+test("zero-match: a baseline sharing NO keywords with the run behaves exactly like no comparison at all", async () => {
   const client = await makeClient();
   try {
     const baseline = await makeBaseline(client.id, [
@@ -192,15 +192,45 @@ test("compareRunToBaseline: previousTotals.averageRank is null when the baseline
       { keyword: "unrelated keyword two", rankValue: 21, rankDisplay: "21" },
     ]); // real average of these two is 12 -- must never leak into the current report
     const run = await makeRun(client.id);
-    await makeRow(run.id, "executive coaching", null, "Not in 100");
+    await makeRow(run.id, "executive coaching", 5, "5");
     await makeRow(run.id, "team building activities", null, "Not in 100");
 
     const analytics = await compareRunToBaseline(run.id, baseline.id);
 
-    assert.equal(analytics.hasComparison, true, "a baseline WAS selected -- this is a real comparison, just with nothing matched");
-    assert.equal(analytics.previousTotals?.averageRank, null, "must not surface the unrelated baseline's own average rank (12) as if it were this run's previous state");
-    assert.equal(analytics.previousTotals?.totalKeywords, 0);
+    assert.equal(analytics.hasComparison, false, "zero keyword overlap must read as no comparison, not as 'compared, nothing matched'");
+    assert.equal(analytics.previousTotals, null, "no previous data to summarize -- null outright, same as no baseline at all");
+    assert.deepEqual(analytics.movements.improved, []);
+    assert.deepEqual(analytics.movements.declined, []);
+    assert.deepEqual(analytics.movements.unchanged, []);
     assert.equal(analytics.movements.newlyTracked.length, 2, "every current keyword is newlyTracked -- none of them matched anything in the unrelated baseline");
+    // Current rank must still be shown regardless of comparison outcome.
+    assert.equal(analytics.totals.totalKeywords, 2);
+    assert.equal(analytics.totals.averageRank, 5);
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+// Full match: every current keyword has a corresponding baseline row.
+test("full-match: every current keyword has a matching baseline row -- previousTotals reflects the entire matched set", async () => {
+  const client = await makeClient();
+  try {
+    const baseline = await makeBaseline(client.id, [
+      { keyword: "kw-a", rankValue: 10, rankDisplay: "10" },
+      { keyword: "kw-b", rankValue: 20, rankDisplay: "20" },
+    ]);
+    const run = await makeRun(client.id);
+    await makeRow(run.id, "kw-a", 5, "5");
+    await makeRow(run.id, "kw-b", 20, "20");
+
+    const analytics = await compareRunToBaseline(run.id, baseline.id);
+
+    assert.equal(analytics.hasComparison, true);
+    assert.equal(analytics.previousTotals?.totalKeywords, 2);
+    assert.equal(analytics.previousTotals?.averageRank, 15); // (10+20)/2
+    assert.equal(analytics.movements.newlyTracked.length, 0, "nothing is newlyTracked when every current keyword matched");
+    assert.equal(analytics.movements.improved.length, 1);
+    assert.equal(analytics.movements.unchanged.length, 1);
   } finally {
     await cleanup(client.id);
   }

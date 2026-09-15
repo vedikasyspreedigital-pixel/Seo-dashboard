@@ -44,16 +44,31 @@ export async function createReportForRun(
   // know which case applies. Neither is required -- computeRunAnalytics/
   // compareRunToBaseline both handle "nothing to compare against" fine
   // (empty movements, no invented improved/declined).
+  //
+  // An EXPLICIT choice is deliberately NOT restricted to the same client:
+  // the comparison is keyword-matching-based (computeMovements only ever
+  // pairs up rows whose keyword/rowUid actually matches), so a comparison
+  // file from a different client is harmless -- it either shares real
+  // keywords (a genuine, intentional comparison) or shares none, in which
+  // case hasComparison itself comes back false and nothing about the
+  // "wrong" client's data is surfaced. Workspace-level authorization for
+  // previousRunId/previousBaselineId is already enforced by the route
+  // (findOwnedRunOrRespond / the equivalent baseline check in reports.ts)
+  // before this function is ever called -- clientId here would be an
+  // extra business-rule restriction, not a security boundary, and this
+  // caller explicitly does not want it. The auto-fallback below (no
+  // explicit choice given) stays same-client -- that default must never
+  // silently pick a DIFFERENT client's run/baseline on its own.
   let resolvedPreviousRunId: string | null = null;
   let resolvedPreviousBaselineId: string | null = null;
 
   if (previousRunId) {
     const chosen = await prisma.rankingRun.findFirst({
-      where: { id: previousRunId, clientId: run.clientId, status: { in: REPORTABLE_RUN_STATUSES } },
+      where: { id: previousRunId, status: { in: REPORTABLE_RUN_STATUSES } },
     });
     resolvedPreviousRunId = chosen?.id ?? null;
   } else if (previousBaselineId) {
-    const chosen = await prisma.rankingBaseline.findFirst({ where: { id: previousBaselineId, clientId: run.clientId } });
+    const chosen = await prisma.rankingBaseline.findFirst({ where: { id: previousBaselineId } });
     resolvedPreviousBaselineId = chosen?.id ?? null;
   } else {
     const latest = await prisma.rankingRun.findFirst({

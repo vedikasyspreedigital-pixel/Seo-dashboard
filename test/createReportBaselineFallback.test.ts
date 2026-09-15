@@ -101,6 +101,68 @@ test("createReportForRun: an explicit previousBaselineId is honored even when a 
   }
 });
 
+// Regression coverage for the clarified rule: an EXPLICIT comparison
+// choice is matched purely by keyword, never rejected just because it
+// belongs to a different client -- computeMovements/compareRunToBaseline
+// only ever pair up rows that actually share a keyword, so a
+// cross-client selection is harmless (either it shares real keywords, a
+// genuine intentional comparison, or it shares none and hasComparison
+// itself comes back false). The auto-fallback (no explicit choice) must
+// stay same-client -- that default must never silently reach into a
+// different client's data on its own.
+test("createReportForRun: an explicit previousRunId from a DIFFERENT client is honored, not silently rejected/nulled", async () => {
+  const clientA = await makeClient();
+  const clientB = await makeClient();
+  try {
+    const otherClientsRun = await makeRun(clientB.id);
+    const run = await makeRun(clientA.id);
+
+    const result = await createReportForRun(run.id, otherClientsRun.id);
+    assert.equal(result.outcome, "SUCCESS");
+    if (result.outcome !== "SUCCESS") return;
+    assert.equal(result.report.previousRunId, otherClientsRun.id, "an explicitly chosen run from a different client must still be honored");
+  } finally {
+    await cleanup(clientA.id);
+    await cleanup(clientB.id);
+  }
+});
+
+test("createReportForRun: an explicit previousBaselineId belonging to a DIFFERENT client is honored, not silently rejected/nulled", async () => {
+  const clientA = await makeClient();
+  const clientB = await makeClient();
+  try {
+    const otherClientsBaseline = await makeBaseline(clientB.id);
+    const run = await makeRun(clientA.id);
+
+    const result = await createReportForRun(run.id, undefined, otherClientsBaseline.id);
+    assert.equal(result.outcome, "SUCCESS");
+    if (result.outcome !== "SUCCESS") return;
+    assert.equal(result.report.previousBaselineId, otherClientsBaseline.id, "an explicitly chosen baseline from a different client must still be honored");
+  } finally {
+    await cleanup(clientA.id);
+    await cleanup(clientB.id);
+  }
+});
+
+test("createReportForRun: the auto-fallback (no explicit choice) NEVER reaches into a different client's run/baseline", async () => {
+  const clientA = await makeClient();
+  const clientB = await makeClient();
+  try {
+    await makeRun(clientB.id, { completedAt: new Date(Date.now() - 60_000) }); // an older run, but belongs to a DIFFERENT client
+    await makeBaseline(clientB.id); // same -- a different client's baseline
+    const run = await makeRun(clientA.id);
+
+    const result = await createReportForRun(run.id);
+    assert.equal(result.outcome, "SUCCESS");
+    if (result.outcome !== "SUCCESS") return;
+    assert.equal(result.report.previousRunId, null, "the auto-fallback must never default to another client's run");
+    assert.equal(result.report.previousBaselineId, null, "the auto-fallback must never default to another client's baseline");
+  } finally {
+    await cleanup(clientA.id);
+    await cleanup(clientB.id);
+  }
+});
+
 test.after(async () => {
   await prisma.$disconnect();
 });

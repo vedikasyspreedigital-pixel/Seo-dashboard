@@ -113,6 +113,23 @@ export function computeMatchedPreviousTotals(currentRows: RankRow[], previousRow
   return computeTotals(matchedPreviousRows);
 }
 
+/**
+ * A comparison only genuinely exists once at least one keyword actually
+ * matched between the two sides -- selecting a previous run/baseline that
+ * shares nothing at all with the current keywords must behave EXACTLY
+ * like having no comparison selected in the first place (no previous
+ * rank, no movement language, no previous average, no "entered/dropped
+ * out of top 100" counts -- current rank only). improved/declined/
+ * unchanged are, by construction, only ever populated for rows that
+ * matched something (computeMovements only classifies a row into one of
+ * those three when a previous row was actually found); newlyTracked is
+ * everything else, matched or not. So "was anything actually matched" is
+ * exactly "are any of those three buckets non-empty".
+ */
+export function hasAnyMatch(movements: ReturnType<typeof computeMovements>): boolean {
+  return movements.improved.length > 0 || movements.declined.length > 0 || movements.unchanged.length > 0;
+}
+
 export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]) {
   const previousByUid = new Map(previousRows.map((r) => [r.rowUid, r]));
 
@@ -172,21 +189,23 @@ export async function computeRunAnalytics(runId: string, previousRunId?: string)
   // newlyTracked, exactly like compareRunToBaseline.ts already does when
   // there's no baseline either. computeMovements handles an empty
   // previousRows correctly on its own (every current row falls through to
-  // newlyTracked); previousTotals staying null is the only thing that's
-  // genuinely specific to "no previous side" -- there's no previous data to
-  // summarize.
+  // newlyTracked).
   let previousRows: RankRow[] = [];
-  let previousTotals: AnalyticsTotals | null = null;
-
   if (previousRunId) {
     previousRows = await prisma.rankingRow.findMany({
       where: { runId: previousRunId },
       select: { keyword: true, rowUid: true, rankValue: true, rankDisplay: true },
     });
-    previousTotals = computeMatchedPreviousTotals(currentRows, previousRows);
   }
 
   const movements = computeMovements(currentRows, previousRows);
+  // hasComparison reflects whether anything actually MATCHED, not merely
+  // whether a previousRunId was given -- a previous run that shares zero
+  // keywords with the current one (wrong run selected, or a genuinely
+  // unrelated comparison) must be indistinguishable from having selected
+  // nothing at all. See hasAnyMatch's doc comment.
+  const hasComparison = hasAnyMatch(movements);
+  const previousTotals = hasComparison ? computeMatchedPreviousTotals(currentRows, previousRows) : null;
 
-  return { runId, previousRunId: previousRunId ?? null, totals, previousTotals, hasComparison: previousRunId != null, movements };
+  return { runId, previousRunId: previousRunId ?? null, totals, previousTotals, hasComparison, movements };
 }

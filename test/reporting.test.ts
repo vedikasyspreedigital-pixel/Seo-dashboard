@@ -222,16 +222,18 @@ test("movements: improved / declined / unchanged / newlyTracked, including Not-i
   }
 });
 
-// Regression test for a real report: comparing against a previous run
-// with ZERO overlapping keywords (e.g. the wrong run/an unrelated file
-// picked by mistake) still showed a real-looking "Previous Average Rank"
-// -- computeTotals(previousRows) unconditionally averaged the previous
-// run's own keywords regardless of whether any of them matched anything
-// in the current run. previousTotals.averageRank must be null (nothing to
-// summarize) when nothing actually matched, exactly like having no
-// previous run at all -- never silently borrowed from an unrelated run.
-test("previousTotals.averageRank is null when the previous run shares NO keywords with the current run, not the previous run's own unrelated average", async () => {
-  const client = await makeClient(`Analytics Test - zero overlap ${randomUUID()}`);
+// Regression coverage for the clarified rule: a comparison exists ONLY
+// when at least one keyword actually matches between the two sides --
+// selecting a previous run that shares nothing at all with the current
+// keywords (wrong run, unrelated file, cross-client test data, etc.) must
+// be indistinguishable from having selected no comparison at all: no
+// previous rank, no movement, no previous average, no "entered/dropped
+// out of top 100" -- current rank only. Real report that surfaced this:
+// a run with 3 real keywords compared against an unrelated previous run
+// still showed a real-looking "Previous Average Rank" borrowed from the
+// unrelated run's own average.
+test("zero-match: a previous run sharing NO keywords with the current run behaves exactly like no comparison at all", async () => {
+  const client = await makeClient(`Analytics Test - zero match ${randomUUID()}`);
   try {
     const { run: previousRun } = await makeRun(client.id);
     await makeRows(client.id, previousRun.id, [
@@ -242,28 +244,37 @@ test("previousTotals.averageRank is null when the previous run shares NO keyword
 
     const { run: currentRun } = await makeRun(client.id);
     await makeRows(client.id, currentRun.id, [
-      { keyword: "executive coaching", rankValue: null, rankDisplay: "Not in 100" },
+      { keyword: "executive coaching", rankValue: 5, rankDisplay: "5" },
       { keyword: "team building activities", rankValue: null, rankDisplay: "Not in 100" },
     ]);
 
     const analytics = await computeRunAnalytics(currentRun.id, previousRun.id);
 
-    assert.equal(analytics.hasComparison, true, "a previous run WAS selected -- this is a real comparison, just with nothing matched");
-    assert.equal(analytics.previousTotals?.averageRank, null, "must not surface the unrelated previous run's own average rank (12) as if it were this comparison's previous state");
-    assert.equal(analytics.previousTotals?.totalKeywords, 0);
-    assert.equal(analytics.movements.newlyTracked.length, 2, "every current keyword is newlyTracked -- none of them matched anything in the unrelated previous run");
-    assert.deepEqual(analytics.movements.improved, []);
+    assert.equal(analytics.hasComparison, false, "zero keyword overlap must read as no comparison, not as 'compared, nothing matched'");
+    assert.equal(analytics.previousTotals, null, "no previous data to summarize -- not an object with averageRank: null, null outright, same as no previous run at all");
+    assert.deepEqual(analytics.movements.improved, [], "no movement language when nothing matched");
     assert.deepEqual(analytics.movements.declined, []);
     assert.deepEqual(analytics.movements.unchanged, []);
+    assert.equal(analytics.movements.newlyTracked.length, 2, "every current keyword is newlyTracked -- none of them matched anything in the unrelated previous run");
+    // Current rank must still be shown regardless of comparison outcome.
+    assert.equal(analytics.totals.totalKeywords, 2);
+    assert.equal(analytics.totals.averageRank, 5);
+    assert.deepEqual(
+      analytics.movements.newlyTracked.map((m) => [m.keyword, m.currentRank]).sort(),
+      [["executive coaching", 5], ["team building activities", null]],
+    );
   } finally {
     await cleanupClient(client.id);
   }
 });
 
-// Partial overlap: previousTotals must reflect only the keywords actually
-// being compared, not every row the previous run happened to have.
-test("previousTotals.averageRank reflects only the previous run's rows that actually match a current keyword, not its full row set", async () => {
-  const client = await makeClient(`Analytics Test - partial overlap ${randomUUID()}`);
+// Partial match: only the keywords that actually appear on both sides
+// participate in the comparison -- every unmatched keyword on either side
+// (baseline/previous-run noise, or a current keyword with no history) is
+// ignored for comparison purposes, never averaged in and never blocking
+// the comparison from existing.
+test("partial-match: only the keywords present on both sides are compared; unmatched keywords on either side are ignored", async () => {
+  const client = await makeClient(`Analytics Test - partial match ${randomUUID()}`);
   try {
     const { run: previousRun } = await makeRun(client.id);
     await makeRows(client.id, previousRun.id, [
@@ -272,12 +283,51 @@ test("previousTotals.averageRank reflects only the previous run's rows that actu
     ]);
 
     const { run: currentRun } = await makeRun(client.id);
-    await makeRows(client.id, currentRun.id, [{ keyword: "shared-kw", rankValue: 8, rankDisplay: "8" }]);
+    await makeRows(client.id, currentRun.id, [
+      { keyword: "shared-kw", rankValue: 8, rankDisplay: "8" }, // matches -> real comparison
+      { keyword: "current-only-kw", rankValue: 50, rankDisplay: "50" }, // no match in previous -> newlyTracked, ignored for the average
+    ]);
 
     const analytics = await computeRunAnalytics(currentRun.id, previousRun.id);
 
+    assert.equal(analytics.hasComparison, true, "at least one real match exists -- this IS a genuine comparison");
     assert.equal(analytics.previousTotals?.totalKeywords, 1, "only the matched row counts, not the unrelated one");
     assert.equal(analytics.previousTotals?.averageRank, 10, "must be shared-kw's own previous rank (10), not (10+90)/2 = 50");
+    assert.equal(analytics.movements.improved.length, 1);
+    assert.equal(analytics.movements.improved[0].keyword, "shared-kw");
+    assert.equal(analytics.movements.newlyTracked.length, 1);
+    assert.equal(analytics.movements.newlyTracked[0].keyword, "current-only-kw");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Full match: every current keyword has a corresponding previous row --
+// the ordinary case, previousTotals reflects the whole previous set
+// exactly because every one of its rows matched something current.
+test("full-match: every current keyword has a matching previous row -- previousTotals reflects the entire matched set", async () => {
+  const client = await makeClient(`Analytics Test - full match ${randomUUID()}`);
+  try {
+    const { run: previousRun } = await makeRun(client.id);
+    await makeRows(client.id, previousRun.id, [
+      { keyword: "kw-a", rankValue: 10, rankDisplay: "10" },
+      { keyword: "kw-b", rankValue: 20, rankDisplay: "20" },
+    ]);
+
+    const { run: currentRun } = await makeRun(client.id);
+    await makeRows(client.id, currentRun.id, [
+      { keyword: "kw-a", rankValue: 5, rankDisplay: "5" },
+      { keyword: "kw-b", rankValue: 20, rankDisplay: "20" },
+    ]);
+
+    const analytics = await computeRunAnalytics(currentRun.id, previousRun.id);
+
+    assert.equal(analytics.hasComparison, true);
+    assert.equal(analytics.previousTotals?.totalKeywords, 2);
+    assert.equal(analytics.previousTotals?.averageRank, 15); // (10+20)/2
+    assert.equal(analytics.movements.newlyTracked.length, 0, "nothing is newlyTracked when every current keyword matched");
+    assert.equal(analytics.movements.improved.length, 1);
+    assert.equal(analytics.movements.unchanged.length, 1);
   } finally {
     await cleanupClient(client.id);
   }
