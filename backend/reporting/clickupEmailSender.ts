@@ -59,8 +59,24 @@ import os from "node:os";
 import type { SendEmailFn, SendEmailParams, SendEmailResult } from "./emailSender.js";
 
 export interface ClickUpEmailSenderOptions {
-  /** Path to the storageState JSON produced by setupSession.mjs. */
+  /**
+   * Fallback storageState path (produced by setupSession.mjs), used for any
+   * send whose workspace has no entry in sessionStatePathByWorkspace below
+   * -- including a report with no workspace at all. This is what makes
+   * adding a NEW workspace's dedicated ClickUp session purely additive: an
+   * un-configured workspace keeps working exactly as it does today, on
+   * this shared session, until its own entry is added.
+   */
   sessionStatePath: string;
+  /**
+   * Per-workspace override, keyed by Workspace.slug (e.g. "advanced-seo")
+   * -- lets a workspace send through its OWN ClickUp account/session
+   * instead of the shared default above. Each entry is produced the same
+   * way the default is (a one-time human login via setupSession.mjs,
+   * pointed at a distinct output file -- see RAILWAY_DEPLOY.md). Omitted
+   * or missing a given slug simply falls back to sessionStatePath.
+   */
+  sessionStatePathByWorkspace?: Record<string, string>;
   /** Defaults to true (headless) -- this runs as a backend service, not an interactive spike. */
   headless?: boolean;
   /**
@@ -123,8 +139,27 @@ function readContainerResourceLimits(): string {
   return parts.join(" | ");
 }
 
+/**
+ * Pure and independently testable: which session file a send for
+ * `workspaceSlug` should use. A workspace with its own entry in
+ * `sessionStatePathByWorkspace` gets its own ClickUp login; anything else
+ * (an unconfigured workspace, or no workspace at all) falls back to
+ * `defaultSessionStatePath` -- today's single shared session, untouched.
+ */
+export function resolveSessionStatePath(
+  workspaceSlug: string | null | undefined,
+  sessionStatePathByWorkspace: Record<string, string> | undefined,
+  defaultSessionStatePath: string,
+): string {
+  if (workspaceSlug && sessionStatePathByWorkspace?.[workspaceSlug]) {
+    return sessionStatePathByWorkspace[workspaceSlug];
+  }
+  return defaultSessionStatePath;
+}
+
 export function createClickUpEmailSender({
-  sessionStatePath,
+  sessionStatePath: defaultSessionStatePath,
+  sessionStatePathByWorkspace,
   headless = true,
   dryRun = false,
   dryRunScreenshotPath,
@@ -138,6 +173,13 @@ export function createClickUpEmailSender({
     if (params.to.length === 0) {
       throw new Error("No recipients to send to.");
     }
+
+    // Resolved once per send (not per retry attempt below -- the workspace
+    // never changes mid-retry), and logged explicitly so a live run's
+    // console output always says which ClickUp account actually handled a
+    // given send -- important now that it's no longer always the same one.
+    const sessionStatePath = resolveSessionStatePath(params.workspaceSlug, sessionStatePathByWorkspace, defaultSessionStatePath);
+    console.error(`[clickupEmailSender] workspaceSlug=${params.workspaceSlug ?? "(none)"} -> sessionStatePath=${sessionStatePath}`);
 
     // Every "Target crashed" seen in live testing has hit a DIFFERENT step
     // (the Comment dropdown click, the Email menuitem click, even our own

@@ -15,7 +15,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SESSION_PATH = path.join(__dirname, 'session', 'clickup-storage-state.json');
+// Optional output filename (not a full path -- always written under
+// session/, same as the default) lets this be run more than once against
+// DIFFERENT ClickUp logins without overwriting an existing session --
+// e.g. `npm run setup-session -- clickup-storage-state-advanced-seo.json`
+// for a second workspace's own ClickUp account. Defaults to the original
+// single-session filename so the existing one-workspace flow is unchanged.
+const outputFilename = process.argv[2] || 'clickup-storage-state.json';
+const SESSION_PATH = path.join(__dirname, 'session', outputFilename);
 
 async function main() {
   await mkdir(path.dirname(SESSION_PATH), { recursive: true });

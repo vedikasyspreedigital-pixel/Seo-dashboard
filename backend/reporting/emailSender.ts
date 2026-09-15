@@ -15,6 +15,13 @@ export interface SendEmailParams {
   // ClientReportConfig at draft time, never decided by Claude or by this
   // function's caller.
   clickupTaskUrl?: string;
+  // The report's client's Workspace.slug (e.g. "seo" | "advanced-seo"),
+  // resolved by approveAndSendReport from Report -> Client -> Workspace --
+  // never client-supplied. Lets a multi-tenant sender (the real ClickUp
+  // one) pick that workspace's own session/account instead of always using
+  // one shared login; ignored by senders that don't need it (mock, plain
+  // SMTP/provider). null/undefined for a client with no workspace assigned.
+  workspaceSlug?: string | null;
   attachmentHtml?: string;
   attachmentFilename?: string;
   // The actual ranking Excel (re-patched with current row state, same file
