@@ -501,14 +501,12 @@ test("audit-comment observability: a sender that doesn't model an audit-comment 
   }
 });
 
-// Regression coverage for the gap raised directly after shipping the
-// Save-Changes-only version of this guard: a report that's never had Save
-// Changes clicked on it (approved straight from a freshly generated draft)
-// would otherwise skip the duplicate-date check entirely and reach a real
-// send. This proves the send-time gate in approveAndSendReport itself
-// catches it, independent of updateReportDraft.
-test("approval is refused when another SENT report for the same client already covers the same date range, even without ever calling Save Changes", async () => {
-  const client = await makeClient(`Approve Send Test - duplicate date ${randomUUID()}`);
+// Regression coverage for the REMOVAL of the duplicate-dated-report guard:
+// Approve & Send must succeed even when another SENT report for the same
+// client already covers the identical date range -- a legitimate resend
+// must never be blocked, and no replacement guard was added in its place.
+test("approval succeeds even when another SENT report for the same client already covers the identical date range", async () => {
+  const client = await makeClient(`Approve Send Test - same date range allowed ${randomUUID()}`);
   try {
     const sameDay = new Date("2026-09-15T09:00:00.000Z");
     const sentRun = await makeRun(client.id, sameDay);
@@ -524,12 +522,11 @@ test("approval is refused when another SENT report for the same client already c
       sendEmail: createMockEmailSender((params) => sentCalls.push(params)),
     });
 
-    assert.equal(result.outcome, "DUPLICATE_DATE");
-    if (result.outcome === "DUPLICATE_DATE") assert.equal(result.conflictingReportId, sentReport.id);
-    assert.equal(sentCalls.length, 0, "the sender must never be invoked once a duplicate is detected");
+    assert.equal(result.outcome, "SENT");
+    assert.equal(sentCalls.length, 1, "the sender must be invoked -- the same date range is not blocked");
 
-    const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: draftReport.id } });
-    assert.equal(unchanged.status, ReportStatus.PENDING_APPROVAL, "a refused approval must never transition the report");
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: draftReport.id } });
+    assert.equal(persisted.status, ReportStatus.SENT);
   } finally {
     await cleanupClient(client.id);
   }

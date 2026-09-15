@@ -143,6 +143,52 @@ test("POST /api/clients: creates a client in the caller's workspace, with a Clie
   }
 });
 
+test("POST /api/clients: accepts domain/recipients/cc, persisting recipients/cc onto ClientReportConfig for generateEmailDraft to auto-populate later", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  try {
+    const res = await request(app)
+      .post("/api/clients")
+      .set("Cookie", auth.cookieHeader)
+      .send({
+        workspaceId: auth.workspace.id,
+        name: `New Client With Email Fields ${randomUUID()}`,
+        domain: "example.com",
+        recipients: ["ops@example.com", "owner@example.com"],
+        cc: ["manager@example.com"],
+      });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.domain, "example.com");
+    assert.deepEqual(res.body.recipients, ["ops@example.com", "owner@example.com"]);
+    assert.deepEqual(res.body.cc, ["manager@example.com"]);
+
+    const config = await prisma.clientReportConfig.findFirst({ where: { clientId: res.body.id } });
+    assert.deepEqual(config!.recipients, ["ops@example.com", "owner@example.com"]);
+    assert.deepEqual(config!.cc, ["manager@example.com"]);
+  } finally {
+    await prisma.clientReportConfig.deleteMany({ where: { client: { name: { startsWith: "New Client With Email Fields" } } } });
+    await prisma.client.deleteMany({ where: { name: { startsWith: "New Client With Email Fields" } } });
+    await auth.cleanup();
+  }
+});
+
+test("POST /api/clients: rejects an invalid email address in recipients or cc", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  try {
+    const res = await request(app)
+      .post("/api/clients")
+      .set("Cookie", auth.cookieHeader)
+      .send({ workspaceId: auth.workspace.id, name: `Should not be created ${randomUUID()}`, recipients: ["not-an-email"] });
+    assert.equal(res.status, 400);
+
+    const created = await prisma.client.findFirst({ where: { name: { startsWith: "Should not be created" } } });
+    assert.equal(created, null, "nothing should be created when validation fails");
+  } finally {
+    await auth.cleanup();
+  }
+});
+
 test("POST /api/clients: rejects a workspace the caller has no membership for", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const auth = await createAuthenticatedSession();
@@ -187,6 +233,39 @@ test("PATCH /api/clients/:id: updates name/notes and upserts the ClickUp mapping
     const config = await prisma.clientReportConfig.findFirst({ where: { clientId: client.id } });
     assert.equal(config!.clickupTaskUrl, "https://app.clickup.com/t/xyz");
   } finally {
+    await prisma.clientReportConfig.deleteMany({ where: { clientId: client.id } });
+    await cleanupClient(client.id);
+    await auth.cleanup();
+  }
+});
+
+test("PATCH /api/clients/:id: updates domain/recipients/cc, and generateEmailDraft picks up the new recipients/cc for the next report", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  const client = await prisma.client.create({ data: { name: `Edit Email Fields ${randomUUID()}`, workspaceId: auth.workspace.id } });
+  try {
+    const res = await request(app)
+      .patch(`/api/clients/${client.id}`)
+      .set("Cookie", auth.cookieHeader)
+      .send({ domain: "clientsite.com", recipients: ["a@example.com"], cc: ["b@example.com"] });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.domain, "clientsite.com");
+    assert.deepEqual(res.body.recipients, ["a@example.com"]);
+    assert.deepEqual(res.body.cc, ["b@example.com"]);
+
+    const run = await prisma.rankingRun.create({
+      data: { clientId: client.id, sourceFilename: "t.xlsx", sourceFilePath: "local-test/t.xlsx", totalRows: 1, status: "COMPLETED", completedAt: new Date() },
+    });
+    const report = await prisma.rankingReport.create({
+      data: { clientId: client.id, runId: run.id, status: "REPORT_READY", analyticsJson: { totals: { totalKeywords: 1 } }, clientPdfPath: "/tmp/stub.pdf" },
+    });
+    const { generateEmailDraft } = await import("../backend/reporting/generateEmailDraft.js");
+    const draft = await generateEmailDraft(report.id);
+    assert.deepEqual(draft.recipients, ["a@example.com"]);
+    assert.deepEqual(draft.cc, ["b@example.com"]);
+  } finally {
+    await prisma.rankingReport.deleteMany({ where: { clientId: client.id } });
+    await prisma.rankingRun.deleteMany({ where: { clientId: client.id } });
     await prisma.clientReportConfig.deleteMany({ where: { clientId: client.id } });
     await cleanupClient(client.id);
     await auth.cleanup();

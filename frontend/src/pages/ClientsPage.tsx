@@ -22,12 +22,23 @@ type Filter = (typeof FILTERS)[number];
 
 interface ClientFormState {
   name: string;
+  domain: string;
   clickupTaskId: string;
   clickupTaskUrl: string;
   notes: string;
+  recipients: string;
+  cc: string;
 }
 
-const EMPTY_FORM: ClientFormState = { name: '', clickupTaskId: '', clickupTaskUrl: '', notes: '' };
+const EMPTY_FORM: ClientFormState = { name: '', domain: '', clickupTaskId: '', clickupTaskUrl: '', notes: '', recipients: '', cc: '' };
+
+/** Same comma-separated-list parsing as EmailDraftEditor's Recipients/Cc fields -- trims each entry, drops empties. */
+function parseEmailList(input: string): string[] {
+  return input
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
 function clientStatusBadge(client: ClientRecord) {
   if (client.archivedAt) return <StatusBadge label="Archived" toneClassName="bg-[var(--color-surface-3)] text-[var(--color-ink-faint)]" />;
@@ -93,9 +104,12 @@ export function ClientsPage() {
   function openEdit(client: ClientRecord) {
     setForm({
       name: client.name,
+      domain: client.domain ?? '',
       clickupTaskId: client.clickupTaskId ?? '',
       clickupTaskUrl: client.clickupTaskUrl ?? '',
       notes: client.notes ?? '',
+      recipients: (client.recipients ?? []).join(', '),
+      cc: (client.cc ?? []).join(', '),
     });
     setFormError(null);
     setFormModal({ mode: 'edit', client });
@@ -114,16 +128,22 @@ export function ClientsPage() {
         await createClient({
           workspaceId: activeWorkspace.id,
           name: form.name.trim(),
+          domain: form.domain.trim() || undefined,
           clickupTaskId: form.clickupTaskId.trim() || undefined,
           clickupTaskUrl: form.clickupTaskUrl.trim() || undefined,
           notes: form.notes.trim() || undefined,
+          recipients: parseEmailList(form.recipients),
+          cc: parseEmailList(form.cc),
         });
       } else {
         await updateClient(formModal.client.id, {
           name: form.name.trim(),
+          domain: form.domain.trim(),
           clickupTaskId: form.clickupTaskId.trim(),
           clickupTaskUrl: form.clickupTaskUrl.trim(),
           notes: form.notes.trim(),
+          recipients: parseEmailList(form.recipients),
+          cc: parseEmailList(form.cc),
         });
       }
       setFormModal(null);
@@ -282,6 +302,15 @@ export function ClientsPage() {
         <div className="flex flex-col gap-4">
           <FormField label="Client name">
             <TextInput value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} autoFocus />
+          </FormField>
+          <FormField label="Domain">
+            <TextInput value={form.domain} onChange={(e) => setForm((f) => ({ ...f, domain: e.target.value }))} placeholder="example.com" />
+          </FormField>
+          <FormField label="Email To (comma-separated)">
+            <TextInput value={form.recipients} onChange={(e) => setForm((f) => ({ ...f, recipients: e.target.value }))} placeholder="ops@example.com, client@example.com" />
+          </FormField>
+          <FormField label="Email CC (comma-separated, optional)">
+            <TextInput value={form.cc} onChange={(e) => setForm((f) => ({ ...f, cc: e.target.value }))} placeholder="manager@example.com" />
           </FormField>
           <FormField label="ClickUp Task ID">
             <TextInput value={form.clickupTaskId} onChange={(e) => setForm((f) => ({ ...f, clickupTaskId: e.target.value }))} placeholder="86d45e14k" />

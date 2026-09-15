@@ -161,6 +161,10 @@ model WorkspaceMembership {
 model Client {
   id          String     @id @default(uuid())
   name        String
+  // The client's website domain, shown on the client-facing PDF report
+  // header (e.g. "emiratessound.com") -- purely informational, never used
+  // for keyword matching or any ranking logic.
+  domain      String?    @map("domain")
   // Nullable deliberately, not backfilled to a default workspace: an
   // existing real client silently mis-assigned to the wrong workspace at
   // migration time would be worse than it being invisible (in neither

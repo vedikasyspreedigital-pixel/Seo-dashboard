@@ -14,6 +14,8 @@ import type { RunAnalytics } from "./computeRunAnalytics.js";
 
 export interface ClientReportPdfInput {
   clientName: string;
+  /** The client's website domain, shown in the header -- purely informational, never used for keyword matching. */
+  clientDomain?: string | null;
   currentRunDate: Date;
   previousRunDate: Date | null;
   analytics: RunAnalytics;
@@ -257,7 +259,11 @@ function buildHtml(input: ClientReportPdfInput): string {
   @page { size: A4; margin: 16mm 14mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #111827; margin: 0; }
-  h1 { font-size: 18px; letter-spacing: 0.04em; margin: 0 0 14px; }
+  .brand-header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #111827; padding-bottom: 10px; margin-bottom: 16px; }
+  .brand-wordmark { font-size: 20px; font-weight: 800; letter-spacing: 0.03em; color: #111827; }
+  .brand-wordmark span { color: #1a7f37; }
+  .brand-tagline { font-size: 9px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+  h1 { font-size: 16px; letter-spacing: 0.03em; margin: 0 0 14px; text-transform: uppercase; }
   .meta { font-size: 11px; color: #4b5563; line-height: 1.6; margin-bottom: 18px; }
   .meta b { color: #111827; }
   .summary-title { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; margin: 0 0 10px; color: #111827; }
@@ -278,9 +284,17 @@ function buildHtml(input: ClientReportPdfInput): string {
 </style>
 </head>
 <body>
-  <h1>SEO PERFORMANCE REPORT</h1>
+  <div class="brand-header">
+    <div>
+      <div class="brand-wordmark">Sy<span>Spree</span></div>
+      <div class="brand-tagline">SySpree Digital Pvt. Limited &middot; SySpree Digital PTE. Limited</div>
+    </div>
+  </div>
+
+  <h1>Client Keyword Ranking Report</h1>
   <p class="meta">
     <b>Client:</b> ${escapeHtml(input.clientName)}<br>
+    ${input.clientDomain ? `<b>Domain:</b> ${escapeHtml(input.clientDomain)}<br>` : ""}
     <b>Current Report Date:</b> ${formatDate(input.currentRunDate)}<br>
     <b>Compared With:</b> ${input.previousRunDate ? formatDate(input.previousRunDate) : "No prior run"}
   </p>
@@ -288,6 +302,7 @@ function buildHtml(input: ClientReportPdfInput): string {
   <p class="summary-title">Ranking Performance Summary</p>
   <div class="stats">${summaryCards}</div>
 
+  <p class="summary-title">Keyword Ranking Table</p>
   <table>
     <thead>
       <tr>

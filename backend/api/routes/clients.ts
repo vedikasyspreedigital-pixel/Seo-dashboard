@@ -7,6 +7,17 @@ export const clientsRouter = Router();
 
 clientsRouter.use(requireAuth);
 
+// Mirrors reports.ts's EMAIL_PATTERN exactly -- same validation rule
+// wherever an email address is accepted from a client request body.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function parseEmailListField(value: unknown, fieldName: string): { ok: true; emails: string[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) return { ok: false, error: `${fieldName} must be an array of email addresses` };
+  const invalid = value.filter((v: unknown) => typeof v !== 'string' || !EMAIL_PATTERN.test(v));
+  if (invalid.length > 0) return { ok: false, error: `${fieldName} contains invalid email address(es): ${invalid.join(', ')}` };
+  return { ok: true, emails: value as string[] };
+}
+
 // Defaults mirrored from scripts/import-workspace-clients.mjs so a client
 // created here has the same shape as one created by the bulk importer --
 // recipients starts empty deliberately (NO_RECIPIENTS blocks a send until a
@@ -23,7 +34,7 @@ const DEFAULT_REPORT_CONFIG = {
 function flattenClient<
   T extends {
     id: string;
-    reportConfigs?: { clickupTaskId: string | null; clickupTaskUrl: string | null }[];
+    reportConfigs?: { clickupTaskId: string | null; clickupTaskUrl: string | null; recipients: unknown; cc: unknown }[];
     baselines?: { baselineDate: Date; createdAt: Date }[];
   },
 >(client: T) {
@@ -34,6 +45,11 @@ function flattenClient<
     ...rest,
     clickupTaskId: config?.clickupTaskId ?? null,
     clickupTaskUrl: config?.clickupTaskUrl ?? null,
+    // The client's default email To/Cc -- auto-populated into every new
+    // report's email draft by generateEmailDraft.ts, editable per-report
+    // afterward. Empty array (not null) when the client has no config yet.
+    recipients: Array.isArray(config?.recipients) ? (config.recipients as string[]) : [],
+    cc: Array.isArray(config?.cc) ? (config.cc as string[]) : [],
     latestBaseline: latest ? { baselineDate: latest.baselineDate, uploadedAt: latest.createdAt } : null,
   };
 }
@@ -87,7 +103,7 @@ clientsRouter.get('/', async (req, res) => {
 });
 
 clientsRouter.post('/', async (req, res) => {
-  const { workspaceId, name, clickupTaskId, clickupTaskUrl, notes } = req.body ?? {};
+  const { workspaceId, name, domain, clickupTaskId, clickupTaskUrl, notes, recipients, cc } = req.body ?? {};
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
     res.status(400).json({ error: 'workspaceId is required' });
     return;
@@ -101,18 +117,43 @@ clientsRouter.post('/', async (req, res) => {
     return;
   }
 
+  let recipientEmails: string[] = [];
+  if (recipients !== undefined) {
+    const parsed = parseEmailListField(recipients, 'recipients');
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    recipientEmails = parsed.emails;
+  }
+  let ccEmails: string[] = [];
+  if (cc !== undefined) {
+    const parsed = parseEmailListField(cc, 'cc');
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    ccEmails = parsed.emails;
+  }
+
+  const hasClickup = (typeof clickupTaskId === 'string' && clickupTaskId.trim().length > 0) || (typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim().length > 0);
+  const hasEmailFields = recipientEmails.length > 0 || ccEmails.length > 0;
+
   const client = await prisma.client.create({
     data: {
       name: name.trim(),
       workspaceId,
       notes: typeof notes === 'string' && notes.trim().length > 0 ? notes.trim() : null,
-      ...((typeof clickupTaskId === 'string' && clickupTaskId.trim().length > 0) || (typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim().length > 0)
+      domain: typeof domain === 'string' && domain.trim().length > 0 ? domain.trim() : null,
+      ...(hasClickup || hasEmailFields
         ? {
             reportConfigs: {
               create: {
                 ...DEFAULT_REPORT_CONFIG,
                 clickupTaskId: typeof clickupTaskId === 'string' && clickupTaskId.trim().length > 0 ? clickupTaskId.trim() : null,
                 clickupTaskUrl: typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim().length > 0 ? clickupTaskUrl.trim() : null,
+                recipients: recipientEmails,
+                cc: ccEmails,
               },
             },
           }
@@ -127,10 +168,28 @@ clientsRouter.patch('/:id', async (req, res) => {
   const client = await findOwnedClientOrRespond(req, res, req.params.id as string);
   if (!client) return;
 
-  const { name, notes, clickupTaskId, clickupTaskUrl } = req.body ?? {};
+  const { name, notes, domain, clickupTaskId, clickupTaskUrl, recipients, cc } = req.body ?? {};
   if (name !== undefined && (typeof name !== 'string' || name.trim().length === 0)) {
     res.status(400).json({ error: 'name must be a non-empty string' });
     return;
+  }
+  let recipientEmails: string[] | undefined;
+  if (recipients !== undefined) {
+    const parsed = parseEmailListField(recipients, 'recipients');
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    recipientEmails = parsed.emails;
+  }
+  let ccEmails: string[] | undefined;
+  if (cc !== undefined) {
+    const parsed = parseEmailListField(cc, 'cc');
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    ccEmails = parsed.emails;
   }
 
   await prisma.client.update({
@@ -138,19 +197,22 @@ clientsRouter.patch('/:id', async (req, res) => {
     data: {
       ...(name !== undefined ? { name: (name as string).trim() } : {}),
       ...(notes !== undefined ? { notes: typeof notes === 'string' && notes.trim().length > 0 ? notes.trim() : null } : {}),
+      ...(domain !== undefined ? { domain: typeof domain === 'string' && domain.trim().length > 0 ? domain.trim() : null } : {}),
     },
   });
 
-  if (clickupTaskId !== undefined || clickupTaskUrl !== undefined) {
+  if (clickupTaskId !== undefined || clickupTaskUrl !== undefined || recipientEmails !== undefined || ccEmails !== undefined) {
     const currentConfig = await prisma.clientReportConfig.findFirst({ where: { clientId: client.id, isActive: true } });
-    const clickupData = {
+    const configData = {
       ...(clickupTaskId !== undefined ? { clickupTaskId: typeof clickupTaskId === 'string' && clickupTaskId.trim().length > 0 ? clickupTaskId.trim() : null } : {}),
       ...(clickupTaskUrl !== undefined ? { clickupTaskUrl: typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim().length > 0 ? clickupTaskUrl.trim() : null } : {}),
+      ...(recipientEmails !== undefined ? { recipients: recipientEmails } : {}),
+      ...(ccEmails !== undefined ? { cc: ccEmails } : {}),
     };
     if (currentConfig) {
-      await prisma.clientReportConfig.update({ where: { id: currentConfig.id }, data: clickupData });
+      await prisma.clientReportConfig.update({ where: { id: currentConfig.id }, data: configData });
     } else {
-      await prisma.clientReportConfig.create({ data: { clientId: client.id, ...DEFAULT_REPORT_CONFIG, ...clickupData } });
+      await prisma.clientReportConfig.create({ data: { clientId: client.id, ...DEFAULT_REPORT_CONFIG, ...configData } });
     }
   }
 

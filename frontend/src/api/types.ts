@@ -11,8 +11,14 @@ export interface ClientRecord {
   workspaceId?: string | null;
   notes?: string | null;
   archivedAt?: string | null;
+  domain?: string | null;
   clickupTaskId?: string | null;
   clickupTaskUrl?: string | null;
+  // The client's default email To/Cc, auto-populated into every new
+  // report's email draft (still editable per-report afterward). Empty
+  // array (not null/undefined) when the client has no config yet.
+  recipients?: string[];
+  cc?: string[];
   // Most recent uploaded previous-rank baseline, if any -- only present via
   // getClientsForManagement, same as the fields above.
   latestBaseline?: { baselineDate: string; uploadedAt: string } | null;
@@ -21,16 +27,22 @@ export interface ClientRecord {
 export interface CreateClientInput {
   workspaceId: string;
   name: string;
+  domain?: string;
   clickupTaskId?: string;
   clickupTaskUrl?: string;
   notes?: string;
+  recipients?: string[];
+  cc?: string[];
 }
 
 export interface UpdateClientInput {
   name?: string;
   notes?: string;
+  domain?: string;
   clickupTaskId?: string;
   clickupTaskUrl?: string;
+  recipients?: string[];
+  cc?: string[];
 }
 
 export interface WorkspaceRecord {

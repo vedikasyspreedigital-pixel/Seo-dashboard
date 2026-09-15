@@ -294,11 +294,9 @@ export async function uploadCustomPdf(reportId: string, file: File): Promise<Ran
 }
 
 export interface ApproveAndSendResult {
-  outcome: 'SENT' | 'NO_RECIPIENTS' | 'ALREADY_PROCESSED' | 'DUPLICATE_DATE' | 'SEND_FAILED';
+  outcome: 'SENT' | 'NO_RECIPIENTS' | 'ALREADY_PROCESSED' | 'SEND_FAILED';
   messageId?: string;
   errorMessage?: string;
-  /** Set only when outcome is DUPLICATE_DATE -- the id of the already-SENT report covering the same date range. */
-  conflictingReportId?: string;
 }
 
 // approvedBy is no longer a request param -- the backend derives it from the

@@ -50,6 +50,7 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
   const analytics = report.analyticsJson as unknown as RunAnalytics;
   const pdfBuffer = await generateClientReportPdf({
     clientName: report.client.name,
+    clientDomain: report.client.domain,
     currentRunDate: report.run.completedAt ?? report.run.createdAt,
     // A report's "previous" side is either a prior real run OR an imported
     // baseline, never both (see createReportForRun) -- whichever is set

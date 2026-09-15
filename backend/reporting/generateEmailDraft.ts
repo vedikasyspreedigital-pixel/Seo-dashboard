@@ -31,9 +31,9 @@ export type GenerateEmailDraftResult = { outcome: "SUCCESS"; subject: string; bo
  * instead of a real prior run) the baseline's own recorded date, or
  * (absent either) the same as end, e.g. a client's first report with
  * nothing to compare against at all. End is this report's own run
- * completion. Shared by generateEmailDraft (for the subject/body dates)
- * and the duplicate-date check on report edit (findDuplicateDatedReport
- * below), so both always agree on what "this report's date range" means.
+ * completion. The single canonical source for a report's date range --
+ * generateEmailDraft (below) is the only caller, so the Subject/Body are
+ * always generated from these exact same dates.
  *
  * The previousBaseline branch matters: a real agency report is always
  * titled/dated as a genuine range -- baseline date through current date
