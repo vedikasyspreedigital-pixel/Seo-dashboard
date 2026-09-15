@@ -90,6 +90,29 @@ export function computeTotals(rows: RankRow[]): AnalyticsTotals {
   };
 }
 
+/**
+ * `previousTotals` (specifically its averageRank) must summarize "how did
+ * the keywords we're tracking NOW look before" -- not "the average rank of
+ * whatever happens to be in the previous run/baseline." Those are only the
+ * same thing when the previous side's keyword list genuinely overlaps the
+ * current one, which normal week-over-week tracking usually does -- but
+ * when it doesn't (an unrelated run/baseline picked by mistake, or during
+ * testing), computeTotals(previousRows) unconditionally averages EVERY
+ * previous row regardless of whether it matches anything current, which
+ * produced a real, confirmed bug: a report comparing against a baseline
+ * with zero shared keywords still showed a real-looking "Previous Average
+ * Rank" -- silently borrowed from a completely unrelated keyword set. This
+ * scopes it to only the previous rows that actually matched a current
+ * rowUid (i.e. the same set computeMovements would classify as
+ * improved/declined/unchanged, never newlyTracked) -- zero overlap
+ * correctly yields averageRank: null ("—"), same as no comparison at all.
+ */
+export function computeMatchedPreviousTotals(currentRows: RankRow[], previousRows: RankRow[]): AnalyticsTotals {
+  const currentUids = new Set(currentRows.map((r) => r.rowUid));
+  const matchedPreviousRows = previousRows.filter((r) => currentUids.has(r.rowUid));
+  return computeTotals(matchedPreviousRows);
+}
+
 export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]) {
   const previousByUid = new Map(previousRows.map((r) => [r.rowUid, r]));
 
@@ -160,7 +183,7 @@ export async function computeRunAnalytics(runId: string, previousRunId?: string)
       where: { runId: previousRunId },
       select: { keyword: true, rowUid: true, rankValue: true, rankDisplay: true },
     });
-    previousTotals = computeTotals(previousRows);
+    previousTotals = computeMatchedPreviousTotals(currentRows, previousRows);
   }
 
   const movements = computeMovements(currentRows, previousRows);

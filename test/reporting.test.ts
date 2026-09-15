@@ -222,6 +222,67 @@ test("movements: improved / declined / unchanged / newlyTracked, including Not-i
   }
 });
 
+// Regression test for a real report: comparing against a previous run
+// with ZERO overlapping keywords (e.g. the wrong run/an unrelated file
+// picked by mistake) still showed a real-looking "Previous Average Rank"
+// -- computeTotals(previousRows) unconditionally averaged the previous
+// run's own keywords regardless of whether any of them matched anything
+// in the current run. previousTotals.averageRank must be null (nothing to
+// summarize) when nothing actually matched, exactly like having no
+// previous run at all -- never silently borrowed from an unrelated run.
+test("previousTotals.averageRank is null when the previous run shares NO keywords with the current run, not the previous run's own unrelated average", async () => {
+  const client = await makeClient(`Analytics Test - zero overlap ${randomUUID()}`);
+  try {
+    const { run: previousRun } = await makeRun(client.id);
+    await makeRows(client.id, previousRun.id, [
+      { keyword: "unrelated-kw-a", rankValue: 3, rankDisplay: "3" },
+      { keyword: "unrelated-kw-b", rankValue: 21, rankDisplay: "21" },
+      { keyword: "unrelated-kw-c", rankValue: 12, rankDisplay: "12" },
+    ]); // real average of these three is 12 -- must never leak into the current report
+
+    const { run: currentRun } = await makeRun(client.id);
+    await makeRows(client.id, currentRun.id, [
+      { keyword: "executive coaching", rankValue: null, rankDisplay: "Not in 100" },
+      { keyword: "team building activities", rankValue: null, rankDisplay: "Not in 100" },
+    ]);
+
+    const analytics = await computeRunAnalytics(currentRun.id, previousRun.id);
+
+    assert.equal(analytics.hasComparison, true, "a previous run WAS selected -- this is a real comparison, just with nothing matched");
+    assert.equal(analytics.previousTotals?.averageRank, null, "must not surface the unrelated previous run's own average rank (12) as if it were this comparison's previous state");
+    assert.equal(analytics.previousTotals?.totalKeywords, 0);
+    assert.equal(analytics.movements.newlyTracked.length, 2, "every current keyword is newlyTracked -- none of them matched anything in the unrelated previous run");
+    assert.deepEqual(analytics.movements.improved, []);
+    assert.deepEqual(analytics.movements.declined, []);
+    assert.deepEqual(analytics.movements.unchanged, []);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Partial overlap: previousTotals must reflect only the keywords actually
+// being compared, not every row the previous run happened to have.
+test("previousTotals.averageRank reflects only the previous run's rows that actually match a current keyword, not its full row set", async () => {
+  const client = await makeClient(`Analytics Test - partial overlap ${randomUUID()}`);
+  try {
+    const { run: previousRun } = await makeRun(client.id);
+    await makeRows(client.id, previousRun.id, [
+      { keyword: "shared-kw", rankValue: 10, rankDisplay: "10" }, // matches current -> counted
+      { keyword: "unrelated-kw", rankValue: 90, rankDisplay: "90" }, // no match in current -> must be excluded
+    ]);
+
+    const { run: currentRun } = await makeRun(client.id);
+    await makeRows(client.id, currentRun.id, [{ keyword: "shared-kw", rankValue: 8, rankDisplay: "8" }]);
+
+    const analytics = await computeRunAnalytics(currentRun.id, previousRun.id);
+
+    assert.equal(analytics.previousTotals?.totalKeywords, 1, "only the matched row counts, not the unrelated one");
+    assert.equal(analytics.previousTotals?.averageRank, 10, "must be shared-kw's own previous rank (10), not (10+90)/2 = 50");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test.after(async () => {
   await prisma.$disconnect();
 });

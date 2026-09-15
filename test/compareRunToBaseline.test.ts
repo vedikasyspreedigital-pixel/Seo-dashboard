@@ -96,7 +96,11 @@ test("compareRunToBaseline: handles ranked->ranked, Not-in-100->ranked, ranked->
     assert.equal(analytics.previousRunId, null);
     assert.equal(analytics.hasComparison, true, "a baseline comparison always has something to compare against");
     assert.equal(analytics.totals.totalKeywords, 4);
-    assert.equal(analytics.previousTotals?.totalKeywords, 4);
+    // 3, not 4: previousTotals only counts baseline rows that actually
+    // matched a current keyword ("keyword only in baseline" matches
+    // nothing in the current run, so it must not count toward -- or
+    // silently inflate/skew -- this comparison's previous-side totals).
+    assert.equal(analytics.previousTotals?.totalKeywords, 3);
 
     const improved = analytics.movements.improved.find((m) => m.keyword === "car accessories abu dhabi");
     assert.ok(improved);
@@ -166,6 +170,37 @@ test("compareRunToBaseline: duplicate normalized keywords on the baseline side c
     const all = [...analytics.movements.improved, ...analytics.movements.unchanged, ...analytics.movements.declined];
     const match = all.find((m) => m.keyword === "car audio abu dhabi");
     assert.ok(match);
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+// Regression test for a real report: comparing a run against a baseline
+// with ZERO overlapping keywords (e.g. a baseline file uploaded for the
+// wrong client during testing) still showed a real-looking "Previous
+// Average Rank" on the generated PDF -- computeTotals(previousRows) used
+// to unconditionally average the baseline's OWN keywords regardless of
+// whether any of them matched anything in the current run. Every current
+// keyword correctly landed in newlyTracked (confirmed not the bug); the
+// bug was previousTotals.averageRank silently reflecting the unrelated
+// baseline's own average instead of being null ("nothing to compare").
+test("compareRunToBaseline: previousTotals.averageRank is null when the baseline shares NO keywords with the run, not the baseline's own unrelated average", async () => {
+  const client = await makeClient();
+  try {
+    const baseline = await makeBaseline(client.id, [
+      { keyword: "unrelated keyword one", rankValue: 3, rankDisplay: "3" },
+      { keyword: "unrelated keyword two", rankValue: 21, rankDisplay: "21" },
+    ]); // real average of these two is 12 -- must never leak into the current report
+    const run = await makeRun(client.id);
+    await makeRow(run.id, "executive coaching", null, "Not in 100");
+    await makeRow(run.id, "team building activities", null, "Not in 100");
+
+    const analytics = await compareRunToBaseline(run.id, baseline.id);
+
+    assert.equal(analytics.hasComparison, true, "a baseline WAS selected -- this is a real comparison, just with nothing matched");
+    assert.equal(analytics.previousTotals?.averageRank, null, "must not surface the unrelated baseline's own average rank (12) as if it were this run's previous state");
+    assert.equal(analytics.previousTotals?.totalKeywords, 0);
+    assert.equal(analytics.movements.newlyTracked.length, 2, "every current keyword is newlyTracked -- none of them matched anything in the unrelated baseline");
   } finally {
     await cleanup(client.id);
   }
