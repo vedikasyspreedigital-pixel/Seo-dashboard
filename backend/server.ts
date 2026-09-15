@@ -47,14 +47,33 @@ if (useLive) {
 // produced a session file at CLICKUP_SESSION_PATH -- this does not log in
 // on its own, and never will.
 const useClickUp = process.env.CLICKUP_EMAIL_LIVE === 'true';
+
+// Per-workspace ClickUp session override: a workspace with its own
+// dedicated ClickUp account/login gets its own entry here (one env var
+// each, named CLICKUP_SESSION_PATH_<SLUG>), produced by running
+// setupSession.mjs a second time against that workspace's own ClickUp
+// login (see RAILWAY_DEPLOY.md). Any workspace NOT listed here -- "seo"
+// today -- keeps using the single shared CLICKUP_SESSION_PATH below,
+// completely unchanged. Purely additive: unset by default.
+const sessionStatePathByWorkspace: Record<string, string> = {};
+if (process.env.CLICKUP_SESSION_PATH_ADVANCED_SEO) {
+  sessionStatePathByWorkspace['advanced-seo'] = process.env.CLICKUP_SESSION_PATH_ADVANCED_SEO;
+}
+
 const sendEmail = useClickUp
   ? createClickUpEmailSender({
       sessionStatePath: process.env.CLICKUP_SESSION_PATH ?? path.resolve('spikes/clickup-feasibility/session/clickup-storage-state.json'),
+      sessionStatePathByWorkspace,
     })
   : createMockEmailSender();
 
 if (useClickUp) {
   console.log('Report delivery: LIVE via ClickUp -- approved reports will be sent through the ClickUp Email composer.');
+  console.log(
+    Object.keys(sessionStatePathByWorkspace).length > 0
+      ? `ClickUp: per-workspace sessions configured for: ${Object.keys(sessionStatePathByWorkspace).join(', ')} (everything else uses the shared default session).`
+      : 'ClickUp: no per-workspace sessions configured -- every workspace uses the shared default session.',
+  );
 } else {
   console.log('Report delivery: MOCK mode (default). Set CLICKUP_EMAIL_LIVE=true to send through ClickUp for real.');
 }

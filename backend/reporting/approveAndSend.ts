@@ -48,8 +48,14 @@ export async function approveAndSendReport(
   // earlier opportunity to catch it. A separate query (rather than
   // widening the `report`/`current` fetch above with run/previousRun) so
   // `current` below stays the plain RankingReport shape every
-  // reportTransitions.ts update already returns.
-  const reportWithPeriod = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { run: true, previousRun: true } });
+  // reportTransitions.ts update already returns. Also carries client ->
+  // workspace, resolved here (never client-supplied) so the eventual
+  // sendEmail call below knows which workspace's ClickUp session to use.
+  const reportWithPeriod = await prisma.rankingReport.findUniqueOrThrow({
+    where: { id: reportId },
+    include: { run: true, previousRun: true, client: { include: { workspace: true } } },
+  });
+  const workspaceSlug = reportWithPeriod.client.workspace?.slug ?? null;
   const duplicate = await findDuplicateDatedReport(reportWithPeriod);
   if (duplicate) {
     const { periodStart, periodEnd } = computeReportPeriod(reportWithPeriod);
@@ -145,6 +151,7 @@ export async function approveAndSendReport(
       bodyText: current.emailBody ?? "",
       bodyHtml: current.emailBodyHtml ?? undefined,
       clickupTaskUrl: current.resolvedClickupTaskUrl ?? undefined,
+      workspaceSlug,
       attachmentHtml: current.reportHtml ?? undefined,
       attachmentFilename: current.reportHtml ? `seo-report-${reportId}.html` : undefined,
       excelPdfBuffer,

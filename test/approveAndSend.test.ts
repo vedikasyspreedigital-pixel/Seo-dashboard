@@ -14,6 +14,10 @@ async function makeClient(name: string) {
   return prisma.client.create({ data: { name } });
 }
 
+async function makeClientInWorkspace(name: string, workspaceId: string) {
+  return prisma.client.create({ data: { name, workspaceId } });
+}
+
 async function makeRun(clientId: string, completedAt?: Date) {
   return prisma.rankingRun.create({
     data: {
@@ -72,6 +76,7 @@ test("approval: PENDING_APPROVAL -> SENT, sender receives exactly the resolved r
       bodyText: "Here is your update.",
       bodyHtml: "<p>Here is your update.</p>",
       clickupTaskUrl: undefined,
+      workspaceSlug: null,
       attachmentHtml: "<html>report</html>",
       attachmentFilename: `seo-report-${report.id}.html`,
       excelPdfBuffer: undefined,
@@ -442,6 +447,53 @@ test("approval is refused when another SENT report for the same client already c
 
     const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: draftReport.id } });
     assert.equal(unchanged.status, ReportStatus.PENDING_APPROVAL, "a refused approval must never transition the report");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Per-workspace ClickUp session coverage: approveAndSendReport is the one
+// place that resolves Report -> Client -> Workspace and must pass the
+// result to sendEmail as workspaceSlug (see clickupSessionResolution.test.ts
+// for the pure path-selection logic this feeds into). Never client-supplied
+// -- always derived server-side from the report's own client.
+test("approval passes the report client's workspace slug through to sendEmail", async () => {
+  const workspace = await prisma.workspace.create({ data: { slug: `approve-send-workspace-${randomUUID()}`, name: "Approve Send Test Workspace" } });
+  const client = await makeClientInWorkspace(`Approve Send Test - workspace slug ${randomUUID()}`, workspace.id);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    const sentCalls: { workspaceSlug?: string | null }[] = [];
+    const result = await approveAndSendReport(report.id, {
+      approvedBy: "a@example.com",
+      sendEmail: createMockEmailSender((params) => sentCalls.push(params)),
+    });
+
+    assert.equal(result.outcome, "SENT");
+    assert.equal(sentCalls.length, 1);
+    assert.equal(sentCalls[0].workspaceSlug, workspace.slug);
+  } finally {
+    await cleanupClient(client.id);
+    await prisma.workspace.delete({ where: { id: workspace.id } });
+  }
+});
+
+test("approval passes workspaceSlug: null through to sendEmail for a client with no workspace assigned", async () => {
+  const client = await makeClient(`Approve Send Test - no workspace ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    const sentCalls: { workspaceSlug?: string | null }[] = [];
+    const result = await approveAndSendReport(report.id, {
+      approvedBy: "a@example.com",
+      sendEmail: createMockEmailSender((params) => sentCalls.push(params)),
+    });
+
+    assert.equal(result.outcome, "SENT");
+    assert.equal(sentCalls.length, 1);
+    assert.equal(sentCalls[0].workspaceSlug, null);
   } finally {
     await cleanupClient(client.id);
   }

@@ -6,6 +6,7 @@
   "description": "Throwaway, fully isolated spike proving ClickUp's task Comment->Email composer can be driven with Playwright. NOT part of the production app -- nothing here is imported by backend/ or frontend/, and this package's dependencies are not part of the root project.",
   "scripts": {
     "setup-session": "node setupSession.mjs",
+    "setup-session:advanced-seo": "node setupSession.mjs clickup-storage-state-advanced-seo.json",
     "test": "node feasibilityTest.mjs",
     "diagnose": "node diagnoseEmailComposer.mjs"
   },

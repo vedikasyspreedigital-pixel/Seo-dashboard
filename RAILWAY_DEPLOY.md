@@ -30,6 +30,7 @@ this, everything written to disk is lost on every redeploy, same risk as on Rend
 | `UPLOADS_DIR` | `/var/data/uploads` |
 | `REPORTS_DIR` | `/var/data/uploads/reports` |
 | `CLICKUP_SESSION_PATH` | `/var/data/uploads/clickup-storage-state.json` |
+| `CLICKUP_SESSION_PATH_ADVANCED_SEO` | `/var/data/uploads/clickup-storage-state-advanced-seo.json` — only needed once the Advanced SEO workspace has its own ClickUp login set up (§4a); every other workspace keeps using `CLICKUP_SESSION_PATH` above |
 | `CORS_ORIGINS` | `https://frontend-azure-pi-30.vercel.app,http://localhost:5173` (update if the Vercel URL ever changes) |
 | `DATAFORSEO_LIVE` | `false` to start |
 | `CLICKUP_EMAIL_LIVE` | `false` to start |
@@ -59,6 +60,27 @@ has to be produced by a human login and placed on the volume:
    ```
 3. Verify: `railway ssh --service <backend-service-name> "ls -la /var/data/uploads/"`
    should show `clickup-storage-state.json` alongside the existing report/upload files.
+
+### 4a. A second workspace's own ClickUp session (e.g. Advanced SEO)
+
+Every workspace shares the single session above by default. To give a specific
+workspace (identified by its `Workspace.slug`, e.g. `advanced-seo`) its own separate
+ClickUp login instead:
+
+1. Locally: `npm run setup-session:advanced-seo` (in `spikes/clickup-feasibility`) —
+   same manual login flow as step 4, but writes to
+   `session/clickup-storage-state-advanced-seo.json` instead, so it never overwrites
+   the existing default session file. Log into *that workspace's* ClickUp account this
+   time, not the default one -- double-check the account name/email shown in ClickUp
+   before pressing Enter (a prior attempt accidentally captured the wrong account and
+   every send failed with "You need access to this task").
+2. Upload it to the volume the same way:
+   ```
+   cat spikes/clickup-feasibility/session/clickup-storage-state-advanced-seo.json | railway ssh --service <backend-service-name> "cat > /var/data/uploads/clickup-storage-state-advanced-seo.json"
+   ```
+3. Set `CLICKUP_SESSION_PATH_ADVANCED_SEO=/var/data/uploads/clickup-storage-state-advanced-seo.json`
+   (see the variables table above) and redeploy. Sends for clients in that workspace
+   now use this session; every other workspace is unaffected.
 
 ## 5. Frontend (Vercel) — one change
 
