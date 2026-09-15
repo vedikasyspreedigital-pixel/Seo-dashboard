@@ -174,6 +174,7 @@ export function SendConfirmationPage() {
   }
 
   const recipients = report.resolvedRecipients ?? [];
+  const cc = report.resolvedCc ?? [];
 
   return (
     <AppShell>
@@ -185,6 +186,10 @@ export function SendConfirmationPage() {
           <div className="flex justify-between gap-4">
             <span className="text-[var(--color-ink-faint)]">Send to</span>
             <span className="text-right text-[var(--color-ink)]">{recipients.length > 0 ? recipients.join(', ') : 'No recipients'}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span className="text-[var(--color-ink-faint)]">Cc</span>
+            <span className="text-right text-[var(--color-ink)]">{cc.length > 0 ? cc.join(', ') : '(none)'}</span>
           </div>
           <div className="flex justify-between gap-4">
             <span className="text-[var(--color-ink-faint)]">Subject</span>

@@ -499,6 +499,51 @@ test("approval passes workspaceSlug: null through to sendEmail for a client with
   }
 });
 
+// Regression coverage for the sender-identity requirement: the ClickUp
+// email's sender/display name must come from whichever ClickUp
+// account/session actually sends it (resolved purely by workspaceSlug),
+// and must NEVER be derivable from the SERP Console user who clicked
+// Approve & Send. approvedBy is persisted on the report row (for the
+// audit trail) but must never reach sendEmail() -- this proves it,
+// using an approvedBy value distinctive enough that it couldn't
+// accidentally match anything legitimately present in the params (like
+// a recipient address or workspace slug).
+test("approvedBy (the SERP Console user) never reaches sendEmail() in any form -- sender identity is not something this app sets", async () => {
+  const approvingUser = `should-never-appear-in-sendemail-params-${randomUUID()}@example.com`;
+  const client = await makeClient(`Approve Send Test - sender identity ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+
+    const sentCalls: Record<string, unknown>[] = [];
+    const result = await approveAndSendReport(report.id, {
+      approvedBy: approvingUser,
+      sendEmail: createMockEmailSender((params) => sentCalls.push(params as unknown as Record<string, unknown>)),
+    });
+
+    assert.equal(result.outcome, "SENT");
+    assert.equal(sentCalls.length, 1);
+
+    const sentJson = JSON.stringify(sentCalls[0]);
+    assert.ok(!sentJson.includes(approvingUser), "the approving SERP Console user's email must not appear anywhere in what's handed to sendEmail()");
+
+    // Explicit allowlist: these are the ONLY fields sendEmail() may ever
+    // receive. Any new field added here in the future must be deliberately
+    // reviewed for whether it could leak SERP-Console-user identity into
+    // the ClickUp send -- this test fails loudly (not silently) if one is
+    // added without updating this list.
+    const allowedKeys = ["to", "cc", "subject", "bodyText", "bodyHtml", "clickupTaskUrl", "workspaceSlug", "attachmentHtml", "attachmentFilename", "excelPdfBuffer", "excelPdfFilename"];
+    for (const key of Object.keys(sentCalls[0])) {
+      assert.ok(allowedKeys.includes(key), `sendEmail() received an unexpected field "${key}" -- review whether it could carry SERP-Console-user identity`);
+    }
+
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(persisted.approvedBy, approvingUser, "approvedBy IS correctly persisted on the report itself -- just never passed to sendEmail()");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test.after(async () => {
   await prisma.$disconnect();
 });
