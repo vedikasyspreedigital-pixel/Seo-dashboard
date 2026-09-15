@@ -441,8 +441,20 @@ export function createClickUpEmailSender({
         // Quill rich-text contenteditable (.ql-editor), and the SAME class is
         // reused for the task description elsewhere on the page, so this is
         // scoped inside composerRoot to avoid ambiguity.
-        const bodyText = params.bodyHtml ? params.bodyText : params.bodyText;
-        const bodyFilled = await fillFirstMatch(page, [() => composerRoot.locator('.ql-editor[contenteditable="true"]')], bodyText);
+        //
+        // settleMs below: a real sent report showed the greeting rendered as
+        // an isolated "D" on its own line, then "ear Client," on the next --
+        // i.e. Quill split right after the FIRST character of the first
+        // thing typed. Quill re-normalizes its DOM (via a MutationObserver)
+        // shortly after focus/selection changes; typing starts here the
+        // instant the click resolves, with no gap for that to settle first,
+        // so the very first keystroke can land while Quill is still
+        // finishing its own placeholder-clearing mutation and get split
+        // into its own paragraph. To/Subject (plain inputs, no Quill) never
+        // showed this. Giving Quill a brief pause after focusing before the
+        // first keystroke is the standard mitigation for this class of
+        // editor-automation race.
+        const bodyFilled = await fillFirstMatch(page, [() => composerRoot.locator('.ql-editor[contenteditable="true"]')], params.bodyText, { settleMs: 150 });
         if (!bodyFilled) throw new Error('Could not find/fill the body field (.ql-editor[contenteditable="true"] inside composerRoot).');
 
         if (params.attachmentHtml) {
@@ -550,22 +562,12 @@ export function createClickUpEmailSender({
           throw new Error("Send was clicked but the email could not be confirmed in the task's activity/history -- treating this as a failed send.");
         }
 
-        // Best-effort audit comment ("log every outbound email as a task
-        // comment with timestamp + recipient"). The sent email itself already
-        // appears in the task history, so a failure here does not undo an
-        // already-verified send, does not throw, and never turns a real SENT
-        // into a SEND_FAILED -- it only means the extra comment is missing.
-        // That outcome is still worth knowing later (this is exactly the gap
-        // hit tracing a real send with nothing but a console.warn line to go
-        // on), so it's returned as part of the result instead of only logged.
-        const auditCommentPosted = await postAuditComment(page, composerRoot, params.to, params.subject)
-          .then(() => true)
-          .catch((err) => {
-            console.warn(`[clickupEmailSender] send verified, but audit comment failed: ${(err as Error).message}`);
-            return false;
-          });
-
-        return { messageId: `clickup:${Date.now()}`, auditCommentPosted };
+        // No follow-up "Report emailed to ... at ..." audit comment is
+        // posted here -- the sent email itself already appears in the
+        // task's own activity history (that's what the pre-send duplicate
+        // guard above and the post-send `verified` check both read), so a
+        // separate comment was pure noise in the client-visible task.
+        return { messageId: `clickup:${Date.now()}` };
       } catch (err) {
         // Debug artifacts, not user-facing behavior: a screenshot + full DOM
         // dump of whatever the page actually looked like at the moment of
@@ -799,12 +801,13 @@ async function firstMatch(page: Page, candidates: Array<() => Locator>): Promise
   return null;
 }
 
-async function fillFirstMatch(page: Page, candidates: Array<() => Locator>, value: string): Promise<boolean> {
+async function fillFirstMatch(page: Page, candidates: Array<() => Locator>, value: string, options: { settleMs?: number } = {}): Promise<boolean> {
   for (const candidate of candidates) {
     const locator = candidate();
     if (await locator.count().catch(() => 0)) {
       try {
         await locator.click({ timeout: 3000 });
+        if (options.settleMs) await page.waitForTimeout(options.settleMs);
         await page.keyboard.type(value, { delay: 20 });
         await page.keyboard.press("Enter").catch(() => {});
         return true;
@@ -862,46 +865,6 @@ async function attachOneFile(page: Page, attachToggle: Locator, filePath: string
       return true;
     } catch {
       return false;
-    }
-  }
-}
-
-async function postAuditComment(page: Page, composerRoot: Locator, recipients: string[], subject: string): Promise<void> {
-  // Scoped to composerRoot (still valid here -- we're still in Email mode,
-  // same DOM composerRoot was already established against) instead of a
-  // page-wide getByText, same reasoning as the pre-send mode-toggle lookup.
-  const commentDropdown = await firstMatch(page, [
-    () => page.getByRole("button", { name: /^\s*email\s*$/i }),
-    () => composerRoot.locator('[aria-haspopup="menu"].cdk-menu-trigger').first(),
-    () => composerRoot.getByText(/^\s*email\s*$/i).first(),
-  ]);
-  if (commentDropdown) {
-    await commentDropdown.dispatchEvent("click");
-    await page.waitForTimeout(300);
-    // Scoped to the CDK overlay portal, not the page -- same reasoning as
-    // the pre-send Email-menuitem lookup above.
-    const overlay = page.locator(".cdk-overlay-container");
-    const commentOption = await firstMatch(page, [() => page.getByRole("menuitem", { name: /^\s*comment\s*$/i }), () => overlay.getByText(/^\s*comment\s*$/i).first()]);
-    if (commentOption) {
-      await commentOption.dispatchEvent("click");
-      await page.waitForTimeout(300);
-    }
-  }
-  // The same Quill editor class is reused for Comment mode's box too, and
-  // (like Body above) has no data-test attribute of its own -- match by
-  // the confirmed .ql-editor[contenteditable="true"] class, taking the
-  // last one on the page since by this point Email mode's composer should
-  // no longer be the active one.
-  const note = `Report emailed to ${recipients.join(", ")} at ${new Date().toISOString()} (subject: "${subject}")`;
-  const commentBox = page.locator('.ql-editor[contenteditable="true"]').last();
-  if (await commentBox.count().catch(() => 0)) {
-    await commentBox.click({ timeout: 3000 });
-    await page.keyboard.type(note, { delay: 10 });
-    const postButton = page.locator('[data-test="comment-bar__send-btn"]');
-    if (await postButton.count().catch(() => 0)) {
-      await postButton.click();
-    } else {
-      await page.keyboard.press("Enter");
     }
   }
 }
