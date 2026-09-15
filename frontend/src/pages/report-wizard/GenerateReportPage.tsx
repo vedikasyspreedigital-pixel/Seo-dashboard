@@ -9,12 +9,19 @@ import { Spinner } from '../../components/ui/Spinner';
 import { InlineError } from '../../components/ui/InlineError';
 import { AlertPanel } from '../../components/ui/AlertPanel';
 import { useActiveClient } from '../../context/ClientContext';
-import { createReport, getReport, getRuns } from '../../api/client';
+import { createReport, getBaselines, getReport, getRuns } from '../../api/client';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
 import { formatDate } from '../../utils/formatters';
-import type { RankingRun } from '../../api/types';
+import type { BaselineRecord, RankingRun } from '../../api/types';
 
 const REPORTABLE = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS']);
+
+// Comparison dropdown values are prefixed so a single flat Select can offer
+// both prior runs and saved baselines without the two id spaces colliding --
+// "" keeps the existing default (server picks the latest run, or falling
+// back to the latest baseline, per createReportForRun).
+const RUN_PREFIX = 'run:';
+const BASELINE_PREFIX = 'baseline:';
 
 export function GenerateReportPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -22,7 +29,8 @@ export function GenerateReportPage() {
   const { activeClient } = useActiveClient();
 
   const [priorRuns, setPriorRuns] = useState<RankingRun[]>([]);
-  const [previousRunId, setPreviousRunId] = useState<string>('');
+  const [baselines, setBaselines] = useState<BaselineRecord[]>([]);
+  const [comparisonValue, setComparisonValue] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,8 +39,9 @@ export function GenerateReportPage() {
     getRuns(activeClient.id).then((runs) => {
       const eligible = runs.filter((r) => r.id !== runId && REPORTABLE.has(r.status));
       setPriorRuns(eligible);
-      if (eligible.length > 0) setPreviousRunId(eligible[0].id);
+      if (eligible.length > 0) setComparisonValue(`${RUN_PREFIX}${eligible[0].id}`);
     });
+    getBaselines(activeClient.id).then(setBaselines);
   }, [activeClient, runId]);
 
   async function handleContinue() {
@@ -40,7 +49,9 @@ export function GenerateReportPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await createReport(runId, previousRunId || undefined);
+      const previousRunId = comparisonValue.startsWith(RUN_PREFIX) ? comparisonValue.slice(RUN_PREFIX.length) : undefined;
+      const previousBaselineId = comparisonValue.startsWith(BASELINE_PREFIX) ? comparisonValue.slice(BASELINE_PREFIX.length) : undefined;
+      const result = await createReport(runId, previousRunId, previousBaselineId);
       if (result.outcome === 'CREATED') {
         navigate(`/reports/${result.report.id}/analytics`);
         return;
@@ -68,16 +79,29 @@ export function GenerateReportPage() {
       <PageTitle title="Generate SEO Report" subtitle={runId ? `Run #${runId.slice(0, 8)}` : undefined} />
 
       <Card className="mt-6 p-6">
-        <p className="eyebrow-label">Compare against previous run</p>
+        <p className="eyebrow-label">Compare against</p>
         <div className="mt-1.5">
           <Select
-            value={previousRunId}
-            onChange={setPreviousRunId}
-            placeholder="None"
-            options={priorRuns.map((r) => ({ value: r.id, label: `#${r.id.slice(0, 8)} — ${formatDate(r.createdAt)}` }))}
+            value={comparisonValue}
+            onChange={setComparisonValue}
+            placeholder="Automatic (latest run, or latest baseline)"
+            options={[
+              ...priorRuns.map((r) => ({
+                value: `${RUN_PREFIX}${r.id}`,
+                label: `Run #${r.id.slice(0, 8)} — ${formatDate(r.createdAt)}`,
+              })),
+              ...baselines.map((b) => ({
+                value: `${BASELINE_PREFIX}${b.id}`,
+                label: `Baseline: ${b.sourceFilename} — uploaded ${formatDate(b.createdAt)}`,
+              })),
+            ]}
           />
         </div>
-        <p className="mt-2 text-xs text-[var(--color-ink-faint)]">Adds keyword movement deltas to analytics. Recommended.</p>
+        <p className="mt-2 text-xs text-[var(--color-ink-faint)]">
+          Adds keyword movement deltas to analytics. Pick a prior run, or a saved previous-rank baseline uploaded from
+          Client Management. Leave as Automatic to use the latest run (falling back to the latest baseline if this is
+          the client's first run). Recommended.
+        </p>
 
         <AlertPanel tone="info" className="mt-5">
           <p className="text-sm text-[var(--color-ink-muted)]">

@@ -105,7 +105,9 @@ export function AnalyticsPreviewPage() {
           {(analytics.movements.improved.length > 0 || analytics.movements.declined.length > 0) && (
             <Card className="mt-4 overflow-hidden p-0">
               <p className="px-6 pt-5 text-sm font-semibold text-[var(--color-ink)]">
-                Keyword Movement{report.previousRunId && ` · vs #${report.previousRunId.slice(0, 8)}`}
+                Keyword Movement
+                {report.previousRunId && ` · vs #${report.previousRunId.slice(0, 8)}`}
+                {report.previousBaseline && ` · vs baseline: ${report.previousBaseline.sourceFilename}`}
               </p>
               <table className="mt-3 w-full text-left text-sm">
                 <thead>

@@ -198,6 +198,9 @@ export interface RankingReport {
   id: string;
   runId: string;
   previousRunId: string | null;
+  previousBaselineId: string | null;
+  /** Only populated by GET /reports/:id (the detail fetch) -- name/date of the saved baseline this report was compared against, when previousBaselineId is set. */
+  previousBaseline?: { id: string; sourceFilename: string; baselineDate: string } | null;
   clientId: string;
   status: ReportStatus;
   analyticsJson: RunAnalytics | null;
