@@ -156,6 +156,11 @@ export async function getRuns(clientId: string): Promise<RankingRun[]> {
   return handle<RankingRun[]>(res);
 }
 
+export async function deleteRun(runId: string): Promise<void> {
+  const res = await apiFetch(`/runs/${runId}`, { method: 'DELETE' });
+  if (!res.ok) await handle<never>(res);
+}
+
 export async function getRun(runId: string): Promise<RankingRun> {
   const res = await apiFetch(`/runs/${runId}`);
   return handle<RankingRun>(res);
@@ -206,11 +211,11 @@ export function interpretCreateReportResponse(status: number, body: Record<strin
 }
 
 /** Step 1 of the report wizard: creates the report and eagerly computes analytics. No Claude call. */
-export async function createReport(runId: string, previousRunId?: string): Promise<CreateReportOutcome> {
+export async function createReport(runId: string, previousRunId?: string, previousBaselineId?: string): Promise<CreateReportOutcome> {
   const res = await apiFetch('/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ runId, previousRunId }),
+    body: JSON.stringify({ runId, previousRunId, previousBaselineId }),
   });
   const body = await res.json().catch(() => ({}));
   return interpretCreateReportResponse(res.status, body);
@@ -289,9 +294,11 @@ export async function uploadCustomPdf(reportId: string, file: File): Promise<Ran
 }
 
 export interface ApproveAndSendResult {
-  outcome: 'SENT' | 'NO_RECIPIENTS' | 'ALREADY_PROCESSED' | 'SEND_FAILED';
+  outcome: 'SENT' | 'NO_RECIPIENTS' | 'ALREADY_PROCESSED' | 'DUPLICATE_DATE' | 'SEND_FAILED';
   messageId?: string;
   errorMessage?: string;
+  /** Set only when outcome is DUPLICATE_DATE -- the id of the already-SENT report covering the same date range. */
+  conflictingReportId?: string;
 }
 
 // approvedBy is no longer a request param -- the backend derives it from the
