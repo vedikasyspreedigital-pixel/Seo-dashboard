@@ -10,7 +10,17 @@
 // every page automatically when the table spans multiple A4 pages.
 
 import { chromium } from "playwright";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { RunAnalytics } from "./computeRunAnalytics.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Embedded as a data URI (not a file:// src) so the PDF renders identically
+// regardless of the container's working directory -- Playwright's
+// page.setContent has no base URL to resolve a relative/absolute file path
+// against.
+const SYSPREE_LOGO_DATA_URI = `data:image/png;base64,${readFileSync(path.join(__dirname, "assets/syspree-logo.png")).toString("base64")}`;
 
 export interface ClientReportPdfInput {
   clientName: string;
@@ -214,9 +224,9 @@ function buildHtml(input: ClientReportPdfInput): string {
   @page { size: A4; margin: 14mm 14mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #111827; margin: 0; }
-  .brand-header { display: flex; align-items: center; justify-content: space-between; background: #58595b; color: #ffffff; padding: 14px 18px; margin-bottom: 18px; }
-  .brand-wordmark { font-size: 26px; font-weight: 800; letter-spacing: 0.01em; color: #ffffff; }
-  .brand-wordmark span { color: #1a1a1a; -webkit-text-stroke: 0.5px #f2a71b; }
+  .brand-header { display: flex; align-items: center; justify-content: space-between; background: #58595b; color: #ffffff; padding: 10px 18px; margin-bottom: 18px; }
+  .brand-logo-chip { background: #ffffff; padding: 6px 14px; display: flex; align-items: center; }
+  .brand-logo-chip img { display: block; height: 34px; width: auto; }
   .brand-meta { text-align: right; line-height: 1.5; }
   .brand-meta .title { font-size: 13px; font-weight: 700; }
   .brand-meta .line { font-size: 11px; }
@@ -232,7 +242,7 @@ function buildHtml(input: ClientReportPdfInput): string {
 </head>
 <body>
   <div class="brand-header">
-    <div class="brand-wordmark">Sy<span>spree</span></div>
+    <div class="brand-logo-chip"><img src="${SYSPREE_LOGO_DATA_URI}" alt="SySpree"></div>
     <div class="brand-meta">
       <div class="title">Client Keyword Ranking Report</div>
       ${input.clientDomain ? `<div class="line">${escapeHtml(input.clientDomain)}</div>` : ""}
