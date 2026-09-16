@@ -45,6 +45,14 @@ interface TableRow {
 
 const RANK_DISPLAY = (rank: number | null): string => (rank === null ? "Not in 100" : String(rank));
 
+const MOVEMENT_COLOR: Record<MovementKind, string> = {
+  improved: "#1a7f37",
+  new: "#1a7f37",
+  dropped: "#c0362c",
+  lost: "#c0362c",
+  unchanged: "#6b7280",
+};
+
 /**
  * Human-readable overall movement, never raw signed arithmetic. Lower rank
  * number is better, so the delta is previous-minus-current: positive means
@@ -190,12 +198,12 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Matches the reference SySpree client report layout exactly: a gray
- * branded banner (logo left, title/domain/date right), then a single
- * keyword table with two orange header rows -- no summary stat cards, no
- * movement/color column. Current rank is shown before previous rank
- * (matching the reference's own column order), with the real dates as
- * column headers rather than generic "Current"/"Previous" labels.
+ * Matches the reference SySpree client report layout: a gray branded
+ * banner (logo left, title/domain/date right), then a single keyword
+ * table with two orange header rows. Current rank is shown before
+ * previous rank (matching the reference's own column order), with the
+ * real dates as column headers rather than generic "Current"/"Previous"
+ * labels, plus a color-coded Improved/Dropped column.
  */
 function buildHtml(input: ClientReportPdfInput): string {
   const { rows } = buildRowsAndSummary(input.analytics);
@@ -209,6 +217,7 @@ function buildHtml(input: ClientReportPdfInput): string {
         <td>${escapeHtml(r.keyword)}</td>
         <td class="num">${escapeHtml(r.currentRankLabel)}</td>
         <td class="num">${escapeHtml(r.previousRankLabel)}</td>
+        <td class="num" style="color:${MOVEMENT_COLOR[r.kind]}; font-weight:600;">${escapeHtml(r.movementLabel)}</td>
       </tr>`,
     )
     .join("");
@@ -253,11 +262,13 @@ function buildHtml(input: ClientReportPdfInput): string {
         <th class="label-row">Current Ranking Status:</th>
         <th class="num label-row">Google.ae</th>
         <th class="num label-row">Google.ae</th>
+        <th class="label-row">&nbsp;</th>
       </tr>
       <tr>
         <th>Keyword</th>
         <th class="num">${currentDateLabel}</th>
         <th class="num">${previousDateLabel}</th>
+        <th class="num">Improved / Dropped</th>
       </tr>
     </thead>
     <tbody>${tableRows}</tbody>
