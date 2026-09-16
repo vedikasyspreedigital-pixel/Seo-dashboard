@@ -12,6 +12,7 @@ import { FormField } from '../components/ui/FormField';
 import { InlineError } from '../components/ui/InlineError';
 import { PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon, UploadIcon } from '../components/ui/icons';
 import { BaselineUploadModal } from '../components/baselines/BaselineUploadModal';
+import { parseRecipientsInput } from '../components/report/reportStatus';
 import { useSession } from '../context/SessionContext';
 import { useActiveClient } from '../context/ClientContext';
 import { activateClient, archiveClient, createClient, deactivateClient, getClientsForManagement, restoreClient, updateClient } from '../api/client';
@@ -31,14 +32,6 @@ interface ClientFormState {
 }
 
 const EMPTY_FORM: ClientFormState = { name: '', domain: '', clickupTaskId: '', clickupTaskUrl: '', notes: '', recipients: '', cc: '' };
-
-/** Same comma-separated-list parsing as EmailDraftEditor's Recipients/Cc fields -- trims each entry, drops empties. */
-function parseEmailList(input: string): string[] {
-  return input
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
 
 function clientStatusBadge(client: ClientRecord) {
   if (client.archivedAt) return <StatusBadge label="Archived" toneClassName="bg-[var(--color-surface-3)] text-[var(--color-ink-faint)]" />;
@@ -68,6 +61,14 @@ export function ClientsPage() {
   const [form, setForm] = useState<ClientFormState>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Same validation EmailDraftEditor's Recipients/Cc fields use -- flags a
+  // malformed address before Save is even clickable, mirroring the
+  // backend's own EMAIL_PATTERN check so a bad address never round-trips
+  // to a 400 the user has to decode from an error banner.
+  const { recipients: parsedRecipients, invalid: invalidRecipients } = parseRecipientsInput(form.recipients);
+  const { recipients: parsedCc, invalid: invalidCc } = parseRecipientsInput(form.cc);
+  const hasEmailErrors = invalidRecipients.length > 0 || invalidCc.length > 0;
 
   const [archiveTarget, setArchiveTarget] = useState<ClientRecord | null>(null);
   const [archiving, setArchiving] = useState(false);
@@ -121,6 +122,10 @@ export function ClientsPage() {
       setFormError('Name is required.');
       return;
     }
+    if (hasEmailErrors) {
+      setFormError('Fix the invalid email address(es) in Email To/Cc before saving.');
+      return;
+    }
     setSubmitting(true);
     setFormError(null);
     try {
@@ -132,8 +137,8 @@ export function ClientsPage() {
           clickupTaskId: form.clickupTaskId.trim() || undefined,
           clickupTaskUrl: form.clickupTaskUrl.trim() || undefined,
           notes: form.notes.trim() || undefined,
-          recipients: parseEmailList(form.recipients),
-          cc: parseEmailList(form.cc),
+          recipients: parsedRecipients,
+          cc: parsedCc,
         });
       } else {
         await updateClient(formModal.client.id, {
@@ -142,8 +147,8 @@ export function ClientsPage() {
           clickupTaskId: form.clickupTaskId.trim(),
           clickupTaskUrl: form.clickupTaskUrl.trim(),
           notes: form.notes.trim(),
-          recipients: parseEmailList(form.recipients),
-          cc: parseEmailList(form.cc),
+          recipients: parsedRecipients,
+          cc: parsedCc,
         });
       }
       setFormModal(null);
@@ -293,7 +298,7 @@ export function ClientsPage() {
             <Button variant="ghost" onClick={() => setFormModal(null)}>
               Cancel
             </Button>
-            <Button disabled={submitting} onClick={handleSubmitForm}>
+            <Button disabled={submitting || hasEmailErrors} onClick={handleSubmitForm}>
               {submitting ? 'Saving...' : 'Save'}
             </Button>
           </>
@@ -308,9 +313,15 @@ export function ClientsPage() {
           </FormField>
           <FormField label="Email To (comma-separated)">
             <TextInput value={form.recipients} onChange={(e) => setForm((f) => ({ ...f, recipients: e.target.value }))} placeholder="ops@example.com, client@example.com" />
+            {invalidRecipients.length > 0 && (
+              <p className="mt-1.5 text-xs font-medium text-rose-300">Not a valid email address: {invalidRecipients.join(', ')}</p>
+            )}
           </FormField>
           <FormField label="Email CC (comma-separated, optional)">
             <TextInput value={form.cc} onChange={(e) => setForm((f) => ({ ...f, cc: e.target.value }))} placeholder="manager@example.com" />
+            {invalidCc.length > 0 && (
+              <p className="mt-1.5 text-xs font-medium text-rose-300">Not a valid email address: {invalidCc.join(', ')}</p>
+            )}
           </FormField>
           <FormField label="ClickUp Task ID">
             <TextInput value={form.clickupTaskId} onChange={(e) => setForm((f) => ({ ...f, clickupTaskId: e.target.value }))} placeholder="86d45e14k" />
