@@ -96,7 +96,7 @@ test("report period consistency: a run-vs-run comparison's generated Subject/Bod
     assert.equal(generated.outcome, "SUCCESS");
     // Sanity: the generated draft really does embed this exact range (same
     // assertion style as generateEmailDraft.test.ts) -- not a vacuous check.
-    assert.match(generated.subject, /Aug 17, 2026 to Aug 31, 2026/);
+    assert.match(generated.subject, /17th August 2026 - 31st August 2026/);
 
     const recomputed = await recomputePeriodIndependently(report.id);
     assert.equal(recomputed.periodStart.getTime(), previousRun.completedAt!.getTime(), "recomputed periodStart must match the actual previousRun.completedAt used to generate the Subject/Body");
@@ -124,8 +124,8 @@ test("report period consistency: a baseline comparison's generated Subject/Body 
 
     const generated = await generateEmailDraft(report.id);
     assert.equal(generated.outcome, "SUCCESS");
-    assert.match(generated.subject, /Aug 17, 2026/);
-    assert.match(generated.subject, /Aug 31, 2026/);
+    assert.match(generated.subject, /17th August 2026/);
+    assert.match(generated.subject, /31st August 2026/);
 
     const recomputed = await recomputePeriodIndependently(report.id);
     assert.equal(recomputed.periodStart.getTime(), baseline.baselineDate.getTime(), "recomputed periodStart must match the actual baseline.baselineDate used to generate the Subject/Body");

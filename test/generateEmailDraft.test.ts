@@ -100,7 +100,7 @@ test("generateEmailDraft: success drives REPORT_READY -> PENDING_APPROVAL, recip
 
     const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(persisted.status, ReportStatus.PENDING_APPROVAL);
-    assert.ok(persisted.emailSubject?.startsWith("SEO Ranking Report"));
+    assert.ok(persisted.emailSubject?.startsWith(`${client.name} Keyword Ranking Report`));
     assert.ok(persisted.emailBody?.startsWith("Dear Client,"));
     assert.deepEqual(persisted.resolvedRecipients, ["ops@cashforcarsperth.com.au", "owner@cashforcarsperth.com.au"]);
     assert.deepEqual(persisted.resolvedCc, ["manager@cashforcarsperth.com.au"]);
@@ -269,11 +269,11 @@ test("generateEmailDraft: a baseline comparison uses the baseline's OWN date as 
     const result = await generateEmailDraft(report.id);
     assert.equal(result.outcome, "SUCCESS");
 
-    // formatDate in emailDraft.ts renders as "Aug 17, 2026" / "Aug 31, 2026".
-    assert.match(result.subject, /Aug 17, 2026/, "subject must show the baseline's own date, not the run's date twice");
-    assert.match(result.subject, /Aug 31, 2026/);
-    assert.ok(!result.subject.includes("Aug 31, 2026 to Aug 31, 2026"), "must never collapse to the run's date on both sides");
-    assert.match(result.bodyText, /Aug 17, 2026 - Aug 31, 2026/);
+    // formatDate in emailDraft.ts renders as "17th August 2026" / "31st August 2026".
+    assert.match(result.subject, /17th August 2026/, "subject must show the baseline's own date, not the run's date twice");
+    assert.match(result.subject, /31st August 2026/);
+    assert.ok(!result.subject.includes("31st August 2026 - 31st August 2026"), "must never collapse to the run's date on both sides");
+    assert.match(result.bodyText, /17th August 2026 - 31st August 2026/);
   } finally {
     await cleanupClient(client.id);
   }
@@ -309,7 +309,7 @@ test("generateEmailDraft: a real prior run's own completedAt is used as periodSt
 
     const result = await generateEmailDraft(report.id);
     assert.equal(result.outcome, "SUCCESS");
-    assert.match(result.subject, /Aug 17, 2026 to Aug 31, 2026/);
+    assert.match(result.subject, /17th August 2026 - 31st August 2026/);
   } finally {
     await cleanupClient(client.id);
   }

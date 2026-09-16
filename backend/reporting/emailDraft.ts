@@ -16,8 +16,27 @@ export interface EmailDraftOutput {
   bodyHtml?: string;
 }
 
+/** 1st, 2nd, 3rd, 4th...11th-13th are always "th", everything else follows the last digit. */
+function ordinalSuffix(day: number): string {
+  if (day >= 11 && day <= 13) return "th";
+  switch (day % 10) {
+    case 1:
+      return "st";
+    case 2:
+      return "nd";
+    case 3:
+      return "rd";
+    default:
+      return "th";
+  }
+}
+
+/** e.g. "17th August 2026" -- matches the client-facing convention already used in report/baseline filenames (e.g. "17th August 2026 - 31st August 2026.xlsx") and the subject line clients expect. */
 function formatDate(date: Date): string {
-  return date.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
+  const day = date.getDate();
+  const month = date.toLocaleDateString("en-US", { month: "long" });
+  const year = date.getFullYear();
+  return `${day}${ordinalSuffix(day)} ${month} ${year}`;
 }
 
 const SIGNATURE = `Thanks and Regards,
@@ -31,7 +50,7 @@ India | Singapore
 Email: support@syspreesolutions.com`;
 
 /** Fills the standard client-facing template with the real reporting period -- same dates shown on the PDF (generateClientReportPdf.ts formats them identically). */
-export function buildDefaultEmailDraft({ periodStart, periodEnd }: EmailDraftInput): EmailDraftOutput {
+export function buildDefaultEmailDraft({ clientName, periodStart, periodEnd }: EmailDraftInput): EmailDraftOutput {
   const start = formatDate(periodStart);
   const end = formatDate(periodEnd);
 
@@ -46,7 +65,7 @@ Thank you for your continued trust and partnership.
 ${SIGNATURE}`;
 
   return {
-    subject: `SEO Ranking Report – ${start} to ${end}`,
+    subject: `${clientName} Keyword Ranking Report ${start} - ${end}`,
     bodyText,
   };
 }
