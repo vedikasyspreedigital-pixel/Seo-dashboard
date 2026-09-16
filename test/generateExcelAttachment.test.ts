@@ -60,7 +60,52 @@ test("generateExcelPdfAttachment reads the exact bytes already stored at clientP
     const attachment = await generateExcelPdfAttachment(report.id);
     assert.ok(attachment.buffer.equals(fakePdfBytes), "attachment bytes must be byte-identical to the stored artifact");
     assert.match(attachment.filename, /\.pdf$/);
-    assert.match(attachment.filename, /2026-01-15/);
+    assert.equal(attachment.filename, `${client.name} - Keyword Ranking Report - 15th January 2026 - 15th January 2026.pdf`);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await cleanupClient(client.id);
+  }
+});
+
+test("generateExcelPdfAttachment: filename uses the report's real comparison period, not just the run's own date", async () => {
+  const client = await makeClient("Emirates Sound");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "report-pdf-test-"));
+  try {
+    const previousRun = await prisma.rankingRun.create({
+      data: {
+        clientId: client.id,
+        sourceFilename: "excel-attachment-test.xlsx",
+        sourceFilePath: "local-test/excel-attachment-test.xlsx",
+        totalRows: 1,
+        status: "COMPLETED",
+        completedAt: new Date("2026-08-17T00:00:00Z"),
+      },
+    });
+    const run = await prisma.rankingRun.create({
+      data: {
+        clientId: client.id,
+        sourceFilename: "excel-attachment-test.xlsx",
+        sourceFilePath: "local-test/excel-attachment-test.xlsx",
+        totalRows: 1,
+        status: "COMPLETED",
+        completedAt: new Date("2026-08-31T00:00:00Z"),
+      },
+    });
+    const storedPath = path.join(tmpDir, `${randomUUID()}.pdf`);
+    await writeFile(storedPath, Buffer.from("%PDF-1.4 fake bytes"));
+    const report = await prisma.rankingReport.create({
+      data: {
+        clientId: client.id,
+        runId: run.id,
+        previousRunId: previousRun.id,
+        status: ReportStatus.REPORT_READY,
+        analyticsJson: { totals: { totalKeywords: 1 } },
+        clientPdfPath: storedPath,
+      },
+    });
+
+    const attachment = await generateExcelPdfAttachment(report.id);
+    assert.equal(attachment.filename, "Emirates Sound - Keyword Ranking Report - 17th August 2026 - 31st August 2026.pdf");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
     await cleanupClient(client.id);

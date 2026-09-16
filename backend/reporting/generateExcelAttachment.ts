@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { prisma } from "../db/client.js";
+import { computeReportPeriod } from "./generateEmailDraft.js";
+import { formatOrdinalDate } from "./formatOrdinalDate.js";
 
 export interface ExcelAttachment {
   buffer: Buffer;
@@ -23,7 +25,7 @@ export type GenerateExcelAttachmentFn = (reportId: string) => Promise<ExcelAttac
 export async function generateExcelPdfAttachment(reportId: string): Promise<ExcelAttachment> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
-    include: { client: true, run: true },
+    include: { client: true, run: true, previousRun: true, previousBaseline: true },
   });
 
   if (!report.clientPdfPath) {
@@ -31,7 +33,13 @@ export async function generateExcelPdfAttachment(reportId: string): Promise<Exce
   }
 
   const buffer = await readFile(report.clientPdfPath);
-  const safeClientName = report.client.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "");
-  const dateStamp = (report.run.completedAt ?? report.run.createdAt).toISOString().slice(0, 10);
-  return { buffer, filename: `SEO-Report-${safeClientName}-${dateStamp}.pdf` };
+  // Same canonical period (and the same ordinal date formatting) the
+  // Subject/Body use -- "{Client} - Keyword Ranking Report - {start} -
+  // {end}.pdf", e.g. "Emirates Sound - Keyword Ranking Report - 17th
+  // August 2026 - 31st August 2026.pdf". Only filesystem-illegal
+  // characters are stripped from the client name; spaces are kept.
+  const { periodStart, periodEnd } = computeReportPeriod(report);
+  const safeClientName = report.client.name.replace(/[\\/:*?"<>|]/g, "").trim();
+  const filename = `${safeClientName} - Keyword Ranking Report - ${formatOrdinalDate(periodStart)} - ${formatOrdinalDate(periodEnd)}.pdf`;
+  return { buffer, filename };
 }
