@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunAnalytics } from "./computeRunAnalytics.js";
+import { formatOrdinalDate } from "./formatOrdinalDate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Embedded as a data URI (not a file:// src) so the PDF renders identically
@@ -184,10 +185,6 @@ function buildCurrentOnlyRowsAndSummary(analytics: RunAnalytics) {
   };
 }
 
-function formatDate(date: Date): string {
-  return date.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
-}
-
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -203,8 +200,8 @@ function escapeHtml(text: string): string {
 function buildHtml(input: ClientReportPdfInput): string {
   const { rows } = buildRowsAndSummary(input.analytics);
 
-  const currentDateLabel = formatDate(input.currentRunDate);
-  const previousDateLabel = input.previousRunDate ? formatDate(input.previousRunDate) : "No prior run";
+  const currentDateLabel = formatOrdinalDate(input.currentRunDate);
+  const previousDateLabel = input.previousRunDate ? formatOrdinalDate(input.previousRunDate) : "No prior run";
 
   const tableRows = rows
     .map(
