@@ -373,10 +373,11 @@ model RankingRowAttempt {
 }
 
 // Reporting-layer only -- isolated from the ranking worker/state machine.
-// Reads a completed RankingRun's data via computeRunAnalytics (backend
-// code), then Claude fills analysisJson/emailSubject/emailBody. Nothing
-// here ever writes to ranking_runs/ranking_rows/ranking_row_attempts, and
-// nothing in backend/statemachine or backend/worker reads this table.
+// Reads a completed RankingRun's data via computeRunAnalytics/
+// compareRunToBaseline (pure backend code -- no AI/Claude anywhere in this
+// pipeline, never has been). Nothing here ever writes to
+// ranking_runs/ranking_rows/ranking_row_attempts, and nothing in
+// backend/statemachine or backend/worker reads this table.
 model RankingReport {
   id             String       @id @default(uuid())
   runId          String       @map("run_id")
@@ -394,8 +395,8 @@ model RankingReport {
 
   status ReportStatus @default(PENDING_ANALYSIS)
 
-  analyticsJson      Json?   @map("analytics_json") // computeRunAnalytics output -- pure code, no Claude
-  analysisJson       Json?   @map("analysis_json") // Claude Report Analyst's schema-validated output
+  analyticsJson      Json?   @map("analytics_json") // computeRunAnalytics/compareRunToBaseline output -- pure code, no AI
+  analysisJson       Json?   @map("analysis_json") // Legacy -- always null. No AI analysis step exists in this app; kept only so historical rows still typecheck.
   reportHtml         String? @map("report_html") // deterministic Report Generator output (legacy full-narrative report path)
   clientPdfPath      String? @map("client_pdf_path") // deterministic client-facing PDF (Summary + Keyword Table) written to disk by buildReport -- the SAME file streamed by GET /:id/pdf and attached to the email; generated once, never regenerated
   // Optional human override of the email attachment -- NEVER replaces or
@@ -408,12 +409,12 @@ model RankingReport {
   attachmentSource   String  @default("generated") @map("attachment_source") // "generated" | "custom"
   customPdfPath      String? @map("custom_pdf_path")
   customPdfFilename  String? @map("custom_pdf_filename") // original uploaded filename -- used as the attachment's display name when sending, since customPdfPath itself is a generated on-disk name
-  emailSubject       String? @map("email_subject") // Claude Email Draft Generator's output (subject)
-  emailBody          String? @map("email_body") // Claude Email Draft Generator's output (bodyText)
-  emailBodyHtml      String? @map("email_body_html") // Claude Email Draft Generator's output (bodyHtml)
+  emailSubject       String? @map("email_subject") // buildDefaultEmailDraft's deterministic template output (subject) -- no AI
+  emailBody          String? @map("email_body") // buildDefaultEmailDraft's deterministic template output (bodyText) -- no AI
+  emailBodyHtml      String? @map("email_body_html") // buildDefaultEmailDraft's deterministic template output (bodyHtml) -- no AI
   resolvedRecipients Json?   @map("resolved_recipients") // copied from ClientReportConfig.recipients, human-editable, never AI-decided
   resolvedCc         Json?   @map("resolved_cc") // copied from ClientReportConfig.cc, human-editable, same rule as resolvedRecipients
-  resolvedClickupTaskUrl String? @map("resolved_clickup_task_url") // copied from ClientReportConfig.clickupTaskUrl, human-editable, never Claude-decided
+  resolvedClickupTaskUrl String? @map("resolved_clickup_task_url") // copied from ClientReportConfig.clickupTaskUrl, human-editable, never AI-decided
 
   lastErrorMessage String? @map("last_error_message")
 

@@ -9,6 +9,7 @@ import { parseRankingExcel, COLUMN_HEADERS } from '../../excel/parser.js';
 import { startRun, cancelRun } from '../../statemachine/runTransitions.js';
 import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
+import { processVerifiedExcelUpload } from '../../reporting/processVerifiedExcelUpload.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
@@ -263,6 +264,55 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`);
     res.send(updatedBuffer);
+  });
+
+  // The new workflow's single entry point: upload the manually-verified
+  // Excel (the same template "Download Excel" produced) and the backend
+  // automatically compares it against the client's previous verified Excel,
+  // builds the PDF, and drafts the email -- no separate "Generate
+  // Analysis"/"Build Report" click required. See processVerifiedExcelUpload
+  // for the full pipeline.
+  router.post('/:id/verified-excel', expensiveActionRateLimit, upload.single('file'), async (req, res) => {
+    const run = await findOwnedRunOrRespond(req, res, req.params.id as string, { requireActive: true });
+    if (!run) return;
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'file is required' });
+      return;
+    }
+    if (!looksLikeXlsx(file.buffer)) {
+      res.status(400).json({ error: 'File does not look like a valid .xlsx workbook.' });
+      return;
+    }
+
+    try {
+      const result = await processVerifiedExcelUpload(run.id, file.buffer, file.originalname, req.authUser!.email);
+      switch (result.outcome) {
+        case 'RUN_NOT_FOUND':
+          res.status(404).json({ error: 'Run not found' });
+          return;
+        case 'RUN_NOT_COMPLETED':
+          res.status(409).json({ error: 'Run is not completed yet -- fetch rankings before uploading a verified Excel.' });
+          return;
+        case 'DUPLICATE_REPORT':
+          res.status(409).json({ error: 'A report already exists for this run', existingReportId: result.existingReportId });
+          return;
+        case 'NO_ROWS_PARSED':
+          res.status(422).json({ error: 'No keyword rows could be read from this file.' });
+          return;
+        case 'UNMATCHED_ROWS':
+          res.status(422).json({
+            error: "This file doesn't match this run's exported Excel -- some keywords/rows couldn't be matched.",
+            unmatchedKeywords: result.unmatchedKeywords,
+          });
+          return;
+        case 'SUCCESS':
+          res.status(201).json({ report: result.report });
+          return;
+      }
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
 
   return router;

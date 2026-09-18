@@ -13,6 +13,7 @@ import { StatusBadge } from '../components/run/StatusBadge';
 import { ProcessingSummary } from '../components/run/ProcessingSummary';
 import { CompletedSummary } from '../components/run/CompletedSummary';
 import { RefreshIcon } from '../components/ui/icons';
+import { VerifiedExcelUploadModal } from '../components/report/VerifiedExcelUploadModal';
 import { useRunProgress } from '../hooks/useRunProgress';
 import { useToast } from '../context/ToastContext';
 import { isRunReportable } from '../components/run/runStatus';
@@ -44,6 +45,7 @@ export function RunDetailPage() {
   const [cancelling, setCancelling] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
   // Tracks the last-seen runStatus for THIS runId, purely to detect the edge
   // into a terminal state for the completion toast -- reset alongside the
   // other per-runId state below so switching runs never fires a stale toast.
@@ -188,10 +190,10 @@ export function RunDetailPage() {
             // here since cancelRun only ever accepts UPLOADED/PROCESSING.
             isReportable && (
               <div className="flex items-center gap-3">
-                <Button onClick={() => navigate(`/runs/${runId}/report/new`)}>Generate Report</Button>
                 <a href={getExportUrl(runId)}>
                   <Button variant="secondary">Download Excel</Button>
                 </a>
+                <Button onClick={() => setUploadModalOpen(true)}>Upload Verified Excel</Button>
                 <Button variant="ghost" disabled title="This run has already finished -- nothing to cancel">
                   Cancel Run
                 </Button>
@@ -327,6 +329,13 @@ export function RunDetailPage() {
           &larr; Back to Runs
         </Link>
       </p>
+
+      <VerifiedExcelUploadModal
+        open={uploadModalOpen}
+        runId={runId}
+        onClose={() => setUploadModalOpen(false)}
+        onProcessed={(report) => navigate(`/reports/${report.id}/analytics`)}
+      />
     </AppShell>
   );
 }

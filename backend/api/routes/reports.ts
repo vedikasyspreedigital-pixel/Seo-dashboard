@@ -44,9 +44,11 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   router.use(requireAuth);
 
   // Create: turns a completed RankingRun into a RankingReport, eagerly
-  // computing analytics (pure backend code, no Claude) so the wizard's
-  // Analytics Preview step has data to show. Does NOT call Claude -- that's
-  // the separate /generate-insights step below.
+  // computing analytics (pure backend code, no AI/Claude anywhere in this
+  // pipeline) so the wizard's Analytics Preview step has data to show. Manual
+  // entry point -- the primary UI path is now POST /runs/:id/verified-excel
+  // (processVerifiedExcelUpload.ts), which resolves the comparison target
+  // automatically instead of taking previousRunId/previousBaselineId here.
   router.post("/", async (req, res) => {
     const runId = req.body?.runId;
     const previousRunId = req.body?.previousRunId;

@@ -2,23 +2,26 @@ import { prisma } from "../db/client.js";
 import { ReportStatus, Prisma } from "@prisma/client";
 import { InvalidReportTransitionError } from "./errors.js";
 
-// PENDING_ANALYSIS ──▶ ANALYSIS_READY ──▶ REPORT_READY ──▶ EMAIL_DRAFTED ──▶ PENDING_APPROVAL
-//        │        │                           │       ▲                          │        │
-//        │   ANALYSIS_FAILED            EMAIL_DRAFT_FAILED                  APPROVED   REJECTED
-//        │        │  (retry)                   │  (retry)                       │
-//        │        └──▶ PENDING_ANALYSIS        └──▶ REPORT_READY              SENDING
-//        │                                                ▲                   │      │
-//        └───────────────────────────────────▶ REPORT_READY (Build Report    SENT   APPROVED
-//                                                            skips the               (send
-//                                                            optional Claude          failed --
-//                                                            Insights step            retry
-//                                                            entirely)                stays
-//                                                                                      possible)
+// PENDING_ANALYSIS ──▶ REPORT_READY ──▶ EMAIL_DRAFTED ──▶ PENDING_APPROVAL
+//                              ▲                                  │        │
+//                       EMAIL_DRAFT_FAILED                   APPROVED   REJECTED
+//                              │  (retry)                         │
+//                              └──▶ REPORT_READY                SENDING
+//                                                                │      │
+//                                                               SENT   APPROVED
+//                                                                      (send
+//                                                                       failed --
+//                                                                       retry
+//                                                                       stays
+//                                                                       possible)
 //
-// The PENDING_ANALYSIS -> REPORT_READY edge lets "Build Report" run directly
-// off the deterministic analyticsJson computed at report-creation time,
-// without ever calling Claude -- ANALYSIS_READY -> REPORT_READY still works
-// unchanged for reports that did go through Insights first.
+// ANALYSIS_FAILED/ANALYSIS_READY remain in the ReportStatus enum (dropping an
+// enum value is a real migration with production-data risk), and
+// markAnalysisReady/markAnalysisFailed/retryAnalysis below still work, but no
+// route calls them: there is no AI/Claude step in this app, and never has
+// been one it actually called in production. PENDING_ANALYSIS is simply the
+// report's initial state; "Build Report" runs directly off the deterministic
+// analyticsJson computed at report-creation time.
 //
 // The PENDING_APPROVAL -> REPORT_READY edge is an addition made specifically
 // to support the "Regenerate" action on the approval screen -- the original
@@ -79,7 +82,15 @@ export async function guardedUpdate(
   return prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId } });
 }
 
-/** PENDING_ANALYSIS -> ANALYSIS_READY. Backend-computed analytics + Claude's validated analysis. */
+/**
+ * PENDING_ANALYSIS -> ANALYSIS_READY. No route calls this anymore (there is
+ * no AI/Claude step in this app -- "Build Report" runs directly off
+ * PENDING_ANALYSIS's own analyticsJson, see markReportReady below), but the
+ * transition itself, and ANALYSIS_READY -> REPORT_READY, stay valid and
+ * exported: the test suite uses this as a setup helper to advance a report
+ * partway through the state machine, and ANALYSIS_READY remains a legal
+ * status for any historical report row already in it.
+ */
 export async function markAnalysisReady(
   reportId: string,
   { analyticsJson, analysisJson }: { analyticsJson: Prisma.InputJsonValue; analysisJson: Prisma.InputJsonValue },
@@ -92,7 +103,7 @@ export async function markAnalysisReady(
   );
 }
 
-/** PENDING_ANALYSIS -> ANALYSIS_FAILED. */
+/** PENDING_ANALYSIS -> ANALYSIS_FAILED. Same as markAnalysisReady above -- no live caller, kept for the state machine/tests. */
 export async function markAnalysisFailed(reportId: string, { errorMessage }: { errorMessage: string }) {
   return guardedUpdate(
     reportId,
@@ -102,7 +113,7 @@ export async function markAnalysisFailed(reportId: string, { errorMessage }: { e
   );
 }
 
-/** ANALYSIS_FAILED -> PENDING_ANALYSIS. Re-attempt the Claude Report Analyst step. */
+/** ANALYSIS_FAILED -> PENDING_ANALYSIS. Same as markAnalysisReady above -- no live caller, kept for the state machine/tests. */
 export async function retryAnalysis(reportId: string) {
   return guardedUpdate(
     reportId,

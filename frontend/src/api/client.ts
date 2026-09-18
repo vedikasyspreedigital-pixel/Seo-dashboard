@@ -180,6 +180,36 @@ export function getExportUrl(runId: string): string {
   return `${BASE}/runs/${runId}/export`;
 }
 
+export interface UploadVerifiedExcelOutcome {
+  outcome: 'CREATED' | 'DUPLICATE' | 'RUN_NOT_COMPLETED' | 'UNMATCHED_ROWS' | 'ERROR';
+  report?: RankingReport;
+  existingReportId?: string;
+  unmatchedKeywords?: string[];
+  message?: string;
+}
+
+/**
+ * The new workflow's one upload step: the backend automatically compares
+ * this verified Excel against the client's previous verified Excel, builds
+ * the PDF, and drafts the email -- no separate Generate Report/Build Report
+ * call needed. See backend/reporting/processVerifiedExcelUpload.ts.
+ */
+export async function uploadVerifiedExcel(runId: string, file: File): Promise<UploadVerifiedExcelOutcome> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await apiFetch(`/runs/${runId}/verified-excel`, { method: 'POST', body: formData });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 201) return { outcome: 'CREATED', report: body.report as RankingReport };
+  if (res.status === 409 && typeof body.existingReportId === 'string') {
+    return { outcome: 'DUPLICATE', existingReportId: body.existingReportId };
+  }
+  if (res.status === 409) return { outcome: 'RUN_NOT_COMPLETED', message: body.error };
+  if (res.status === 422 && Array.isArray(body.unmatchedKeywords)) {
+    return { outcome: 'UNMATCHED_ROWS', unmatchedKeywords: body.unmatchedKeywords, message: body.error };
+  }
+  return { outcome: 'ERROR', message: body.error ?? `Request failed with status ${res.status}` };
+}
+
 // -- Reports --------------------------------------------------------------
 
 export type CreateReportOutcome =
@@ -285,13 +315,6 @@ export async function updateReportDraft(reportId: string, edits: UpdateReportDra
   return handle<RankingReport>(res);
 }
 
-/** Uploads a custom PDF to attach instead of the generated report -- switches attachmentSource to "custom" server-side as part of the same request. */
-export async function uploadCustomPdf(reportId: string, file: File): Promise<RankingReport> {
-  const formData = new FormData();
-  formData.append('file', file);
-  const res = await apiFetch(`/reports/${reportId}/custom-pdf`, { method: 'POST', body: formData });
-  return handle<RankingReport>(res);
-}
 
 export interface ApproveAndSendResult {
   outcome: 'SENT' | 'NO_RECIPIENTS' | 'ALREADY_PROCESSED' | 'SEND_FAILED';

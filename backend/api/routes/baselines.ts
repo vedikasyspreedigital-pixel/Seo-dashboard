@@ -4,7 +4,7 @@ import { prisma } from "../../db/client.js";
 import { requireAuth } from "../../auth/requireAuth.js";
 import { findOwnedClientOrRespond } from "../../auth/ownership.js";
 import { parseBaselineFile } from "../../baselines/parseBaselineFile.js";
-import { normalizeKeyword } from "../../baselines/normalizeKeyword.js";
+import { createBaselineFromRows } from "../../baselines/createBaselineFromRows.js";
 import { BaselineSourceType } from "@prisma/client";
 
 // Previous-ranking baseline upload: Excel OR PDF, per the client-onboarding
@@ -77,22 +77,12 @@ baselinesRouter.post("/:id/baselines", async (req, res) => {
     }
   }
 
-  const baseline = await prisma.rankingBaseline.create({
-    data: {
-      clientId: client.id,
-      sourceFilename,
-      sourceType: sourceType as BaselineSourceType,
-      baselineDate: parsedDate,
-      createdBy: req.authUser!.email,
-      rows: {
-        create: typedRows.map((row) => ({
-          keyword: row.keyword,
-          normalizedKeyword: normalizeKeyword(row.keyword),
-          rankValue: row.rankValue ?? null,
-          rankDisplay: row.rankDisplay ?? null,
-        })),
-      },
-    },
+  const baseline = await createBaselineFromRows(client.id, {
+    sourceFilename,
+    sourceType: sourceType as BaselineSourceType,
+    baselineDate: parsedDate,
+    createdBy: req.authUser!.email,
+    rows: typedRows,
   });
 
   res.status(201).json({ id: baseline.id, sourceFilename: baseline.sourceFilename, sourceType: baseline.sourceType, baselineDate: baseline.baselineDate, rowCount: typedRows.length });

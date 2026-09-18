@@ -202,6 +202,11 @@ export function SendConfirmationPage() {
         </div>
 
         <div className="mt-5">
+          <p className="eyebrow-label mb-1.5">Body</p>
+          <p className="whitespace-pre-wrap text-sm text-[var(--color-ink)]">{report.emailBody ?? '—'}</p>
+        </div>
+
+        <div className="mt-5">
           <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Approved by</label>
           <p className="text-sm text-[var(--color-ink)]">{user?.name ?? user?.email ?? '—'}</p>
         </div>

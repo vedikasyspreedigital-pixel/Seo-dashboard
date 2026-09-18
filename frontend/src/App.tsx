@@ -7,7 +7,6 @@ import { NewRunPage } from './pages/NewRunPage';
 import { RunDetailPage } from './pages/RunDetailPage';
 import { ReportsListPage } from './pages/ReportsListPage';
 import { ClientsPage } from './pages/ClientsPage';
-import { GenerateReportPage } from './pages/report-wizard/GenerateReportPage';
 import { AnalyticsPreviewPage } from './pages/report-wizard/AnalyticsPreviewPage';
 import { ReportPreviewWizardPage } from './pages/report-wizard/ReportPreviewWizardPage';
 import { EmailDraftPage } from './pages/report-wizard/EmailDraftPage';
@@ -33,7 +32,6 @@ export default function App() {
         <Route path="/runs" element={<RunsListPage />} />
         <Route path="/runs/new" element={<NewRunPage />} />
         <Route path="/runs/:runId" element={<RunDetailPage />} />
-        <Route path="/runs/:runId/report/new" element={<GenerateReportPage />} />
         <Route path="/reports" element={<ReportsListPage />} />
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/reports/:reportId/analytics" element={<AnalyticsPreviewPage />} />

@@ -5,14 +5,11 @@ import { compareRunToBaseline } from "../baselines/compareRunToBaseline.js";
 
 // The API/service wiring that turns a completed RankingRun into a
 // RankingReport. Deliberately thin: it only decides *whether* a report can
-// be created and *which* run to compare against, then stores the report at
-// PENDING_ANALYSIS with analyticsJson eagerly populated (pure backend code,
-// computeRunAnalytics -- no Claude call) so the wizard's Analytics Preview
-// step has something to show. It does NOT run the Claude analyst -- that is
-// a separate, explicit step (see generateInsights.ts), matching the
-// reference design's "the Claude call happens only when you generate
-// insights" checkpoint.
-const REPORTABLE_RUN_STATUSES: RunStatus[] = [RunStatus.COMPLETED, RunStatus.COMPLETED_WITH_ERRORS];
+// be created and *which* run/baseline to compare against, then stores the
+// report at PENDING_ANALYSIS with analyticsJson eagerly populated (pure
+// backend code, computeRunAnalytics/compareRunToBaseline -- no AI/Claude
+// call anywhere in this pipeline).
+export const REPORTABLE_RUN_STATUSES: RunStatus[] = [RunStatus.COMPLETED, RunStatus.COMPLETED_WITH_ERRORS];
 
 export type CreateReportResult =
   | { outcome: "SUCCESS"; report: NonNullable<Awaited<ReturnType<typeof prisma.rankingReport.findUnique>>> }
@@ -24,6 +21,7 @@ export async function createReportForRun(
   runId: string,
   previousRunId?: string,
   previousBaselineId?: string,
+  options?: { skipRunFallback?: boolean },
 ): Promise<CreateReportResult> {
   const run = await prisma.rankingRun.findUnique({ where: { id: runId } });
   if (!run) return { outcome: "RUN_NOT_FOUND" };
@@ -70,6 +68,16 @@ export async function createReportForRun(
   } else if (previousBaselineId) {
     const chosen = await prisma.rankingBaseline.findFirst({ where: { id: previousBaselineId } });
     resolvedPreviousBaselineId = chosen?.id ?? null;
+  } else if (options?.skipRunFallback) {
+    // The verified-Excel upload flow (processVerifiedExcelUpload.ts) always
+    // resolves its own previousBaselineId (the client's latest verified
+    // Excel) up front and passes it explicitly above -- this branch only
+    // runs when that lookup found NOTHING (the client's very first verified
+    // upload). In that case comparing against an older, unverified run would
+    // violate "only ever compare against a previous verified Excel", so this
+    // skips the prior-run fallback entirely and falls through to no
+    // comparison at all (computeRunAnalytics/compareRunToBaseline already
+    // handle that cleanly).
   } else {
     const latest = await prisma.rankingRun.findFirst({
       where: {

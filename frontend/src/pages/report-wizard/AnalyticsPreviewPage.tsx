@@ -55,6 +55,11 @@ export function AnalyticsPreviewPage() {
 
   const analytics = report.analyticsJson;
   const alreadyBuilt = isReportAlreadyBuilt(report.status);
+  // Email is auto-drafted by the verified-Excel upload pipeline
+  // (processVerifiedExcelUpload.ts) -- once the report has moved past
+  // REPORT_READY, an email draft already exists and is sitting in (or past)
+  // the approval queue, so offer a direct shortcut there alongside the PDF.
+  const emailAlreadyDrafted = report.status !== 'PENDING_ANALYSIS' && report.status !== 'ANALYSIS_FAILED' && report.status !== 'ANALYSIS_READY' && report.status !== 'REPORT_READY';
 
   return (
     <AppShell>
@@ -62,7 +67,12 @@ export function AnalyticsPreviewPage() {
         breadcrumbs={[{ label: '← Back to Run', to: `/runs/${report.runId}` }, { label: 'Analytics Preview' }]}
         action={
           alreadyBuilt ? (
-            <Button onClick={() => navigate(`/reports/${reportId}/preview`)}>View Report Preview &rarr;</Button>
+            <div className="flex items-center gap-3">
+              <Button variant={emailAlreadyDrafted ? 'secondary' : undefined} onClick={() => navigate(`/reports/${reportId}/preview`)}>
+                View Report Preview &rarr;
+              </Button>
+              {emailAlreadyDrafted && <Button onClick={() => navigate(`/reports/${reportId}/send`)}>Send Email &rarr;</Button>}
+            </div>
           ) : (
             <Button disabled={generating} onClick={handleBuildReport}>
               {generating && <Spinner />}

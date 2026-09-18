@@ -148,10 +148,6 @@ export function EmailDraftPage() {
           saving={savingDraft}
           disabled={busy}
           justSaved={justSaved}
-          onReportUpdated={(updated) => {
-            setReport(updated);
-            setJustSaved(false); // a different action ran -- any prior "Saved" label is stale
-          }}
         />
       </div>
 
