@@ -1,9 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import ExcelJS from "exceljs";
 import { createApp } from "../backend/api/app.js";
 import { prisma } from "../backend/db/client.js";
 import { createMockEmailSender } from "../backend/reporting/mockEmailSender.js";
+import { ingestExcelRun } from "../backend/runs/ingestExcelRun.js";
+import { COLUMN_HEADERS } from "../backend/excel/parser.js";
 import { ReportStatus } from "@prisma/client";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
 import { createAuthenticatedSession, type AuthFixture } from "./helpers/auth.js";
@@ -78,11 +81,28 @@ async function makePendingApprovalReport(clientId: string, runId: string) {
   });
 }
 
+async function buildVerifiedExcelBuffer(keyword: string, targetUrl: string, rank: string): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Sheet1");
+  sheet.addRow(Object.values(COLUMN_HEADERS));
+  sheet.addRow([keyword, `https://example.com${targetUrl}`, targetUrl, `${keyword} example.com`, "Australia", "google.com.au", "English", "Completed", rank, rank ? `https://example.com${targetUrl}` : ""]);
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+}
+
+async function makeCompletedRunWithRows(clientId: string, keyword: string, targetUrl: string, rank: string) {
+  const buffer = await buildVerifiedExcelBuffer(keyword, targetUrl, rank);
+  const { run } = await ingestExcelRun({ clientId, sourceFilename: "run.xlsx", sourceFilePath: "local-test/run.xlsx", fileBuffer: buffer });
+  return prisma.rankingRun.update({ where: { id: run.id }, data: { status: "COMPLETED", completedAt: new Date() } });
+}
+
 async function cleanupClient(clientId: string) {
   await prisma.rankingReport.deleteMany({ where: { clientId } });
   const runs = await prisma.rankingRun.findMany({ where: { clientId } });
   for (const run of runs) await prisma.rankingRow.deleteMany({ where: { runId: run.id } });
   await prisma.rankingRun.deleteMany({ where: { clientId } });
+  const baselines = await prisma.rankingBaseline.findMany({ where: { clientId } });
+  for (const b of baselines) await prisma.rankingBaselineRow.deleteMany({ where: { baselineId: b.id } });
+  await prisma.rankingBaseline.deleteMany({ where: { clientId } });
   await prisma.client.delete({ where: { id: clientId } });
 }
 
@@ -305,6 +325,49 @@ test("cross-workspace: SEO user cannot reject, build, get the PDF of, regenerate
 
     const unchanged = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
     assert.equal(unchanged.status, "PENDING_APPROVAL", "none of the rejected cross-workspace calls may change report state");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("cross-workspace: SEO user cannot upload a verified Excel for an Advanced SEO run (-> 404, nothing created)", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Workspace Auth Test - verified excel upload ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const res = await seoApp(app)
+      .post(`/api/runs/${run.id}/verified-excel`)
+      .attach("file", tinyExcelBuffer(), "verified.xlsx");
+    assert.equal(res.status, 404);
+
+    const reports = await prisma.rankingReport.findMany({ where: { runId: run.id } });
+    assert.equal(reports.length, 0, "no report must be created from the rejected cross-workspace attempt");
+    const baselines = await prisma.rankingBaseline.findMany({ where: { clientId: client.id } });
+    assert.equal(baselines.length, 0, "no baseline must be created from the rejected cross-workspace attempt");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Directly answers "does the new verified-Excel workflow work the same for
+// the Advanced SEO workspace" -- the route/pipeline never special-cases any
+// workspace, it's entirely clientId-scoped (see processVerifiedExcelUpload.ts),
+// so this runs the real upload as the Advanced SEO owner and confirms the
+// full pipeline (compare -> build PDF -> draft email -> new baseline) works
+// identically to the default workspace used in test/verifiedExcelUpload.test.ts.
+test("same-workspace: the Advanced SEO owner's verified-Excel upload works end-to-end, identically to any other workspace", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Workspace Auth Test - Advanced SEO verified excel ${randomUUID()}`);
+  try {
+    const run = await makeCompletedRunWithRows(client.id, "advanced seo test keyword", "/page", "7");
+    const buffer = await buildVerifiedExcelBuffer("advanced seo test keyword", "/page", "7");
+
+    const res = await advancedSeoApp(app).post(`/api/runs/${run.id}/verified-excel`).attach("file", buffer, "verified.xlsx");
+    assert.equal(res.status, 201);
+    assert.equal(res.body.report.status, "PENDING_APPROVAL", "build + email draft run automatically, same as any other workspace");
+
+    const baselines = await prisma.rankingBaseline.findMany({ where: { clientId: client.id } });
+    assert.equal(baselines.length, 1, "the upload becomes this client's baseline, same as any other workspace");
   } finally {
     await cleanupClient(client.id);
   }
