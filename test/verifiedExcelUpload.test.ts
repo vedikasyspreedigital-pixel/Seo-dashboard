@@ -5,6 +5,7 @@ import ExcelJS from "exceljs";
 import { prisma } from "../backend/db/client.js";
 import { ingestExcelRun } from "../backend/runs/ingestExcelRun.js";
 import { processVerifiedExcelUpload } from "../backend/reporting/processVerifiedExcelUpload.js";
+import { createBaselineFromRows } from "../backend/baselines/createBaselineFromRows.js";
 import { COLUMN_HEADERS } from "../backend/excel/parser.js";
 import { createApp } from "../backend/api/app.js";
 import { createAuthenticatedSession, type AuthFixture } from "./helpers/auth.js";
@@ -109,6 +110,47 @@ test("processVerifiedExcelUpload: first verified upload for a client has no comp
     const baselines = await prisma.rankingBaseline.findMany({ where: { clientId: client.id } });
     assert.equal(baselines.length, 1, "the first verified upload becomes the client's baseline");
     assert.equal(baselines[0].sourceFilename, "verified-a.xlsx");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+// Answers a real question: a client onboarded via Client Management's
+// "Upload Previous Ranking" (an agency's existing report, imported as a
+// RankingBaseline -- see backend/api/routes/baselines.ts /
+// createBaselineFromRows.ts) has NO prior verified-Excel upload yet, but
+// DOES already have a baseline row. processVerifiedExcelUpload's baseline
+// lookup is source-agnostic -- it just takes the client's most recently
+// created RankingBaseline, whoever created it -- so their first-ever
+// verified-Excel upload should compare against that imported baseline
+// instead of showing "no comparison."
+test("processVerifiedExcelUpload: a client's first verified upload compares against a baseline manually imported via Client Management", async () => {
+  const client = await makeClient();
+  try {
+    const importedBaseline = await createBaselineFromRows(client.id, {
+      sourceFilename: "agency-report.xlsx",
+      sourceType: "EXCEL",
+      baselineDate: new Date("2026-08-01"),
+      createdBy: "qa@example.com",
+      rows: [{ keyword: "car wreckers mandurah", rankValue: 20, rankDisplay: "20" }],
+    });
+
+    const run = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+    const verifiedBuffer = await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+
+    const result = await processVerifiedExcelUpload(run.id, verifiedBuffer, "verified-a.xlsx", "qa@example.com");
+    assert.equal(result.outcome, "SUCCESS");
+    if (result.outcome !== "SUCCESS") return;
+
+    assert.equal(result.report.previousBaselineId, importedBaseline.id, "compares against the imported baseline, not 'no comparison'");
+    const analytics = result.report.analyticsJson as any;
+    assert.equal(analytics.hasComparison, true);
+    assert.equal(analytics.movements.improved.length, 1, "20 -> 12 is an improvement");
+    assert.equal(analytics.movements.improved[0].previousRank, 20);
+    assert.equal(analytics.movements.improved[0].currentRank, 12);
+
+    const baselines = await prisma.rankingBaseline.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "asc" } });
+    assert.equal(baselines.length, 2, "the imported baseline is kept, and this upload adds a second one -- neither is overwritten");
   } finally {
     await cleanup(client.id);
   }
