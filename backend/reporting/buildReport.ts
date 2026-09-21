@@ -51,7 +51,11 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
   const pdfBuffer = await generateClientReportPdf({
     clientName: report.client.name,
     clientDomain: report.client.domain,
-    currentRunDate: report.run.completedAt ?? report.run.createdAt,
+    // The date shown under the title (and as the "current" column header in
+    // the ranking table) is the day this PDF is actually being built, not
+    // when the underlying run finished fetching -- the two can differ by
+    // several days between fetching, manual verification, and sending.
+    currentRunDate: new Date(),
     // A report's "previous" side is either a prior real run OR an imported
     // baseline, never both (see createReportForRun) -- whichever is set
     // supplies the comparison date shown in the PDF header.

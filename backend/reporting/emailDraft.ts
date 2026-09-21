@@ -19,13 +19,10 @@ export interface EmailDraftOutput {
 }
 
 const SIGNATURE = `Thanks and Regards,
-
 TEAM SySpree
-
 SySpree Digital Pvt. Limited
 SySpree Digital PTE. Limited
 India | Singapore
-
 Email: support@syspreesolutions.com`;
 
 /** Fills the standard client-facing template with the real reporting period -- same dates shown on the PDF (generateClientReportPdf.ts formats them identically). */
