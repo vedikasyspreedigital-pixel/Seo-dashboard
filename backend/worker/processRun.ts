@@ -12,6 +12,7 @@ interface RankingRowRecord {
   id: string;
   keyword: string;
   targetUrl: string;
+  fullUrl: string | null;
   locationName: string;
   seDomain: string;
   languageName: string;

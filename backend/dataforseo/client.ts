@@ -11,6 +11,8 @@ export interface DataForSeoRequestPayload {
   device: string;
   os: string;
   depth: number;
+  stop_crawl_on_match?: { match_type: string; match_value: string }[];
+  find_targets_in?: string[];
 }
 
 export interface DataForSeoCallResult {

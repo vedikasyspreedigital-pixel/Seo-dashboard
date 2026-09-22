@@ -152,7 +152,9 @@ test('not-found response: row completes as "Not in 100"', async () => {
         {
           status_code: 20000,
           status_message: "Ok.",
-          result: [{ keyword: "unrelated keyword", items: [] }],
+          // pages_count: 10 -- a full-depth (depth=100) crawl, so the
+          // depth-coverage guard trusts this "not found" as genuine.
+          result: [{ keyword: "unrelated keyword", items: [], pages_count: 10 }],
         },
       ],
     };

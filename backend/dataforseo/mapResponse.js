@@ -41,6 +41,20 @@ const NO_SEARCH_RESULTS_STATUS_CODE = 40102;
 const PARTIAL_RESULTS_STATUS_CODE = 40106;
 const RETRYABLE_STATUS_CODES = new Set([40101, 40103, 40106, 40202]);
 
+// Live Regular's own docs describe items[] as potentially mixing organic,
+// paid, and featured-snippet results in the same array -- confirmed absent
+// from every real response recorded so far (320/320 stored items are
+// "organic"), but `target`'s domain-match has no reason to exclude a non-
+// organic element on that same domain (e.g. the client also running a
+// Google Ad). Filtering to organic-only before ever reading rank_group/url
+// is what actually enforces "only organic ranks count", independent of
+// whether a non-organic item happens to sort first in `items`.
+const ORGANIC_TYPE = 'organic';
+
+function organicItems(items) {
+  return Array.isArray(items) ? items.filter((item) => item?.type === ORGANIC_TYPE) : [];
+}
+
 export function isRetryableDataForSeoStatusCode(code) {
   if (RETRYABLE_STATUS_CODES.has(code)) return true;
   return code >= 50000 && code < 60000;
@@ -209,9 +223,9 @@ export function mapDataForSeoResponse({ transportError, httpStatus, body, reques
     // ran out). Accept a match if the existing matcher finds one; only
     // fall through to the normal retryable-error handling when it doesn't.
     const partialResult = Array.isArray(task.result) ? task.result[0] : null;
-    const partialItems = Array.isArray(partialResult?.items) ? partialResult.items : [];
-    if (partialItems.length > 0) {
-      const matched = matchFromItems(task, partialItems);
+    const partialOrganicItems = organicItems(partialResult?.items);
+    if (partialOrganicItems.length > 0) {
+      const matched = matchFromItems(task, partialOrganicItems);
       if (matched) return matched;
     }
     return apiError({ statusCode: task.status_code, statusMessage: task.status_message ?? 'Unknown task error' });
@@ -233,14 +247,27 @@ export function mapDataForSeoResponse({ transportError, httpStatus, body, reques
     }
   }
 
-  const items = result?.items ?? [];
+  // Filtered to organic-only BEFORE matching -- see organicItems' comment.
+  // `result.items` can be genuinely empty (nothing matched `target` at all)
+  // or non-empty but entirely non-organic (e.g. the target domain running a
+  // paid ad); both must be treated identically to "no organic match yet".
+  const items = organicItems(result?.items);
   if (items.length === 0) {
+    // Same rule as the 40102 path: a status_code 20000 + no organic items is
+    // only trustworthy as "not found" if the crawl actually reached the
+    // requested depth first -- see hasSufficientDepthCoverage's comment.
+    // Confirmed 0 real occurrences of this exact shape so far (every real
+    // "not found" response recorded has used 40102 instead), but nothing
+    // guarantees that stays true, so this path is guarded the same way.
+    if (!hasSufficientDepthCoverage(requestPayload, result)) {
+      return incompleteDepthCoverage(task, result, requestPayload);
+    }
     return notFoundSuccess(task);
   }
 
   // `target` is a wildcard filter, so DataForSEO may return more than one
   // matching page on the same domain. Items are already rank-ordered; the
-  // locked mapping uses the first (best-ranked) match.
+  // locked mapping uses the first (best-ranked) organic match.
   const best = items[0];
   if (typeof best.rank_group !== 'number') {
     return mappingError('Matched item missing rank_group', { matchedItemCount: items.length });

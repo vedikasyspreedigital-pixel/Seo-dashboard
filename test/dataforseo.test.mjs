@@ -10,6 +10,7 @@ import { mapDataForSeoResponse } from "../backend/dataforseo/mapResponse.js";
 const CASH_FOR_CARS_ROW = {
   keyword: "cash for cars perth",
   targetUrl: "*cash-for-cars-perth.*",
+  fullUrl: "cash-for-cars-perth.com.au",
   locationName: "Australia",
   seDomain: "google.com.au",
   languageName: "English",
@@ -30,7 +31,7 @@ function organicItem(overrides = {}) {
   };
 }
 
-function successBody(items) {
+function successBody(items, pagesCount = 10) {
   return {
     status_code: 20000,
     status_message: "Ok.",
@@ -38,7 +39,11 @@ function successBody(items) {
       {
         status_code: 20000,
         status_message: "Ok.",
-        result: [{ keyword: "cash for cars perth", items }],
+        // pages_count defaults to a full-depth crawl (10 pages = depth 100) --
+        // real responses always include this field; a match doesn't depend
+        // on it, but the "not found" tests need it to prove the crawl
+        // actually reached full depth before trusting "Not in 100".
+        result: [{ keyword: "cash for cars perth", items, pages_count: pagesCount }],
       },
     ],
   };
@@ -55,7 +60,21 @@ test("buildDataForSeoRequest maps the locked cash-for-cars-perth row exactly", (
     device: "desktop",
     os: "windows",
     depth: 100,
+    // Verified live against the real DataForSEO API: match_type
+    // "with_subdomains" + the real fullUrl domain (not the fuzzy wildcard
+    // targetUrl, which DataForSEO rejects here) crawls the same full
+    // depth=100 on a genuine non-match (confirmed pages_count=10, full
+    // cost), and stops/refunds early on a genuine match (confirmed page 1,
+    // ~1/8th cost, correct rank_group) -- a cost change, never accuracy.
+    stop_crawl_on_match: [{ match_type: "with_subdomains", match_value: "cash-for-cars-perth.com.au" }],
+    find_targets_in: ["organic"],
   });
+});
+
+test("buildDataForSeoRequest omits stop_crawl_on_match/find_targets_in entirely when fullUrl is empty (falls back to the exact prior behavior for that row)", () => {
+  const payload = buildDataForSeoRequest({ ...CASH_FOR_CARS_ROW, fullUrl: null });
+  assert.equal(payload.stop_crawl_on_match, undefined);
+  assert.equal(payload.find_targets_in, undefined);
 });
 
 test("ranking found: single matching item maps to SUCCESS with rank_group and url", () => {
@@ -94,15 +113,101 @@ test("multiple matching URLs on the same domain: uses the first (best-ranked) it
   assert.equal(mapped.matchedItemCount, 2);
 });
 
-test('not found within depth 100: empty items array maps to "Not in 100"', () => {
+// Regression coverage for organic-only matching: DataForSEO's own docs
+// describe items[] as potentially mixing organic, paid, and featured-snippet
+// results (0 real occurrences found in production data so far, but nothing
+// guarantees that stays true). A non-organic item ranked ABOVE the real
+// organic result must never be picked as "best" -- only rank_group among
+// organic items counts.
+test("a non-organic item (e.g. a paid ad on the same domain) ranked first is skipped -- the organic match is used instead", () => {
+  const items = [
+    organicItem({ type: "paid", rank_group: 1, url: "https://www.cash-for-cars-perth.com.au/ad" }),
+    organicItem({ rank_group: 8 }), // type: "organic" (the helper's default)
+  ];
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body: successBody(items),
+  });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.rankValue, 8, "the paid item's rank_group=1 must never be reported as the ranking");
+  assert.equal(mapped.rankingUrl, "https://www.cash-for-cars-perth.com.au/");
+  assert.equal(mapped.matchedItemCount, 1, "matchedItemCount reflects organic items only");
+});
+
+test("items containing ONLY non-organic results (full-depth crawl) map to \"Not in 100\", not a match", () => {
+  const items = [organicItem({ type: "paid", rank_group: 1 }), organicItem({ type: "featured_snippet", rank_group: 1 })];
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body: successBody(items),
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
+  });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.rankValue, null);
+  assert.equal(mapped.rankDisplay, "Not in 100");
+});
+
+test("Task Completed with Partial Results (40106): a non-organic item is skipped, the organic match underneath it is used", () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [
+      {
+        status_code: 40106,
+        status_message: "Task completed with partial results.",
+        result: [{ items: [organicItem({ type: "paid", rank_group: 1 }), organicItem({ rank_group: 3 })] }],
+      },
+    ],
+  };
+  const mapped = mapDataForSeoResponse({ httpStatus: 200, body });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.rankValue, 3);
+});
+
+test('not found within depth 100: empty items array (full-depth crawl) maps to "Not in 100"', () => {
   const mapped = mapDataForSeoResponse({
     httpStatus: 200,
     body: successBody([]),
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
   });
   assert.equal(mapped.outcome, "SUCCESS");
   assert.equal(mapped.rankValue, null);
   assert.equal(mapped.rankDisplay, "Not in 100");
   assert.equal(mapped.rankingUrl, null);
+});
+
+// Regression test for the depth-coverage gap: status_code 40102 already had
+// this guard (see the tests below), but the far more common status_code
+// 20000 + items:[] "not found" path had none at all -- a shallow crawl on
+// THIS path was confirmed as "Not in 100" outright, with no depth check
+// whatsoever. 0 real occurrences of this exact shape were found in
+// production data (every real "not found" response recorded used 40102
+// instead), but nothing in DataForSEO's docs guarantees that stays true, so
+// this path is now guarded identically to the 40102 one.
+test('status_code 20000 + items:[] with a SHALLOW crawl (pages_count: 2 of ~10) -> retryable API_ERROR, NOT "Not in 100"', () => {
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body: successBody([], 2),
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
+  });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+  assert.equal(mapped.rankValue, null);
+  assert.notEqual(mapped.rankDisplay, "Not in 100");
+});
+
+test("status_code 20000 + items:[] with no pages_count at all -> retryable API_ERROR (no completeness evidence to trust \"Not in 100\")", () => {
+  const body = {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks: [{ status_code: 20000, status_message: "Ok.", result: [{ items: [] }] }],
+  };
+  const mapped = mapDataForSeoResponse({
+    httpStatus: 200,
+    body,
+    requestPayload: buildDataForSeoRequest(CASH_FOR_CARS_ROW),
+  });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
 });
 
 test('task status 40102 "No Search Results" with a full-depth crawl (items: null, pages_count: 10) -> SUCCESS, "Not in 100", not an error', () => {

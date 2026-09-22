@@ -1,7 +1,29 @@
 import { useEffect, type ReactNode } from 'react';
 
-/** Generic modal: backdrop + centered glass-surface panel, matching this app's existing Card look. Closes on Escape or a backdrop click -- never on a click inside the panel itself. */
-export function Modal({ open, onClose, title, children, footer }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode }) {
+/**
+ * Generic modal: backdrop + centered glass-surface panel, matching this app's existing Card look.
+ * Closes on Escape or a backdrop click -- never on a click inside the panel itself.
+ *
+ * `closeOnBackdropClick` (default true) lets a form-heavy modal (e.g. Add/Edit Client) opt out of
+ * the backdrop-click close, so a stray click outside the dialog can never silently discard
+ * whatever the user has already typed -- Escape still works, since that's a deliberate keypress,
+ * not an easy-to-trigger accidental click just outside the panel.
+ */
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  closeOnBackdropClick = true,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  closeOnBackdropClick?: boolean;
+}) {
   useEffect(() => {
     if (!open) return;
     function handleKeyDown(e: KeyboardEvent) {
@@ -14,7 +36,7 @@ export function Modal({ open, onClose, title, children, footer }: { open: boolea
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={closeOnBackdropClick ? onClose : undefined}>
       <div
         className="glass-surface flex max-h-[85vh] w-full max-w-md flex-col rounded-[22px] border border-[var(--color-border)] shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset,0_8px_30px_rgba(0,0,0,0.25)]"
         onClick={(e) => e.stopPropagation()}

@@ -293,6 +293,7 @@ export function ClientsPage() {
         open={formModal !== null}
         onClose={() => setFormModal(null)}
         title={formModal?.mode === 'edit' ? 'Edit Client' : 'Add Client'}
+        closeOnBackdropClick={false}
         footer={
           <>
             <Button variant="ghost" onClick={() => setFormModal(null)}>
