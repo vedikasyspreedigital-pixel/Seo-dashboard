@@ -47,7 +47,7 @@ export function NotificationPanel({ open, onClose, notifications }: Props) {
   return (
     <>
       <div
-        className={`fixed inset-0 z-50 bg-black/60 transition-opacity duration-300 ${open ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+        className={`fixed inset-0 z-50 bg-black transition-opacity duration-300 ${open ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         onClick={onClose}
         aria-hidden={!open}
       />
