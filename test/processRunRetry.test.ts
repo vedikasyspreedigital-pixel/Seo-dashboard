@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
-import { processRun } from "../backend/worker/processRun.js";
+import { processRun, backoffDelayMs } from "../backend/worker/processRun.js";
 import type { DataForSeoCallResult, DataForSeoRequestPayload } from "../backend/dataforseo/client.js";
 
 // Regression tests for the retry-loop fix: a row that comes back
@@ -11,6 +11,10 @@ import type { DataForSeoCallResult, DataForSeoRequestPayload } from "../backend/
 // exhausts retryCount/maxRetries -- exactly the gap found via real
 // production data (9 rows landing in FAILED after a single attempt each,
 // because retryable errors were misclassified as permanent).
+
+// Retries back off for real-world seconds (see backoffDelayMs) -- skip the
+// actual wait here; the delay values themselves are asserted separately.
+const noSleep = async (_ms: number) => {};
 
 function okBody(taskStatusCode: number, taskStatusMessage: string) {
   return {
@@ -78,7 +82,7 @@ test("a row that fails once with a retryable code (40101) is retried in place an
       return { httpStatus: 200, body: { status_code: 20000, status_message: "Ok.", tasks: [{ status_code: 20000, status_message: "Ok.", result: [{ items: [{ type: "organic", rank_group: 5, url: "https://example.com/" }] }] }] } };
     };
 
-    await processRun(run.id, callDataForSeo);
+    await processRun(run.id, callDataForSeo, { sleep: noSleep });
 
     assert.equal(callCount, 2, "should have called DataForSEO twice: fail once, succeed on retry");
 
@@ -112,7 +116,7 @@ test("a row that never succeeds exhausts retries and becomes FAILED after exactl
       return { httpStatus: 200, body: okBody(40106, "Task completed with partial results.") };
     };
 
-    await processRun(run.id, callDataForSeo);
+    await processRun(run.id, callDataForSeo, { sleep: noSleep });
 
     assert.equal(callCount, 2, "maxRetries=2 must mean 2 TOTAL attempts, not 2 retries on top of an initial one");
 
@@ -143,7 +147,7 @@ test("a permanent (non-retryable) error still fails immediately after just 1 att
       return { httpStatus: 200, body: okBody(40100, "Auth error. Invalid Login/Password.") };
     };
 
-    await processRun(run.id, callDataForSeo);
+    await processRun(run.id, callDataForSeo, { sleep: noSleep });
 
     assert.equal(callCount, 1, "a genuinely permanent error must not be retried at all");
     const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
@@ -179,7 +183,7 @@ test("40102 (No Search Results) with a full-depth crawl still completes immediat
       };
     };
 
-    await processRun(run.id, callDataForSeo);
+    await processRun(run.id, callDataForSeo, { sleep: noSleep });
 
     assert.equal(callCount, 1);
     const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
@@ -234,7 +238,7 @@ test("40102 with a shallow crawl (pages_count short of depth) is retried, then s
       };
     };
 
-    await processRun(run.id, callDataForSeo);
+    await processRun(run.id, callDataForSeo, { sleep: noSleep });
 
     assert.equal(callCount, 2, "shallow 40102 crawl must be retried, not trusted as Not-in-100");
     const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
@@ -292,7 +296,7 @@ test("40106 with a matching item is accepted immediately -- no retry needed, ran
       };
     };
 
-    await processRun(run.id, callDataForSeo);
+    await processRun(run.id, callDataForSeo, { sleep: noSleep });
 
     assert.equal(callCount, 1, "a confident match in a partial-results response must be accepted, not retried");
     const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
@@ -302,4 +306,43 @@ test("40106 with a matching item is accepted immediately -- no retry needed, ran
   } finally {
     await cleanup(client.id);
   }
+});
+
+// Regression test for the too-short-backoff bug. Modeled on the real
+// Reliance Force Security run (2026-09-23): "security companies in dubai"
+// got 40102 on a 2-3 page crawl 3 times within ~30s and ended FAILED, then
+// the identical request found rank 18 on a full crawl ~1h later. Retries
+// must now be spread out (15s, then 30s) rather than 0.5s/1s apart.
+test("retries of a shallow-crawl 40102 wait 15s then 30s between attempts", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    const row = await makeRow(run.id, { maxRetries: 3 });
+
+    const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => ({
+      httpStatus: 200,
+      body: {
+        status_code: 20000,
+        status_message: "Ok.",
+        tasks: [{ status_code: 40102, status_message: "No Search Results.", result: [{ items: null, pages_count: 2 }] }],
+      },
+    });
+
+    const delays: number[] = [];
+    await processRun(run.id, callDataForSeo, { sleep: async (ms) => { delays.push(ms); } });
+
+    assert.deepEqual(delays, [15_000, 30_000], "one wait before each retry, none after the final attempt");
+    const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(finalRow.status, "FAILED");
+    assert.equal(finalRow.retryCount, 3);
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("backoffDelayMs doubles per retry and caps at 60s", () => {
+  assert.equal(backoffDelayMs(1), 15_000);
+  assert.equal(backoffDelayMs(2), 30_000);
+  assert.equal(backoffDelayMs(3), 60_000);
+  assert.equal(backoffDelayMs(10), 60_000);
 });

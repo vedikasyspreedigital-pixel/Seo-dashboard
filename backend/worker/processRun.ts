@@ -18,21 +18,34 @@ interface RankingRowRecord {
   languageName: string;
 }
 
-// Small exponential backoff between retry attempts on the SAME row --
-// deliberately kept low so a batch with a handful of retries doesn't grind
-// to a halt waiting it out. Delay is based on the row's own retryCount
-// right after a failed attempt (1 = just failed for the first time), so
-// the wait before attempt 2 is BACKOFF_BASE_MS, before attempt 3 is
-// BACKOFF_BASE_MS*2, etc., capped at BACKOFF_MAX_MS.
-const BACKOFF_BASE_MS = 500;
-const BACKOFF_MAX_MS = 5000;
+// Exponential backoff between retry attempts on the SAME row. Delay is
+// based on the row's own retryCount right after a failed attempt (1 = just
+// failed for the first time), so the wait before attempt 2 is
+// BACKOFF_BASE_MS, before attempt 3 is BACKOFF_BASE_MS*2, etc., capped at
+// BACKOFF_MAX_MS.
+//
+// Was 500ms/1s, which put all 3 attempts within ~30s of each other --
+// found via real production data (Reliance Force Security run, 2026-09-23):
+// two rows got 40102 on shallow crawls (2-3 and 7-8 of ~10 pages) on every
+// attempt and ended FAILED, while the identical requests re-run ~1h later
+// crawled fully and one found rank 18. DataForSEO's shallow-crawl episodes
+// outlast a sub-second retry, so attempts are now spread over ~45s. Only
+// rows that actually fail pay this cost; a first-attempt success never
+// sleeps.
+const BACKOFF_BASE_MS = 15_000;
+const BACKOFF_MAX_MS = 60_000;
 
-function backoffDelayMs(retryCount: number): number {
+export function backoffDelayMs(retryCount: number): number {
   return Math.min(BACKOFF_BASE_MS * 2 ** (retryCount - 1), BACKOFF_MAX_MS);
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface ProcessRunOptions {
+  /** Injectable so tests can record retry delays without actually waiting them out. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -41,7 +54,7 @@ function sleep(ms: number): Promise<void> {
  * a row comes back ERROR_RETRY (a retryable failure with retries still
  * remaining -- see mapResponse.js's isRetryableDataForSeoStatusCode and
  * rowTransitions.js's failRowAttempt), it is retried again in place, after
- * a small backoff, until it reaches a terminal status (COMPLETED or
+ * a backoff (see backoffDelayMs), until it reaches a terminal status (COMPLETED or
  * FAILED) -- never left behind in ERROR_RETRY for a human to notice and
  * manually re-trigger via a whole separate run.
  *
@@ -65,7 +78,11 @@ function sleep(ms: number): Promise<void> {
  * Reuses the exact same tested modules as scripts/run-real-batch.mjs --
  * no ranking/mapping/state-machine logic is duplicated or changed here.
  */
-export async function processRun(runId: string, callDataForSeo: CallDataForSeoFn): Promise<void> {
+export async function processRun(
+  runId: string,
+  callDataForSeo: CallDataForSeoFn,
+  { sleep: sleepFn = sleep }: ProcessRunOptions = {},
+): Promise<void> {
   const rows: RankingRowRecord[] = await prisma.rankingRow.findMany({
     where: { runId, status: { in: ['PENDING', 'ERROR_RETRY'] } },
   });
@@ -88,7 +105,7 @@ export async function processRun(runId: string, callDataForSeo: CallDataForSeoFn
       });
 
       if (updatedRow.status !== 'ERROR_RETRY') break; // COMPLETED or FAILED -- this row is done
-      await sleep(backoffDelayMs(updatedRow.retryCount));
+      await sleepFn(backoffDelayMs(updatedRow.retryCount));
     }
   }
 
