@@ -9,7 +9,7 @@ import { parseRankingExcel, COLUMN_HEADERS } from '../../excel/parser.js';
 import { startRun, cancelRun } from '../../statemachine/runTransitions.js';
 import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
-import { processVerifiedExcelUpload } from '../../reporting/processVerifiedExcelUpload.js';
+import { processVerifiedExcelUpload, describeRegenerationBlock, describeReportGeneration } from '../../reporting/processVerifiedExcelUpload.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
@@ -295,8 +295,15 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
           res.status(409).json({ error: 'Run is not completed yet -- fetch rankings before uploading a verified Excel.' });
           return;
         case 'DUPLICATE_REPORT':
-          res.status(409).json({ error: 'A report already exists for this run', existingReportId: result.existingReportId });
+          // Only reachable if two first-time uploads for the same run race each other.
+          res.status(409).json({ code: 'DUPLICATE_REPORT', error: 'Another upload for this run is being processed. Refresh and try again.', existingReportId: result.existingReportId });
           return;
+        case 'REPORT_LOCKED':
+        case 'BASELINE_IN_USE': {
+          const { status, body } = describeRegenerationBlock(result);
+          res.status(status).json(body);
+          return;
+        }
         case 'NO_ROWS_PARSED':
           res.status(422).json({ error: 'No keyword rows could be read from this file.' });
           return;
@@ -307,7 +314,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
           });
           return;
         case 'SUCCESS':
-          res.status(201).json({ report: result.report });
+          res.status(result.regenerated ? 200 : 201).json(describeReportGeneration(result));
           return;
       }
     } catch (err) {

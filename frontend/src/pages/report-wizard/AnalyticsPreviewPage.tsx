@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AppShell } from '../../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../../components/layout/PageHeader';
 import { Card } from '../../components/ui/Card';
@@ -10,8 +10,15 @@ import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { isReportAlreadyBuilt } from '../../components/report/reportStatus';
 import { Badge } from '../../components/ui/Badge';
-import { buildReport, getReport } from '../../api/client';
-import type { RankingReport } from '../../api/types';
+import { AlertPanel } from '../../components/ui/AlertPanel';
+import { VerifiedExcelUploadModal } from '../../components/report/VerifiedExcelUploadModal';
+import { describeReportGeneration, type ReportGenerationNoticeState } from '../../components/report/reportGenerationNotice';
+import { buildReport, getReport, regenerateReport } from '../../api/client';
+import { formatReportDate } from '../../utils/formatters';
+import type { RankingReport, ReportStatus } from '../../api/types';
+
+/** A report stops being editable once it's being sent, has been sent, or was rejected. */
+const LOCKED_STATUSES: ReportStatus[] = ['SENDING', 'SENT', 'REJECTED'];
 
 export function AnalyticsPreviewPage() {
   const { reportId } = useParams<{ reportId: string }>();
@@ -19,6 +26,10 @@ export function AnalyticsPreviewPage() {
   const [report, setReport] = useState<RankingReport | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const location = useLocation();
+  const [notice, setNotice] = useState<string | null>((location.state as ReportGenerationNoticeState | null)?.generationNotice ?? null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
 
   useEffect(() => {
     if (!reportId) return;
@@ -31,6 +42,33 @@ export function AnalyticsPreviewPage() {
     setGenerating(false);
     getReport(reportId).then(setReport);
   }, [reportId]);
+
+  async function handleRegenerate() {
+    if (!reportId || regenerating) return;
+    const ok = window.confirm(
+      'Regenerate this report?\n\nThe comparison, PDF and email subject/body are rebuilt with today’s date. Recipients and CC stay as they are.',
+    );
+    if (!ok) return;
+    setRegenerating(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const { summary } = await regenerateReport(reportId);
+      setReport(await getReport(reportId));
+      setNotice(describeReportGeneration(summary));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  async function handleUploaded(updated: RankingReport, summary: Parameters<typeof describeReportGeneration>[0]) {
+    setUploadOpen(false);
+    setError(null);
+    setReport(await getReport(updated.id));
+    setNotice(describeReportGeneration(summary));
+  }
 
   async function handleBuildReport() {
     if (!reportId || generating) return; // guard against double-clicks/duplicate requests
@@ -60,6 +98,9 @@ export function AnalyticsPreviewPage() {
   // REPORT_READY, an email draft already exists and is sitting in (or past)
   // the approval queue, so offer a direct shortcut there alongside the PDF.
   const emailAlreadyDrafted = report.status !== 'PENDING_ANALYSIS' && report.status !== 'ANALYSIS_FAILED' && report.status !== 'ANALYSIS_READY' && report.status !== 'REPORT_READY';
+  const locked = LOCKED_STATUSES.includes(report.status);
+  const busy = regenerating || generating;
+  const currentDateLabel = report.reportDate ? formatReportDate(report.reportDate) : 'the latest run';
 
   return (
     <AppShell>
@@ -67,7 +108,18 @@ export function AnalyticsPreviewPage() {
         breadcrumbs={[{ label: '← Back to Run', to: `/runs/${report.runId}` }, { label: 'Analytics Preview' }]}
         action={
           alreadyBuilt ? (
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {!locked && (
+                <>
+                  <Button variant="ghost" disabled={busy} onClick={handleRegenerate} title="Rebuild the comparison, PDF and email with today’s date">
+                    {regenerating && <Spinner />}
+                    Regenerate
+                  </Button>
+                  <Button variant="secondary" disabled={busy} onClick={() => setUploadOpen(true)}>
+                    Upload Updated Excel
+                  </Button>
+                </>
+              )}
               <Button variant={emailAlreadyDrafted ? 'secondary' : undefined} onClick={() => navigate(`/reports/${reportId}/preview`)}>
                 View Report Preview &rarr;
               </Button>
@@ -94,6 +146,37 @@ export function AnalyticsPreviewPage() {
           <ReportErrorBanner message={error} />
         </div>
       )}
+
+      {notice && (
+        <div className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-4 py-3 text-sm font-medium text-emerald-300">
+          {notice}
+        </div>
+      )}
+
+      <AlertPanel tone="info" className="mt-4 text-sm text-[var(--color-ink-muted)]">
+        {report.previousBaseline ? (
+          <p>
+            Comparing <span className="font-semibold text-[var(--color-ink)]">{currentDateLabel}</span> against{' '}
+            <span className="font-semibold text-[var(--color-ink)]">{formatReportDate(report.previousBaseline.baselineDate)}</span>
+            <span className="text-[var(--color-ink-faint)]"> · from {report.previousBaseline.sourceFilename}</span>
+          </p>
+        ) : report.previousRunId ? (
+          <p>
+            Comparing <span className="font-semibold text-[var(--color-ink)]">{currentDateLabel}</span> against an earlier run.
+          </p>
+        ) : (
+          <p>No earlier ranking found for this client, so this first report shows current ranks only.</p>
+        )}
+        <p className="mt-1 text-xs text-[var(--color-ink-faint)]">
+          {locked
+            ? report.status === 'SENT'
+              ? 'Sent to the client — this report is locked.'
+              : report.status === 'SENDING'
+                ? 'Sending now — changes are paused until it finishes.'
+                : 'This report was rejected and can’t be changed.'
+            : 'Need a fix? Upload an updated Excel or click Regenerate — as often as you like. The comparison above stays the same, and these ranks only become the client’s new baseline once you send.'}
+        </p>
+      </AlertPanel>
 
       {analytics && (
         <>
@@ -146,6 +229,13 @@ export function AnalyticsPreviewPage() {
           )}
         </>
       )}
+      <VerifiedExcelUploadModal
+        open={uploadOpen}
+        runId={report.runId}
+        updatingExisting
+        onClose={() => setUploadOpen(false)}
+        onProcessed={(updated, summary) => void handleUploaded(updated, summary)}
+      />
     </AppShell>
   );
 }

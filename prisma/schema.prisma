@@ -253,6 +253,9 @@ model RankingRun {
   // pipeline, and RankingRun never reads/writes RankingReport itself.
   reportsAsCurrentRun  RankingReport[] @relation("ReportRun")
   reportsAsPreviousRun RankingReport[] @relation("ReportPreviousRun")
+  // Baselines produced by this run's verified-Excel upload (at most one in
+  // practice -- re-uploads replace it in place, see processVerifiedExcelUpload).
+  producedBaselines    RankingBaseline[] @relation("BaselineSourceRun")
 
   @@map("ranking_runs")
 }
@@ -283,11 +286,20 @@ model RankingBaseline {
   baselineDate DateTime @map("baseline_date")
   createdBy    String?  @map("created_by")
   createdAt    DateTime @default(now()) @map("created_at")
+  // Set when this baseline was produced by a run's verified-Excel upload
+  // (null for a manual "Upload Previous Ranking" import). Lets a re-upload
+  // or regenerate replace the run's OWN baseline instead of stacking a new
+  // one, and keeps it out of that same run's own "previous" comparison.
+  // SetNull: deleting the run keeps the baseline, like every other baseline.
+  sourceRunId  String?     @map("source_run_id")
+  sourceRun    RankingRun? @relation("BaselineSourceRun", fields: [sourceRunId], references: [id], onDelete: SetNull)
 
   rows                RankingBaselineRow[]
   reportsAsPreviousBaseline RankingReport[] @relation("ReportPreviousBaseline")
 
   @@index([clientId, createdAt])
+  @@index([clientId, baselineDate])
+  @@index([sourceRunId])
   @@map("ranking_baselines")
 }
 
@@ -417,6 +429,16 @@ model RankingReport {
   resolvedClickupTaskUrl String? @map("resolved_clickup_task_url") // copied from ClientReportConfig.clickupTaskUrl, human-editable, never AI-decided
 
   lastErrorMessage String? @map("last_error_message")
+
+  // The day the PDF was last (re)built -- the PDF's current-column date, the
+  // email's period end, and the date of the baseline this report's run
+  // produces, so all three always agree. Null on reports built before this
+  // field existed (those fall back to the run's completion date).
+  reportDate DateTime? @map("report_date")
+  // Filename of the last verified Excel uploaded for this report's run.
+  // Non-null marks a verified-Excel report: once SENT, its run's ranks become
+  // the client's new baseline under this name (promoteSentReportToBaseline).
+  verifiedFilename String? @map("verified_filename")
 
   approvedBy String?   @map("approved_by")
   approvedAt DateTime? @map("approved_at")

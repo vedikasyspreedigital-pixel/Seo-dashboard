@@ -367,7 +367,7 @@ test("same-workspace: the Advanced SEO owner's verified-Excel upload works end-t
     assert.equal(res.body.report.status, "PENDING_APPROVAL", "build + email draft run automatically, same as any other workspace");
 
     const baselines = await prisma.rankingBaseline.findMany({ where: { clientId: client.id } });
-    assert.equal(baselines.length, 1, "the upload becomes this client's baseline, same as any other workspace");
+    assert.equal(baselines.length, 0, "the upload becomes a baseline only once the report is sent, same as any other workspace");
   } finally {
     await cleanupClient(client.id);
   }

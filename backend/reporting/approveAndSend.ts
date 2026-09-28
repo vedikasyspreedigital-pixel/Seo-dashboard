@@ -5,6 +5,7 @@ import { ReportStatus } from "@prisma/client";
 import { approveReport, markSending, markSendFailed, markSent } from "./reportTransitions.js";
 import { InvalidReportTransitionError } from "./errors.js";
 import { notifyReportSent, notifyReportSendFailed } from "../notifications/createNotification.js";
+import { promoteSentReportToBaseline } from "./processVerifiedExcelUpload.js";
 import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
 
@@ -140,6 +141,12 @@ export async function approveAndSendReport(
       excelPdfFilename,
     });
     await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
+    // Only now -- the email has actually gone out -- do this report's ranks
+    // become the client's new baseline. Never allowed to turn a real, completed
+    // send into a reported failure: logged loudly instead.
+    await promoteSentReportToBaseline(reportId, approvedBy).catch((err) => {
+      console.error(`[approveAndSend] report ${reportId} was SENT but saving it as the client's new baseline failed:`, err);
+    });
     await notifyReportSent(current);
     return { outcome: "SENT", messageId: sendResult.messageId };
   } catch (err) {

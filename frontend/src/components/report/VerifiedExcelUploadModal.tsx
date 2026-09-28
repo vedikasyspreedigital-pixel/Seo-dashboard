@@ -4,7 +4,7 @@ import { Modal } from '../ui/Modal';
 import { Spinner } from '../ui/Spinner';
 import { InlineError } from '../ui/InlineError';
 import { UploadDropIcon } from '../ui/icons';
-import { uploadVerifiedExcel } from '../../api/client';
+import { uploadVerifiedExcel, type ReportGenerationSummary } from '../../api/client';
 import type { RankingReport } from '../../api/types';
 
 interface Props {
@@ -12,7 +12,9 @@ interface Props {
   runId: string;
   onClose: () => void;
   /** Called once the verified Excel has been fully processed (compared, PDF built, email drafted). */
-  onProcessed: (report: RankingReport) => void;
+  onProcessed: (report: RankingReport, summary: ReportGenerationSummary) => void;
+  /** true when this run already has a report -- the upload will update it rather than create it. */
+  updatingExisting?: boolean;
 }
 
 const ACCEPTED = {
@@ -26,7 +28,7 @@ const ACCEPTED = {
  * (processVerifiedExcelUpload.ts), so this only ever shows a drop target or a
  * progress state, never a review table.
  */
-export function VerifiedExcelUploadModal({ open, runId, onClose, onProcessed }: Props) {
+export function VerifiedExcelUploadModal({ open, runId, onClose, onProcessed, updatingExisting = false }: Props) {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,12 +44,12 @@ export function VerifiedExcelUploadModal({ open, runId, onClose, onProcessed }: 
       setError(null);
       try {
         const result = await uploadVerifiedExcel(runId, file);
-        if (result.outcome === 'CREATED' && result.report) {
-          onProcessed(result.report);
+        if ((result.outcome === 'CREATED' || result.outcome === 'UPDATED') && result.report && result.summary) {
+          onProcessed(result.report, result.summary);
           return;
         }
-        if (result.outcome === 'DUPLICATE') {
-          setError('A report has already been generated for this run.');
+        if (result.outcome === 'LOCKED' || result.outcome === 'DUPLICATE') {
+          setError(result.message ?? 'This report can’t be changed right now.');
         } else if (result.outcome === 'UNMATCHED_ROWS') {
           setError(
             `This file doesn't match this run's exported Excel${result.unmatchedKeywords?.length ? ` (unrecognized: ${result.unmatchedKeywords.slice(0, 3).join(', ')}${result.unmatchedKeywords.length > 3 ? '...' : ''})` : ''}. Upload the Excel downloaded from this run, with your corrections applied.`,
@@ -74,11 +76,11 @@ export function VerifiedExcelUploadModal({ open, runId, onClose, onProcessed }: 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept: ACCEPTED, maxFiles: 1, disabled: processing });
 
   return (
-    <Modal open={open} onClose={handleClose} title="Upload Verified Excel">
+    <Modal open={open} onClose={handleClose} title={updatingExisting ? 'Upload Updated Excel' : 'Upload Verified Excel'}>
       <p className="mb-4 text-sm text-[var(--color-ink-muted)]">
-        Upload the ranking Excel after your manual verification. The backend will automatically compare it against
-        the previous verified Excel, generate the report PDF, and draft the client email -- no additional steps
-        needed.
+        {updatingExisting
+          ? 'Upload your corrected Excel. The report, PDF and email draft are rebuilt with the new ranks, still compared against the same previous ranking. Repeat as often as you need — nothing becomes the new baseline until you send.'
+          : 'Upload the ranking Excel after your manual verification. It’s compared against the client’s previous ranking, and the report PDF and email draft are created automatically. You can upload a corrected file again any time before sending.'}
       </p>
       <div
         {...getRootProps()}

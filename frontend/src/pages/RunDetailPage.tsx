@@ -14,6 +14,7 @@ import { ProcessingSummary } from '../components/run/ProcessingSummary';
 import { CompletedSummary } from '../components/run/CompletedSummary';
 import { RefreshIcon } from '../components/ui/icons';
 import { VerifiedExcelUploadModal } from '../components/report/VerifiedExcelUploadModal';
+import { describeReportGeneration, type ReportGenerationNoticeState } from '../components/report/reportGenerationNotice';
 import { useRunProgress } from '../hooks/useRunProgress';
 import { useToast } from '../context/ToastContext';
 import { isRunReportable } from '../components/run/runStatus';
@@ -334,7 +335,9 @@ export function RunDetailPage() {
         open={uploadModalOpen}
         runId={runId}
         onClose={() => setUploadModalOpen(false)}
-        onProcessed={(report) => navigate(`/reports/${report.id}/analytics`)}
+        onProcessed={(report, summary) =>
+          navigate(`/reports/${report.id}/analytics`, { state: { generationNotice: describeReportGeneration(summary) } satisfies ReportGenerationNoticeState })
+        }
       />
     </AppShell>
   );

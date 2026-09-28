@@ -10,6 +10,7 @@ import { approveAndSendReport } from "../../reporting/approveAndSend.js";
 import { generateEmailDraft, regenerateEmailDraft } from "../../reporting/generateEmailDraft.js";
 import { createReportForRun } from "../../reporting/createReport.js";
 import { buildReport } from "../../reporting/buildReport.js";
+import { regenerateReport, describeRegenerationBlock, describeReportGeneration } from "../../reporting/processVerifiedExcelUpload.js";
 import { InvalidReportTransitionError } from "../../reporting/errors.js";
 import type { SendEmailFn } from "../../reporting/emailSender.js";
 import type { GenerateExcelAttachmentFn } from "../../reporting/generateExcelAttachment.js";
@@ -316,6 +317,36 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
         return;
       }
       throw err;
+    }
+  });
+
+  // "Regenerate report": rebuild the comparison, PDF (dated today) and email
+  // draft from the run's current verified rows, with no new upload. Allowed
+  // until the report is being sent or has been sent.
+  router.post("/:id/regenerate-report", expensiveActionRateLimit, async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    const result = await regenerateReport(reportId, req.authUser!.email);
+    switch (result.outcome) {
+      case "REPORT_NOT_FOUND":
+      case "RUN_NOT_FOUND":
+        res.status(404).json({ error: "Report not found" });
+        return;
+      case "RUN_NOT_COMPLETED":
+        res.status(409).json({ error: "This report's run hasn't finished fetching rankings." });
+        return;
+      case "REPORT_LOCKED":
+      case "BASELINE_IN_USE": {
+        const { status, body } = describeRegenerationBlock(result);
+        res.status(status).json(body);
+        return;
+      }
+      case "DUPLICATE_REPORT":
+        res.status(409).json({ error: "This report is already being regenerated. Refresh and try again." });
+        return;
+      case "SUCCESS":
+        res.json(describeReportGeneration(result));
+        return;
     }
   });
 

@@ -35,17 +35,24 @@ import { InvalidReportTransitionError } from "./errors.js";
 // back to APPROVED (markSendFailed) so a legitimate retry stays possible;
 // nothing can go directly from APPROVED to SENT anymore.
 //
+// Any unsent, non-rejected status -> PENDING_ANALYSIS: "regenerate report"
+// (a re-uploaded verified Excel, or the Regenerate button) rewinds the
+// report to its initial state with fresh analytics, then the normal
+// Build Report -> draft email -> PENDING_APPROVAL path runs again. SENDING,
+// SENT and REJECTED stay excluded: a report mid-send or already sent to the
+// client is never rewritten, and a rejected report stays final.
+//
 // Isolated from RunStatus/RowStatus -- this module never imports from
 // backend/statemachine or backend/worker, and nothing there imports this.
 export const REPORT_TRANSITIONS: Record<ReportStatus, ReportStatus[]> = {
   PENDING_ANALYSIS: [ReportStatus.ANALYSIS_READY, ReportStatus.ANALYSIS_FAILED, ReportStatus.REPORT_READY],
   ANALYSIS_FAILED: [ReportStatus.PENDING_ANALYSIS],
-  ANALYSIS_READY: [ReportStatus.REPORT_READY],
-  REPORT_READY: [ReportStatus.EMAIL_DRAFTED, ReportStatus.EMAIL_DRAFT_FAILED],
-  EMAIL_DRAFT_FAILED: [ReportStatus.REPORT_READY],
-  EMAIL_DRAFTED: [ReportStatus.PENDING_APPROVAL],
-  PENDING_APPROVAL: [ReportStatus.APPROVED, ReportStatus.REJECTED, ReportStatus.REPORT_READY],
-  APPROVED: [ReportStatus.SENDING],
+  ANALYSIS_READY: [ReportStatus.REPORT_READY, ReportStatus.PENDING_ANALYSIS],
+  REPORT_READY: [ReportStatus.EMAIL_DRAFTED, ReportStatus.EMAIL_DRAFT_FAILED, ReportStatus.PENDING_ANALYSIS],
+  EMAIL_DRAFT_FAILED: [ReportStatus.REPORT_READY, ReportStatus.PENDING_ANALYSIS],
+  EMAIL_DRAFTED: [ReportStatus.PENDING_APPROVAL, ReportStatus.PENDING_ANALYSIS],
+  PENDING_APPROVAL: [ReportStatus.APPROVED, ReportStatus.REJECTED, ReportStatus.REPORT_READY, ReportStatus.PENDING_ANALYSIS],
+  APPROVED: [ReportStatus.SENDING, ReportStatus.PENDING_ANALYSIS],
   SENDING: [ReportStatus.SENT, ReportStatus.APPROVED],
   REJECTED: [],
   SENT: [],
@@ -71,7 +78,7 @@ export function isValidReportTransition(from: ReportStatus, to: ReportStatus): b
 export async function guardedUpdate(
   reportId: string,
   fromStatuses: ReportStatus[],
-  data: Prisma.RankingReportUpdateManyMutationInput,
+  data: Prisma.RankingReportUpdateManyMutationInput | Prisma.RankingReportUncheckedUpdateManyInput,
   action: string,
 ) {
   const { count } = await prisma.rankingReport.updateMany({
@@ -139,12 +146,17 @@ export async function retryAnalysis(reportId: string) {
  */
 export async function markReportReady(
   reportId: string,
-  { reportHtml, clientPdfPath }: { reportHtml?: string; clientPdfPath?: string },
+  { reportHtml, clientPdfPath, reportDate }: { reportHtml?: string; clientPdfPath?: string; reportDate?: Date },
 ) {
   return guardedUpdate(
     reportId,
     [ReportStatus.ANALYSIS_READY, ReportStatus.PENDING_ANALYSIS, ReportStatus.REPORT_READY],
-    { status: ReportStatus.REPORT_READY, ...(reportHtml !== undefined ? { reportHtml } : {}), ...(clientPdfPath !== undefined ? { clientPdfPath } : {}) },
+    {
+      status: ReportStatus.REPORT_READY,
+      ...(reportHtml !== undefined ? { reportHtml } : {}),
+      ...(clientPdfPath !== undefined ? { clientPdfPath } : {}),
+      ...(reportDate !== undefined ? { reportDate } : {}),
+    },
     "mark report ready (ANALYSIS_READY|PENDING_ANALYSIS|REPORT_READY -> REPORT_READY)",
   );
 }
@@ -299,5 +311,50 @@ export async function regenerateEmailDraftFromApproval(reportId: string) {
       lastErrorMessage: null,
     },
     "regenerate email draft (PENDING_APPROVAL -> REPORT_READY)",
+  );
+}
+
+/** The statuses a report can be regenerated from -- everything before it's been sent, except REJECTED. */
+export const REGENERABLE_REPORT_STATUSES: ReportStatus[] = [
+  ReportStatus.PENDING_ANALYSIS,
+  ReportStatus.ANALYSIS_FAILED,
+  ReportStatus.ANALYSIS_READY,
+  ReportStatus.REPORT_READY,
+  ReportStatus.EMAIL_DRAFT_FAILED,
+  ReportStatus.EMAIL_DRAFTED,
+  ReportStatus.PENDING_APPROVAL,
+  ReportStatus.APPROVED,
+];
+
+/**
+ * Any REGENERABLE status -> PENDING_ANALYSIS, with freshly computed
+ * analytics. Clears the approval (a regenerated report must be reviewed
+ * again); the email draft
+ * and PDF are rebuilt right after by the caller. Atomic like every other
+ * transition: a report that moved to SENDING/SENT in the meantime is refused.
+ * The caller passes the report's existing comparison target back in, so a
+ * regenerate never changes what the report compares against.
+ */
+export async function resetReportForRegeneration(
+  reportId: string,
+  {
+    analyticsJson,
+    previousBaselineId,
+    previousRunId,
+  }: { analyticsJson: Prisma.InputJsonValue; previousBaselineId: string | null; previousRunId: string | null },
+) {
+  return guardedUpdate(
+    reportId,
+    REGENERABLE_REPORT_STATUSES,
+    {
+      status: ReportStatus.PENDING_ANALYSIS,
+      analyticsJson,
+      previousBaselineId,
+      previousRunId,
+      approvedBy: null,
+      approvedAt: null,
+      lastErrorMessage: null,
+    },
+    "regenerate report (unsent report -> PENDING_ANALYSIS)",
   );
 }

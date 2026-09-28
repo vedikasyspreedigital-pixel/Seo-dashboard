@@ -180,9 +180,19 @@ export function getExportUrl(runId: string): string {
   return `${BASE}/runs/${runId}/export`;
 }
 
+/** What a (re)generated report compares against, returned alongside it. */
+export interface ReportGenerationSummary {
+  /** false = the run's first report; true = an existing report was rebuilt in place. */
+  regenerated: boolean;
+  /** Rows whose rank/status/URL changed with this upload; null for a Regenerate without a file. */
+  rowsChanged: number | null;
+  previousBaseline: { id: string; baselineDate: string; sourceFilename: string } | null;
+}
+
 export interface UploadVerifiedExcelOutcome {
-  outcome: 'CREATED' | 'DUPLICATE' | 'RUN_NOT_COMPLETED' | 'UNMATCHED_ROWS' | 'ERROR';
+  outcome: 'CREATED' | 'UPDATED' | 'LOCKED' | 'DUPLICATE' | 'RUN_NOT_COMPLETED' | 'UNMATCHED_ROWS' | 'ERROR';
   report?: RankingReport;
+  summary?: ReportGenerationSummary;
   existingReportId?: string;
   unmatchedKeywords?: string[];
   message?: string;
@@ -199,9 +209,19 @@ export async function uploadVerifiedExcel(runId: string, file: File): Promise<Up
   formData.append('file', file);
   const res = await apiFetch(`/runs/${runId}/verified-excel`, { method: 'POST', body: formData });
   const body = await res.json().catch(() => ({}));
-  if (res.status === 201) return { outcome: 'CREATED', report: body.report as RankingReport };
+  if (res.status === 201 || res.status === 200) {
+    return {
+      outcome: res.status === 201 ? 'CREATED' : 'UPDATED',
+      report: body.report as RankingReport,
+      summary: { regenerated: Boolean(body.regenerated), rowsChanged: body.rowsChanged ?? null, previousBaseline: body.previousBaseline ?? null },
+    };
+  }
+  // A sent / being-sent / rejected report, or one a newer report already compares against.
+  if (res.status === 409 && typeof body.code === 'string' && body.code !== 'DUPLICATE_REPORT') {
+    return { outcome: 'LOCKED', message: body.error, existingReportId: body.existingReportId };
+  }
   if (res.status === 409 && typeof body.existingReportId === 'string') {
-    return { outcome: 'DUPLICATE', existingReportId: body.existingReportId };
+    return { outcome: 'DUPLICATE', existingReportId: body.existingReportId, message: body.error };
   }
   if (res.status === 409) return { outcome: 'RUN_NOT_COMPLETED', message: body.error };
   if (res.status === 422 && Array.isArray(body.unmatchedKeywords)) {
@@ -289,6 +309,21 @@ export function getReportPdfUrl(reportId: string): string {
 export async function generateEmailDraft(reportId: string): Promise<DraftGenerationResult> {
   const res = await apiFetch(`/reports/${reportId}/generate-email-draft`, { method: 'POST' });
   return handle<DraftGenerationResult>(res);
+}
+
+/**
+ * "Regenerate report": rebuild the comparison, PDF (dated today) and email
+ * draft from the run's current verified rows -- no file needed. Throws with
+ * a plain-language message if the report is locked (sent / being sent).
+ */
+export async function regenerateReport(reportId: string): Promise<{ report: RankingReport; summary: ReportGenerationSummary }> {
+  const res = await apiFetch(`/reports/${reportId}/regenerate-report`, { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `Request failed with status ${res.status}`);
+  return {
+    report: body.report as RankingReport,
+    summary: { regenerated: Boolean(body.regenerated), rowsChanged: body.rowsChanged ?? null, previousBaseline: body.previousBaseline ?? null },
+  };
 }
 
 export async function regenerateEmailDraft(reportId: string): Promise<DraftGenerationResult> {

@@ -48,14 +48,24 @@ export function computeReportPeriod(report: {
   run: { completedAt: Date | null; createdAt: Date };
   previousRun: { completedAt: Date | null; createdAt: Date } | null;
   previousBaseline?: { baselineDate: Date } | null;
+  reportDate?: Date | null;
 }): { periodStart: Date; periodEnd: Date } {
   const periodStart =
     report.previousRun?.completedAt ?? report.previousRun?.createdAt ?? report.previousBaseline?.baselineDate ?? report.run.completedAt ?? report.run.createdAt;
-  const periodEnd = report.run.completedAt ?? report.run.createdAt;
+  // The day the PDF was built (its current-column date), so the email and
+  // the PDF always agree; reports built before reportDate existed fall back
+  // to the run's completion date, exactly as before.
+  const periodEnd = report.reportDate ?? report.run.completedAt ?? report.run.createdAt;
   return { periodStart, periodEnd };
 }
 
-export async function generateEmailDraft(reportId: string): Promise<GenerateEmailDraftResult> {
+export async function generateEmailDraft(
+  reportId: string,
+  options?: {
+    /** Keep these instead of re-reading the client config -- a regenerated report keeps the recipients/CC/task someone edited. */
+    keepRecipients?: { recipients: string[]; cc: string[]; clickupTaskUrl: string | null };
+  },
+): Promise<GenerateEmailDraftResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
     include: { client: true, run: true, previousRun: true, previousBaseline: true },
@@ -73,9 +83,9 @@ export async function generateEmailDraft(reportId: string): Promise<GenerateEmai
   // Recipients (and cc, and the ClickUp task to deliver through) come from
   // the client's own configuration, resolved by the backend -- never
   // AI-decided.
-  const recipients = config?.recipients ?? [];
-  const cc = config?.cc ?? [];
-  const clickupTaskUrl = resolveClickupTaskUrl(config);
+  const recipients = options?.keepRecipients ? options.keepRecipients.recipients : (config?.recipients ?? []);
+  const cc = options?.keepRecipients ? options.keepRecipients.cc : (config?.cc ?? []);
+  const clickupTaskUrl = options?.keepRecipients ? options.keepRecipients.clickupTaskUrl : resolveClickupTaskUrl(config);
 
   await markEmailDrafted(reportId, {
     emailSubject: draft.subject,

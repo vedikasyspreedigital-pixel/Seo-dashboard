@@ -231,6 +231,8 @@ export interface RankingReport {
   resolvedCc: string[] | null;
   resolvedClickupTaskUrl: string | null;
   lastErrorMessage: string | null;
+  /** The day the PDF was last (re)built -- its current-column date, also used for the email's end date. Null on older reports. */
+  reportDate: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
   sentAt: string | null;

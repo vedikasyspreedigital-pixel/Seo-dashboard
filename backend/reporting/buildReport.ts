@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Same configurable-persistent-disk pattern as UPLOADS_DIR in runs.ts.
 const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, "../../reports");
 
-export type BuildReportResult = { outcome: "SUCCESS"; clientPdfPath: string };
+export type BuildReportResult = { outcome: "SUCCESS"; clientPdfPath: string; reportDate: Date };
 
 const BUILDABLE_STATUSES: ReportStatus[] = [ReportStatus.PENDING_ANALYSIS, ReportStatus.ANALYSIS_READY, ReportStatus.REPORT_READY];
 
@@ -48,6 +48,9 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
   }
 
   const analytics = report.analyticsJson as unknown as RunAnalytics;
+  // Stored on the report (markReportReady below) so the email's period end
+  // and the run's own baseline date use exactly this same day.
+  const reportDate = new Date();
   const domainRows = await prisma.rankingRow.findMany({
     where: { runId: report.runId },
     select: { seDomain: true },
@@ -61,7 +64,7 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
     // the ranking table) is the day this PDF is actually being built, not
     // when the underlying run finished fetching -- the two can differ by
     // several days between fetching, manual verification, and sending.
-    currentRunDate: new Date(),
+    currentRunDate: reportDate,
     // A report's "previous" side is either a prior real run OR an imported
     // baseline, never both (see createReportForRun) -- whichever is set
     // supplies the comparison date shown in the PDF header.
@@ -77,6 +80,6 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
   const clientPdfPath = path.join(REPORTS_DIR, `${reportId}.pdf`);
   await writeFile(clientPdfPath, pdfBuffer);
 
-  await markReportReady(reportId, { clientPdfPath });
-  return { outcome: "SUCCESS", clientPdfPath };
+  await markReportReady(reportId, { clientPdfPath, reportDate });
+  return { outcome: "SUCCESS", clientPdfPath, reportDate };
 }
