@@ -48,9 +48,15 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
   }
 
   const analytics = report.analyticsJson as unknown as RunAnalytics;
+  const domainRows = await prisma.rankingRow.findMany({
+    where: { runId: report.runId },
+    select: { seDomain: true },
+    distinct: ["seDomain"],
+  });
   const pdfBuffer = await generateClientReportPdf({
     clientName: report.client.name,
     clientDomain: report.client.domain,
+    searchEngineDomains: domainRows.map((r) => r.seDomain),
     // The date shown under the title (and as the "current" column header in
     // the ranking table) is the day this PDF is actually being built, not
     // when the underlying run finished fetching -- the two can differ by

@@ -27,6 +27,12 @@ export interface ClientReportPdfInput {
   clientName: string;
   /** The client's website domain, shown in the header -- purely informational, never used for keyword matching. */
   clientDomain?: string | null;
+  /**
+   * The Google domain(s) the run's keywords were actually searched on (each
+   * row's Excel "Domain" column, e.g. "google.com.au"), shown in the table's
+   * top header row. Was previously hardcoded to "Google.ae" for every client.
+   */
+  searchEngineDomains?: string[];
   currentRunDate: Date;
   previousRunDate: Date | null;
   analytics: RunAnalytics;
@@ -205,8 +211,20 @@ function escapeHtml(text: string): string {
  * real dates as column headers rather than generic "Current"/"Previous"
  * labels, plus a color-coded Improved/Dropped column.
  */
+/**
+ * "google.com.au" -> "Google.com.au". Distinct domains (case-insensitive)
+ * are joined with " / " for a run that mixes several; falls back to a plain
+ * "Google" when none are known, rather than guessing a country.
+ */
+export function formatSearchEngineLabel(domains: string[] | undefined): string {
+  const unique = [...new Set((domains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean))];
+  if (unique.length === 0) return "Google";
+  return unique.map((d) => d.charAt(0).toUpperCase() + d.slice(1)).join(" / ");
+}
+
 function buildHtml(input: ClientReportPdfInput): string {
   const { rows } = buildRowsAndSummary(input.analytics);
+  const searchEngineLabel = escapeHtml(formatSearchEngineLabel(input.searchEngineDomains));
 
   const currentDateLabel = formatOrdinalDate(input.currentRunDate);
   const previousDateLabel = input.previousRunDate ? formatOrdinalDate(input.previousRunDate) : "No prior run";
@@ -260,8 +278,8 @@ function buildHtml(input: ClientReportPdfInput): string {
     <thead>
       <tr>
         <th class="label-row">Current Ranking Status:</th>
-        <th class="num label-row">Google.ae</th>
-        <th class="num label-row">Google.ae</th>
+        <th class="num label-row">${searchEngineLabel}</th>
+        <th class="num label-row">${searchEngineLabel}</th>
         <th class="label-row">&nbsp;</th>
       </tr>
       <tr>

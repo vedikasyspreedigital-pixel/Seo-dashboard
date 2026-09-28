@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildRowsAndSummary, describeOverallRankingChange } from "../backend/reporting/generateClientReportPdf.js";
+import { buildRowsAndSummary, describeOverallRankingChange, formatSearchEngineLabel } from "../backend/reporting/generateClientReportPdf.js";
 import type { RunAnalytics } from "../backend/reporting/computeRunAnalytics.js";
 
 // Pure logic, no DB/Playwright -- mirrors how computeRunAnalytics.test.mjs-
@@ -235,4 +235,16 @@ test("buildRowsAndSummary: hasComparison=false renders every current keyword wit
   assert.equal(summary.top3Count, 0);
   assert.equal(summary.top10Count, 1);
   assert.equal(summary.notIn100Count, 1);
+});
+
+// Regression: the table's search-engine header row was hardcoded to
+// "Google.ae" for every client -- found on an Australian client's report
+// (arnoldsfibreglass.com.au, searched on google.com.au) showing Google.ae.
+test("formatSearchEngineLabel: shows the run's real Google domain, not a hardcoded Google.ae", () => {
+  assert.equal(formatSearchEngineLabel(["google.com.au"]), "Google.com.au");
+  assert.equal(formatSearchEngineLabel(["google.ae"]), "Google.ae");
+  assert.equal(formatSearchEngineLabel(["google.com.au", "Google.com.au "]), "Google.com.au", "same domain differing only by case/whitespace is one label");
+  assert.equal(formatSearchEngineLabel(["google.com.au", "google.co.nz"]), "Google.com.au / Google.co.nz");
+  assert.equal(formatSearchEngineLabel([]), "Google");
+  assert.equal(formatSearchEngineLabel(undefined), "Google");
 });
