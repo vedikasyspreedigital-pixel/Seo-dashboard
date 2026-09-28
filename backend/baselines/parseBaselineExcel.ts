@@ -8,8 +8,8 @@ import { parseDateLabel, pickNewestDateColumn } from "./parseDateColumn.js";
 // Ranking URL). An agency's existing report can look like anything.
 //
 // Header-row detection tries two strategies, in order:
-//  1. A cell literally containing "keyword" (fast path, matches a clean
-//     export).
+//  1. A cell literally containing "keyword" or "keywords" (fast path,
+//     matches a clean export).
 //  2. Falls back to locating the row with the most date-parseable column
 //     headers, treating the first non-date column as the keyword column --
 //     needed because a real agency export (an Excel version of the exact
@@ -34,7 +34,16 @@ export interface BaselinePreview {
   rows: BaselinePreviewRow[];
 }
 
-const HEADER_SEARCH_ROWS = 5;
+// Was 5 -- a real agency export (Altered Images Photography, 2026-09-21)
+// had a 4-row title block (report title, domain, report date, blank) plus a
+// "Current Ranking Status:" row, putting "Keyword" on row 6. With a 5-row
+// search the parser missed it, fell back to strategy 2, and picked the
+// title's merged "31st August 2026" row as the header -- storing the 15th
+// September ranks under a 31 Aug date, with the two header rows below it
+// imported as keywords.
+const HEADER_SEARCH_ROWS = 20;
+
+const KEYWORD_HEADER_LABELS = new Set(["keyword", "keywords"]);
 
 function cellText(cell: ExcelJS.Cell): string {
   const value = cell.value;
@@ -57,10 +66,10 @@ export async function parseBaselineExcel(fileBuffer: Buffer): Promise<BaselinePr
   let headerRowNumber: number | null = null;
   let keywordColumn: number | null = null;
 
-  // Strategy 1: an explicit "Keyword" label.
+  // Strategy 1: an explicit "Keyword"/"Keywords" label.
   for (let rowNumber = 1; rowNumber <= Math.min(HEADER_SEARCH_ROWS, worksheet.rowCount); rowNumber++) {
     const row = worksheet.getRow(rowNumber);
-    const col = row.values ? (row.values as unknown[]).findIndex((_, i) => i > 0 && cellText(row.getCell(i)).toLowerCase() === "keyword") : -1;
+    const col = row.values ? (row.values as unknown[]).findIndex((_, i) => i > 0 && KEYWORD_HEADER_LABELS.has(cellText(row.getCell(i)).toLowerCase())) : -1;
     if (col > 0) {
       headerRowNumber = rowNumber;
       keywordColumn = col;
@@ -77,10 +86,19 @@ export async function parseBaselineExcel(fileBuffer: Buffer): Promise<BaselinePr
     for (let rowNumber = 1; rowNumber <= Math.min(HEADER_SEARCH_ROWS, worksheet.rowCount); rowNumber++) {
       const row = worksheet.getRow(rowNumber);
       const dateCols: number[] = [];
+      const distinctDates = new Set<number>();
       row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-        if (parseDateLabel(cellText(cell))) dateCols.push(colNumber);
+        const date = parseDateLabel(cellText(cell));
+        if (date) {
+          dateCols.push(colNumber);
+          distinctDates.add(date.getTime());
+        }
       });
-      if (dateCols.length >= 2 && dateCols.length > bestDateColumns.length) {
+      // A real header row compares at least two DIFFERENT dates. A title
+      // line merged across columns repeats one date in every cell (exceljs
+      // reports a merged cell's value in each column it spans) and must
+      // never be mistaken for the header.
+      if (distinctDates.size >= 2 && dateCols.length > bestDateColumns.length) {
         bestRowNumber = rowNumber;
         bestDateColumns = dateCols;
       }

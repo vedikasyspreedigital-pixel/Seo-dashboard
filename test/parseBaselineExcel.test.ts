@@ -71,3 +71,61 @@ test("parseBaselineExcel: throws a clear error when no 'Keyword' column is found
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
   await assert.rejects(() => parseBaselineExcel(buffer), /Keyword/);
 });
+
+// Regression: a real agency export (Altered Images Photography, 2026-09-21)
+// put a 4-row title block above the table, with the report date merged
+// across every column, so "Keyword" sat on row 6. The old 5-row search
+// missed it, took the merged title-date row as the header, stored the 15th
+// September ranks under "31st August 2026", and imported the two header
+// rows below it ("Current Ranking Status:", "Keyword") as keywords.
+async function buildTitledReportBuffer(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Ranking");
+  sheet.addRow(["Client Keyword Ranking Report"]);
+  sheet.addRow(["alteredimages.com.au"]);
+  sheet.addRow(["31st August 2026"]);
+  sheet.mergeCells("A1:C1");
+  sheet.mergeCells("A2:C2");
+  sheet.mergeCells("A3:C3");
+  sheet.addRow([]);
+  sheet.addRow(["Current Ranking Status:", "Google.com.au", "Google.com.au"]);
+  sheet.addRow(["Keyword", "15th September 2026", "31st August 2026"]);
+  sheet.addRow(["commercial photography services", 2, "Not in 100"]);
+  sheet.addRow(["commercial photographer melbourne", "3", 3]);
+  sheet.addRow(["portrait photography melbourne", "Not in 100", "Not in 100"]);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+test("parseBaselineExcel: finds a 'Keyword' header below a title block (row 6) and picks the real newest column, not the title's date", async () => {
+  const preview = await parseBaselineExcel(await buildTitledReportBuffer());
+  assert.equal(preview.baselineDateLabel, "15th September 2026");
+  assert.equal(preview.baselineDate, new Date(Date.UTC(2026, 8, 15)).toISOString());
+  assert.deepEqual(
+    preview.rows.map((r) => r.keyword),
+    ["commercial photography services", "commercial photographer melbourne", "portrait photography melbourne"],
+    "title/header rows must never be imported as keywords",
+  );
+  assert.equal(preview.rows[0].rankValue, 2, "rank comes from the 15th September column");
+});
+
+test("parseBaselineExcel: a 'Keywords' (plural) header label is recognized too", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Rankings");
+  sheet.addRow(["Keywords", "15th September 2026", "31st August 2026"]);
+  sheet.addRow(["commercial photography services", "2", "Not in 100"]);
+  const preview = await parseBaselineExcel(Buffer.from(await workbook.xlsx.writeBuffer()));
+  assert.equal(preview.baselineDateLabel, "15th September 2026");
+  assert.equal(preview.rows.length, 1);
+});
+
+test("parseBaselineExcel: a merged title row repeating ONE date is never taken as the header row", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Rankings");
+  sheet.addRow(["31st August 2026"]);
+  sheet.mergeCells("A1:C1");
+  sheet.addRow(["", "15th September 2026", "31st August 2026"]); // blank Keyword cell -- strategy 2
+  sheet.addRow(["commercial photography services", "2", "Not in 100"]);
+  const preview = await parseBaselineExcel(Buffer.from(await workbook.xlsx.writeBuffer()));
+  assert.equal(preview.baselineDateLabel, "15th September 2026");
+  assert.deepEqual(preview.rows.map((r) => r.keyword), ["commercial photography services"]);
+});
