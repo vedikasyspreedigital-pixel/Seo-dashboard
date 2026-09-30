@@ -233,6 +233,8 @@ export interface RankingReport {
   lastErrorMessage: string | null;
   /** The day the PDF was last (re)built -- its current-column date, also used for the email's end date. Null on older reports. */
   reportDate: string | null;
+  /** Send history, newest first -- only populated by GET /reports/:id. A corrected report can be sent more than once. */
+  sends?: { id: string; sentAt: string; sentBy: string | null; subject: string | null }[];
   approvedBy: string | null;
   approvedAt: string | null;
   sentAt: string | null;

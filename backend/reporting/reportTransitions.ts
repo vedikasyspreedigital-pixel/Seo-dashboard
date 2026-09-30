@@ -35,12 +35,14 @@ import { InvalidReportTransitionError } from "./errors.js";
 // back to APPROVED (markSendFailed) so a legitimate retry stays possible;
 // nothing can go directly from APPROVED to SENT anymore.
 //
-// Any unsent, non-rejected status -> PENDING_ANALYSIS: "regenerate report"
-// (a re-uploaded verified Excel, or the Regenerate button) rewinds the
-// report to its initial state with fresh analytics, then the normal
-// Build Report -> draft email -> PENDING_APPROVAL path runs again. SENDING,
-// SENT and REJECTED stay excluded: a report mid-send or already sent to the
-// client is never rewritten, and a rejected report stays final.
+// Any non-rejected status except SENDING -> PENDING_ANALYSIS: "regenerate
+// report" (a re-uploaded verified Excel, or the Regenerate button) rewinds
+// the report to its initial state with fresh analytics, then the normal
+// Build Report -> draft email -> PENDING_APPROVAL path runs again. SENT is
+// included only for a correction the user explicitly confirmed will email
+// the client again (processVerifiedExcelUpload.ts gates that). SENDING and
+// REJECTED stay excluded: a report mid-send is never rewritten, and a
+// rejected report stays final.
 //
 // Isolated from RunStatus/RowStatus -- this module never imports from
 // backend/statemachine or backend/worker, and nothing there imports this.
@@ -55,7 +57,7 @@ export const REPORT_TRANSITIONS: Record<ReportStatus, ReportStatus[]> = {
   APPROVED: [ReportStatus.SENDING, ReportStatus.PENDING_ANALYSIS],
   SENDING: [ReportStatus.SENT, ReportStatus.APPROVED],
   REJECTED: [],
-  SENT: [],
+  SENT: [ReportStatus.PENDING_ANALYSIS],
 };
 
 export function isValidReportTransition(from: ReportStatus, to: ReportStatus): boolean {
@@ -345,9 +347,11 @@ export async function resetReportForRegeneration(
 ) {
   return guardedUpdate(
     reportId,
-    REGENERABLE_REPORT_STATUSES,
+    // SENT only reaches here after the user confirmed the re-send.
+    [...REGENERABLE_REPORT_STATUSES, ReportStatus.SENT],
     {
       status: ReportStatus.PENDING_ANALYSIS,
+      auditCommentPosted: null,
       analyticsJson,
       previousBaselineId,
       previousRunId,

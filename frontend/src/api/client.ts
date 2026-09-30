@@ -180,6 +180,12 @@ export function getExportUrl(runId: string): string {
   return `${BASE}/runs/${runId}/export`;
 }
 
+/** Returned when a SENT report would be changed -- the dashboard shows the Continue / Cancel warning. */
+export interface ResendInfo {
+  sendCount: number;
+  lastSentAt: string | null;
+}
+
 /** What a (re)generated report compares against, returned alongside it. */
 export interface ReportGenerationSummary {
   /** false = the run's first report; true = an existing report was rebuilt in place. */
@@ -190,9 +196,11 @@ export interface ReportGenerationSummary {
 }
 
 export interface UploadVerifiedExcelOutcome {
-  outcome: 'CREATED' | 'UPDATED' | 'LOCKED' | 'DUPLICATE' | 'RUN_NOT_COMPLETED' | 'UNMATCHED_ROWS' | 'ERROR';
+  outcome: 'CREATED' | 'UPDATED' | 'NEEDS_RESEND_CONFIRM' | 'LOCKED' | 'DUPLICATE' | 'RUN_NOT_COMPLETED' | 'UNMATCHED_ROWS' | 'ERROR';
   report?: RankingReport;
   summary?: ReportGenerationSummary;
+  /** Only for NEEDS_RESEND_CONFIRM: how often / when the report already went out. */
+  resend?: ResendInfo;
   existingReportId?: string;
   unmatchedKeywords?: string[];
   message?: string;
@@ -204,9 +212,10 @@ export interface UploadVerifiedExcelOutcome {
  * the PDF, and drafts the email -- no separate Generate Report/Build Report
  * call needed. See backend/reporting/processVerifiedExcelUpload.ts.
  */
-export async function uploadVerifiedExcel(runId: string, file: File): Promise<UploadVerifiedExcelOutcome> {
+export async function uploadVerifiedExcel(runId: string, file: File, options: { confirmResend?: boolean } = {}): Promise<UploadVerifiedExcelOutcome> {
   const formData = new FormData();
   formData.append('file', file);
+  if (options.confirmResend) formData.append('confirmResend', 'true');
   const res = await apiFetch(`/runs/${runId}/verified-excel`, { method: 'POST', body: formData });
   const body = await res.json().catch(() => ({}));
   if (res.status === 201 || res.status === 200) {
@@ -216,7 +225,10 @@ export async function uploadVerifiedExcel(runId: string, file: File): Promise<Up
       summary: { regenerated: Boolean(body.regenerated), rowsChanged: body.rowsChanged ?? null, previousBaseline: body.previousBaseline ?? null },
     };
   }
-  // A sent / being-sent / rejected report, or one a newer report already compares against.
+  if (res.status === 409 && body.code === 'RESEND_CONFIRMATION_REQUIRED') {
+    return { outcome: 'NEEDS_RESEND_CONFIRM', message: body.error, resend: { sendCount: body.sendCount ?? 1, lastSentAt: body.lastSentAt ?? null } };
+  }
+  // A report being sent, a rejected one, or one a newer report already compares against.
   if (res.status === 409 && typeof body.code === 'string' && body.code !== 'DUPLICATE_REPORT') {
     return { outcome: 'LOCKED', message: body.error, existingReportId: body.existingReportId };
   }
@@ -316,11 +328,25 @@ export async function generateEmailDraft(reportId: string): Promise<DraftGenerat
  * draft from the run's current verified rows -- no file needed. Throws with
  * a plain-language message if the report is locked (sent / being sent).
  */
-export async function regenerateReport(reportId: string): Promise<{ report: RankingReport; summary: ReportGenerationSummary }> {
-  const res = await apiFetch(`/reports/${reportId}/regenerate-report`, { method: 'POST' });
+export async function regenerateReport(
+  reportId: string,
+  options: { confirmResend?: boolean } = {},
+): Promise<
+  | { outcome: 'DONE'; report: RankingReport; summary: ReportGenerationSummary }
+  | { outcome: 'NEEDS_RESEND_CONFIRM'; resend: ResendInfo }
+> {
+  const res = await apiFetch(`/reports/${reportId}/regenerate-report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmResend: options.confirmResend === true }),
+  });
   const body = await res.json().catch(() => ({}));
+  if (res.status === 409 && body.code === 'RESEND_CONFIRMATION_REQUIRED') {
+    return { outcome: 'NEEDS_RESEND_CONFIRM', resend: { sendCount: body.sendCount ?? 1, lastSentAt: body.lastSentAt ?? null } };
+  }
   if (!res.ok) throw new Error(body.error ?? `Request failed with status ${res.status}`);
   return {
+    outcome: 'DONE',
     report: body.report as RankingReport,
     summary: { regenerated: Boolean(body.regenerated), rowsChanged: body.rowsChanged ?? null, previousBaseline: body.previousBaseline ?? null },
   };

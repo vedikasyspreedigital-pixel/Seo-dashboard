@@ -25,11 +25,14 @@ interface ParsedRankingRow {
 
 type FullReport = RankingReport;
 
-export type ReportLockReason = "SENT" | "SENDING" | "REJECTED";
+export type ReportLockReason = "SENDING" | "REJECTED";
 
 /** Why a run's report can't be (re)generated right now -- shared by the upload and the Regenerate button. */
 export type RegenerationBlock =
   | { outcome: "REPORT_LOCKED"; reason: ReportLockReason; existingReportId: string }
+  // A SENT report can be corrected and sent again, but only after the user
+  // explicitly confirms -- nothing is written until they do.
+  | { outcome: "RESEND_CONFIRMATION_REQUIRED"; existingReportId: string; sendCount: number; lastSentAt: Date | null }
   | { outcome: "BASELINE_IN_USE"; laterReportId: string };
 
 export interface ReportGenerationSuccess {
@@ -75,8 +78,10 @@ export type RegenerateReportResult =
  *   baseline (promoteSentReportToBaseline, called by approveAndSend.ts)
  *
  * First upload for a run creates the report. Any later upload (same file or
- * an updated one) rebuilds that SAME report in place -- until it's being sent
- * or has been sent (then it's locked; nothing is written). Every check runs
+ * an updated one) rebuilds that SAME report in place. A report being sent is
+ * locked; an already-SENT report can be reopened only with confirmResend
+ * (the user confirmed it will email the client again) -- without it,
+ * nothing is written. Every check runs
  * before anything is written, so a refused upload never touches the run.
  *
  * The verified Excel must be the SAME template the run's own "Download
@@ -90,6 +95,7 @@ export async function processVerifiedExcelUpload(
   fileBuffer: Buffer,
   sourceFilename: string,
   createdBy: string | null,
+  options: { confirmResend?: boolean } = {},
 ): Promise<ProcessVerifiedExcelUploadResult> {
   const run = await prisma.rankingRun.findUnique({ where: { id: runId } });
   if (!run) return { outcome: "RUN_NOT_FOUND" };
@@ -97,7 +103,7 @@ export async function processVerifiedExcelUpload(
 
   const existingReport = await prisma.rankingReport.findFirst({ where: { runId }, orderBy: { createdAt: "desc" } });
   if (existingReport) {
-    const block = await findRegenerationBlock(existingReport, run.id);
+    const block = await findRegenerationBlock(existingReport, run.id, options.confirmResend === true);
     if (block) return block;
   }
 
@@ -151,13 +157,17 @@ export async function processVerifiedExcelUpload(
  * (already verified) rows, with no new file -- e.g. to re-date it. Same
  * locks, same pinned comparison, same pipeline as a re-upload.
  */
-export async function regenerateReport(reportId: string, _createdBy: string | null): Promise<RegenerateReportResult> {
+export async function regenerateReport(
+  reportId: string,
+  _createdBy: string | null,
+  options: { confirmResend?: boolean } = {},
+): Promise<RegenerateReportResult> {
   const report = await prisma.rankingReport.findUnique({ where: { id: reportId } });
   if (!report) return { outcome: "REPORT_NOT_FOUND" };
   const run = await prisma.rankingRun.findUniqueOrThrow({ where: { id: report.runId } });
   if (!REPORTABLE_RUN_STATUSES.includes(run.status)) return { outcome: "RUN_NOT_COMPLETED" };
 
-  const block = await findRegenerationBlock(report, run.id);
+  const block = await findRegenerationBlock(report, run.id, options.confirmResend === true);
   if (block) return block;
 
   return generateReportForRun(run, report, { verifiedFilename: null, rowsChanged: null });
@@ -196,10 +206,9 @@ export async function promoteSentReportToBaseline(reportId: string, createdBy: s
   });
 }
 
-async function findRegenerationBlock(report: FullReport, runId: string): Promise<RegenerationBlock | null> {
-  if (report.status === ReportStatus.SENT) return { outcome: "REPORT_LOCKED", reason: "SENT", existingReportId: report.id };
+async function findRegenerationBlock(report: FullReport, runId: string, confirmResend: boolean): Promise<RegenerationBlock | null> {
   if (report.status === ReportStatus.SENDING) return { outcome: "REPORT_LOCKED", reason: "SENDING", existingReportId: report.id };
-  if (!REGENERABLE_REPORT_STATUSES.includes(report.status)) {
+  if (report.status !== ReportStatus.SENT && !REGENERABLE_REPORT_STATUSES.includes(report.status)) {
     return { outcome: "REPORT_LOCKED", reason: "REJECTED", existingReportId: report.id };
   }
 
@@ -212,6 +221,13 @@ async function findRegenerationBlock(report: FullReport, runId: string): Promise
       select: { id: true },
     });
     if (laterReport) return { outcome: "BASELINE_IN_USE", laterReportId: laterReport.id };
+  }
+
+  // Checked last, so a report that can't be changed at all (above) never
+  // asks for a confirmation it would then refuse anyway.
+  if (report.status === ReportStatus.SENT && !confirmResend) {
+    const sendCount = await prisma.reportSend.count({ where: { reportId: report.id } });
+    return { outcome: "RESEND_CONFIRMATION_REQUIRED", existingReportId: report.id, sendCount: Math.max(sendCount, 1), lastSentAt: report.sentAt };
   }
   return null;
 }
@@ -250,9 +266,12 @@ async function generateReportForRun(
   }
 
   await buildReport(reportId);
-  await generateEmailDraft(
-    reportId,
-    existingReport && Array.isArray(existingReport.resolvedRecipients)
+  // A report that has already gone out gets "(Updated)" -- "(Updated 2)" on
+  // the next correction, and so on -- so the client sees it's a correction,
+  // and ClickUp's same-subject duplicate guard still protects every send.
+  const previousSends = await prisma.reportSend.count({ where: { reportId } });
+  await generateEmailDraft(reportId, {
+    ...(existingReport && Array.isArray(existingReport.resolvedRecipients)
       ? {
           keepRecipients: {
             recipients: existingReport.resolvedRecipients as string[],
@@ -260,8 +279,9 @@ async function generateReportForRun(
             clickupTaskUrl: existingReport.resolvedClickupTaskUrl,
           },
         }
-      : undefined,
-  );
+      : {}),
+    subjectSuffix: previousSends === 0 ? undefined : previousSends === 1 ? " (Updated)" : ` (Updated ${previousSends})`,
+  });
 
   // No baseline is created here -- see promoteSentReportToBaseline.
   const finalReport = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { previousBaseline: true } });
@@ -279,6 +299,18 @@ async function generateReportForRun(
 
 /** Plain-language HTTP response for a refused (re)generation -- shared by the upload route and the Regenerate route. */
 export function describeRegenerationBlock(block: RegenerationBlock): { status: number; body: Record<string, unknown> } {
+  if (block.outcome === "RESEND_CONFIRMATION_REQUIRED") {
+    return {
+      status: 409,
+      body: {
+        code: "RESEND_CONFIRMATION_REQUIRED",
+        error: "This report was already sent to the client. Changing it and sending again will email them a second time.",
+        existingReportId: block.existingReportId,
+        sendCount: block.sendCount,
+        lastSentAt: block.lastSentAt,
+      },
+    };
+  }
   if (block.outcome === "BASELINE_IN_USE") {
     return {
       status: 409,
@@ -290,7 +322,6 @@ export function describeRegenerationBlock(block: RegenerationBlock): { status: n
     };
   }
   const messages: Record<ReportLockReason, string> = {
-    SENT: "This report has already been sent to the client, so it can't be changed.",
     SENDING: "This report is being sent right now. Try again once sending has finished.",
     REJECTED: "This report was rejected, so it can't be regenerated.",
   };

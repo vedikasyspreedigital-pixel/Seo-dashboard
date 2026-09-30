@@ -357,7 +357,7 @@ test("processVerifiedExcelUpload: 'previous' is the latest RANKING date, not the
   }
 });
 
-test("processVerifiedExcelUpload: a report already SENT (or being sent) is locked -- the upload changes nothing", async () => {
+test("processVerifiedExcelUpload: a report being sent is locked, and a SENT one needs confirmation -- without it the upload changes nothing", async () => {
   const client = await makeClient();
   try {
     const run = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
@@ -365,15 +365,19 @@ test("processVerifiedExcelUpload: a report already SENT (or being sent) is locke
     assert.equal(first.outcome, "SUCCESS");
     if (first.outcome !== "SUCCESS") return;
 
-    for (const status of ["SENT", "SENDING"] as const) {
-      await prisma.rankingReport.update({ where: { id: first.report.id }, data: { status } });
-      const blocked = await processVerifiedExcelUpload(run.id, await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "99" }]), "verified.xlsx", null);
-      assert.equal(blocked.outcome, "REPORT_LOCKED");
-      if (blocked.outcome !== "REPORT_LOCKED") return;
-      assert.equal(blocked.reason, status);
-      const rows = await prisma.rankingRow.findMany({ where: { runId: run.id } });
-      assert.equal(rows[0].rankDisplay, "12", `a ${status} report's run rows must not be touched`);
-    }
+    const rank99 = await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "99" }]);
+
+    await prisma.rankingReport.update({ where: { id: first.report.id }, data: { status: "SENDING" } });
+    const sending = await processVerifiedExcelUpload(run.id, rank99, "verified.xlsx", null, { confirmResend: true });
+    assert.equal(sending.outcome, "REPORT_LOCKED", "never while sending, even when confirmed");
+
+    await prisma.rankingReport.update({ where: { id: first.report.id }, data: { status: "SENT", sentAt: new Date() } });
+    const unconfirmed = await processVerifiedExcelUpload(run.id, rank99, "verified.xlsx", null);
+    assert.equal(unconfirmed.outcome, "RESEND_CONFIRMATION_REQUIRED");
+
+    const rows = await prisma.rankingRow.findMany({ where: { runId: run.id } });
+    assert.equal(rows[0].rankDisplay, "12", "no rows touched until the re-send is confirmed");
+    assert.equal((await prisma.rankingReport.findUniqueOrThrow({ where: { id: first.report.id } })).status, "SENT");
   } finally {
     await cleanup(client.id);
   }
@@ -493,6 +497,69 @@ test("approveAndSend: a verified report becomes the client's baseline only after
     assert.equal(baselines[0].sourceFilename, "verified-v2.xlsx");
     assert.equal(baselines[0].rows[0].rankDisplay, "10", "the baseline holds exactly the ranks that were sent");
   } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("re-send: a SENT report reopened with confirmation is rebuilt, marked (Updated), sent again, and replaces the run's baseline", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+    const first = await processVerifiedExcelUpload(run.id, await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]), "v1.xlsx", null);
+    assert.equal(first.outcome, "SUCCESS");
+    if (first.outcome !== "SUCCESS") return;
+    const originalSubject = first.report.emailSubject!;
+    assert.ok(!originalSubject.includes("(Updated)"));
+    assert.equal((await sendReport(first.report.id)).outcome, "SENT");
+
+    // Correct a rank and re-send (Continue on the warning).
+    const corrected = await processVerifiedExcelUpload(run.id, await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "9" }]), "v2.xlsx", null, { confirmResend: true });
+    assert.equal(corrected.outcome, "SUCCESS");
+    if (corrected.outcome !== "SUCCESS") return;
+    assert.equal(corrected.report.id, first.report.id, "the same report is reopened");
+    assert.equal(corrected.report.status, "PENDING_APPROVAL", "must be reviewed and sent again");
+    assert.equal(corrected.report.emailSubject, originalSubject + " (Updated)");
+    assert.equal((await sendReport(first.report.id)).outcome, "SENT");
+
+    const baselines = await prisma.rankingBaseline.findMany({ where: { clientId: client.id }, include: { rows: true } });
+    assert.equal(baselines.length, 1, "still one baseline for the run");
+    assert.equal(baselines[0].rows[0].rankDisplay, "9", "the baseline now holds the corrected ranks the client received last");
+    assert.equal(baselines[0].sourceFilename, "v2.xlsx");
+
+    // A third send is "(Updated 2)" -- every subject stays unique for ClickUp's duplicate guard.
+    const again = await regenerateReport(first.report.id, null, { confirmResend: true });
+    assert.equal(again.outcome, "SUCCESS");
+    if (again.outcome !== "SUCCESS") return;
+    assert.equal(again.report.emailSubject, originalSubject + " (Updated 2)");
+    assert.equal((await sendReport(first.report.id)).outcome, "SENT");
+
+    const sends = await prisma.reportSend.findMany({ where: { reportId: first.report.id }, orderBy: { sentAt: "asc" } });
+    assert.equal(sends.length, 3, "every send is kept in the history");
+    assert.deepEqual(sends.map((x) => x.subject), [originalSubject, originalSubject + " (Updated)", originalSubject + " (Updated 2)"]);
+  } finally {
+    await prisma.reportSend.deleteMany({ where: { report: { clientId: client.id } } });
+    await cleanup(client.id);
+  }
+});
+
+test("re-send: a sent report that a newer report already compares against stays locked, even when confirmed", async () => {
+  const client = await makeClient();
+  try {
+    const runA = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "20" }]);
+    const bufferA = await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "20" }]);
+    const a = await processVerifiedExcelUpload(runA.id, bufferA, "a.xlsx", null);
+    assert.equal(a.outcome, "SUCCESS");
+    if (a.outcome !== "SUCCESS") return;
+    assert.equal((await sendReport(a.report.id)).outcome, "SENT");
+
+    const runB = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+    const b = await processVerifiedExcelUpload(runB.id, await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]), "b.xlsx", null);
+    assert.equal(b.outcome, "SUCCESS");
+
+    const blocked = await processVerifiedExcelUpload(runA.id, bufferA, "a.xlsx", null, { confirmResend: true });
+    assert.equal(blocked.outcome, "BASELINE_IN_USE");
+  } finally {
+    await prisma.reportSend.deleteMany({ where: { report: { clientId: client.id } } });
     await cleanup(client.id);
   }
 });

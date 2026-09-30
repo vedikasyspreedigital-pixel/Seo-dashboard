@@ -141,6 +141,10 @@ export async function approveAndSendReport(
       excelPdfFilename,
     });
     await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
+    // Send history -- a corrected report can go out more than once.
+    await prisma.reportSend
+      .create({ data: { reportId, sentBy: approvedBy, subject: current.emailSubject } })
+      .catch((err) => console.error(`[approveAndSend] report ${reportId} was SENT but recording it in the send history failed:`, err));
     // Only now -- the email has actually gone out -- do this report's ranks
     // become the client's new baseline. Never allowed to turn a real, completed
     // send into a reported failure: logged loudly instead.

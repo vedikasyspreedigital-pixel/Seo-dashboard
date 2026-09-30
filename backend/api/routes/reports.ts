@@ -164,7 +164,7 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     // shape exactly what the frontend has always gotten.
     const report = await prisma.rankingReport.findUniqueOrThrow({
       where: { id: req.params.id },
-      include: { client: true, run: true, previousRun: true, previousBaseline: true },
+      include: { client: true, run: true, previousRun: true, previousBaseline: true, sends: { orderBy: { sentAt: "desc" } } },
     });
     res.json(report);
   });
@@ -326,7 +326,7 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   router.post("/:id/regenerate-report", expensiveActionRateLimit, async (req, res) => {
     const reportId = req.params.id as string;
     if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
-    const result = await regenerateReport(reportId, req.authUser!.email);
+    const result = await regenerateReport(reportId, req.authUser!.email, { confirmResend: req.body?.confirmResend === true });
     switch (result.outcome) {
       case "REPORT_NOT_FOUND":
       case "RUN_NOT_FOUND":
@@ -336,6 +336,7 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
         res.status(409).json({ error: "This report's run hasn't finished fetching rankings." });
         return;
       case "REPORT_LOCKED":
+      case "RESEND_CONFIRMATION_REQUIRED":
       case "BASELINE_IN_USE": {
         const { status, body } = describeRegenerationBlock(result);
         res.status(status).json(body);

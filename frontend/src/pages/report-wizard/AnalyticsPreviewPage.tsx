@@ -12,13 +12,14 @@ import { isReportAlreadyBuilt } from '../../components/report/reportStatus';
 import { Badge } from '../../components/ui/Badge';
 import { AlertPanel } from '../../components/ui/AlertPanel';
 import { VerifiedExcelUploadModal } from '../../components/report/VerifiedExcelUploadModal';
+import { ResendConfirmModal } from '../../components/report/ResendConfirmModal';
 import { describeReportGeneration, type ReportGenerationNoticeState } from '../../components/report/reportGenerationNotice';
 import { buildReport, getReport, regenerateReport } from '../../api/client';
 import { formatReportDate } from '../../utils/formatters';
 import type { RankingReport, ReportStatus } from '../../api/types';
 
-/** A report stops being editable once it's being sent, has been sent, or was rejected. */
-const LOCKED_STATUSES: ReportStatus[] = ['SENDING', 'SENT', 'REJECTED'];
+/** A report can't be changed while it's being sent, or once it was rejected. A SENT one can -- after the re-send warning. */
+const LOCKED_STATUSES: ReportStatus[] = ['SENDING', 'REJECTED'];
 
 export function AnalyticsPreviewPage() {
   const { reportId } = useParams<{ reportId: string }>();
@@ -30,6 +31,8 @@ export function AnalyticsPreviewPage() {
   const [notice, setNotice] = useState<string | null>((location.state as ReportGenerationNoticeState | null)?.generationNotice ?? null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  // Open while the "already sent -- Continue?" warning is showing for Regenerate.
+  const [resendPrompt, setResendPrompt] = useState<{ sendCount: number; lastSentAt: string | null } | null>(null);
 
   useEffect(() => {
     if (!reportId) return;
@@ -43,20 +46,29 @@ export function AnalyticsPreviewPage() {
     getReport(reportId).then(setReport);
   }, [reportId]);
 
-  async function handleRegenerate() {
+  async function handleRegenerate(confirmResend = false) {
     if (!reportId || regenerating) return;
-    const ok = window.confirm(
-      'Regenerate this report?\n\nThe comparison, PDF and email subject/body are rebuilt with today’s date. Recipients and CC stay as they are.',
-    );
-    if (!ok) return;
+    // A sent report gets the re-send warning instead (it already explains the rebuild).
+    if (!confirmResend && report?.status !== 'SENT') {
+      const ok = window.confirm(
+        'Regenerate this report?\n\nThe comparison, PDF and email subject/body are rebuilt with today’s date. Recipients and CC stay as they are.',
+      );
+      if (!ok) return;
+    }
     setRegenerating(true);
     setError(null);
     setNotice(null);
     try {
-      const { summary } = await regenerateReport(reportId);
+      const result = await regenerateReport(reportId, { confirmResend });
+      if (result.outcome === 'NEEDS_RESEND_CONFIRM') {
+        setResendPrompt(result.resend);
+        return;
+      }
+      setResendPrompt(null);
       setReport(await getReport(reportId));
-      setNotice(describeReportGeneration(summary));
+      setNotice(describeReportGeneration(result.summary));
     } catch (err) {
+      setResendPrompt(null);
       setError((err as Error).message);
     } finally {
       setRegenerating(false);
@@ -101,6 +113,11 @@ export function AnalyticsPreviewPage() {
   const locked = LOCKED_STATUSES.includes(report.status);
   const busy = regenerating || generating;
   const currentDateLabel = report.reportDate ? formatReportDate(report.reportDate) : 'the latest run';
+  const sends = report.sends ?? [];
+  const sendHistoryLabel =
+    sends.length > 0
+      ? `Sent ${sends.length === 1 ? 'once' : `${sends.length} times`} · Last sent ${formatReportDate(sends[0].sentAt)}`
+      : null;
 
   return (
     <AppShell>
@@ -111,7 +128,7 @@ export function AnalyticsPreviewPage() {
             <div className="flex flex-wrap items-center justify-end gap-3">
               {!locked && (
                 <>
-                  <Button variant="ghost" disabled={busy} onClick={handleRegenerate} title="Rebuild the comparison, PDF and email with today’s date">
+                  <Button variant="ghost" disabled={busy} onClick={() => void handleRegenerate()} title="Rebuild the comparison, PDF and email with today’s date">
                     {regenerating && <Spinner />}
                     Regenerate
                   </Button>
@@ -167,14 +184,15 @@ export function AnalyticsPreviewPage() {
         ) : (
           <p>No earlier ranking found for this client, so this first report shows current ranks only.</p>
         )}
+        {sendHistoryLabel && <p className="mt-1 text-xs font-semibold text-[var(--color-ink)]">{sendHistoryLabel}</p>}
         <p className="mt-1 text-xs text-[var(--color-ink-faint)]">
           {locked
-            ? report.status === 'SENT'
-              ? 'Sent to the client — this report is locked.'
-              : report.status === 'SENDING'
-                ? 'Sending now — changes are paused until it finishes.'
-                : 'This report was rejected and can’t be changed.'
-            : 'Need a fix? Upload an updated Excel or click Regenerate — as often as you like. The comparison above stays the same, and these ranks only become the client’s new baseline once you send.'}
+            ? report.status === 'SENDING'
+              ? 'Sending now — changes are paused until it finishes.'
+              : 'This report was rejected and can’t be changed.'
+            : report.status === 'SENT'
+              ? 'Need a correction? Upload an updated Excel or click Regenerate — you’ll be asked to confirm, and the client gets the new email marked “(Updated)”.'
+              : 'Need a fix? Upload an updated Excel or click Regenerate — as often as you like. The comparison above stays the same, and these ranks only become the client’s new baseline once you send.'}
         </p>
       </AlertPanel>
 
@@ -229,6 +247,15 @@ export function AnalyticsPreviewPage() {
           )}
         </>
       )}
+      <ResendConfirmModal
+        open={resendPrompt !== null}
+        sendCount={resendPrompt?.sendCount ?? 1}
+        lastSentAt={resendPrompt?.lastSentAt ?? null}
+        busy={regenerating}
+        onCancel={() => setResendPrompt(null)}
+        onContinue={() => void handleRegenerate(true)}
+      />
+
       <VerifiedExcelUploadModal
         open={uploadOpen}
         runId={report.runId}

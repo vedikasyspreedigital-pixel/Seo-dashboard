@@ -390,6 +390,21 @@ model RankingRowAttempt {
 // pipeline, never has been). Nothing here ever writes to
 // ranking_runs/ranking_rows/ranking_row_attempts, and nothing in
 // backend/statemachine or backend/worker reads this table.
+// Send history: one row per successful Approve & Send of a report. A sent
+// report can be reopened, corrected and sent again ("(Updated)" subject), so
+// sentAt alone only ever holds the latest send.
+model ReportSend {
+  id       String        @id @default(uuid())
+  reportId String        @map("report_id")
+  report   RankingReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  sentAt   DateTime      @default(now()) @map("sent_at")
+  sentBy   String?       @map("sent_by")
+  subject  String?
+
+  @@index([reportId, sentAt])
+  @@map("report_sends")
+}
+
 model RankingReport {
   id             String       @id @default(uuid())
   runId          String       @map("run_id")
@@ -439,6 +454,9 @@ model RankingReport {
   // Non-null marks a verified-Excel report: once SENT, its run's ranks become
   // the client's new baseline under this name (promoteSentReportToBaseline).
   verifiedFilename String? @map("verified_filename")
+
+  // One row per successful send (a corrected report can be re-sent).
+  sends ReportSend[]
 
   approvedBy String?   @map("approved_by")
   approvedAt DateTime? @map("approved_at")

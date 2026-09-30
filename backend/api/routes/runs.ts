@@ -286,7 +286,9 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     }
 
     try {
-      const result = await processVerifiedExcelUpload(run.id, file.buffer, file.originalname, req.authUser!.email);
+      // "Continue" on the dashboard's re-send warning -- sent as a multipart field alongside the file.
+      const confirmResend = req.body?.confirmResend === 'true';
+      const result = await processVerifiedExcelUpload(run.id, file.buffer, file.originalname, req.authUser!.email, { confirmResend });
       switch (result.outcome) {
         case 'RUN_NOT_FOUND':
           res.status(404).json({ error: 'Run not found' });
@@ -299,6 +301,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
           res.status(409).json({ code: 'DUPLICATE_REPORT', error: 'Another upload for this run is being processed. Refresh and try again.', existingReportId: result.existingReportId });
           return;
         case 'REPORT_LOCKED':
+        case 'RESEND_CONFIRMATION_REQUIRED':
         case 'BASELINE_IN_USE': {
           const { status, body } = describeRegenerationBlock(result);
           res.status(status).json(body);

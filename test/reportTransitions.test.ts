@@ -81,7 +81,11 @@ test("report transition graph matches the locked design", () => {
   // No skipping states, no illegal reversals, terminal states have no exits.
   assert.equal(isValidReportTransition(ReportStatus.PENDING_ANALYSIS, ReportStatus.PENDING_APPROVAL), false);
   assert.equal(isValidReportTransition(ReportStatus.EMAIL_DRAFTED, ReportStatus.REPORT_READY), false);
-  assert.equal(isValidReportTransition(ReportStatus.SENT, ReportStatus.PENDING_ANALYSIS), false);
+  // A sent report can be reopened for a correction (the user confirms it will
+  // email the client again -- see processVerifiedExcelUpload.ts); it goes back
+  // to the start and must be reviewed and sent again.
+  assert.equal(isValidReportTransition(ReportStatus.SENT, ReportStatus.PENDING_ANALYSIS), true);
+  assert.equal(isValidReportTransition(ReportStatus.SENT, ReportStatus.APPROVED), false);
   assert.equal(isValidReportTransition(ReportStatus.REJECTED, ReportStatus.PENDING_ANALYSIS), false);
 });
 

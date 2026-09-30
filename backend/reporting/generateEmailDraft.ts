@@ -64,6 +64,8 @@ export async function generateEmailDraft(
   options?: {
     /** Keep these instead of re-reading the client config -- a regenerated report keeps the recipients/CC/task someone edited. */
     keepRecipients?: { recipients: string[]; cc: string[]; clickupTaskUrl: string | null };
+    /** Appended to the subject, e.g. " (Updated)" when a sent report is corrected and sent again. */
+    subjectSuffix?: string;
   },
 ): Promise<GenerateEmailDraftResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
@@ -78,7 +80,8 @@ export async function generateEmailDraft(
 
   const { periodStart, periodEnd } = computeReportPeriod(report);
 
-  const draft = buildDefaultEmailDraft({ clientName: report.client.name, periodStart, periodEnd });
+  const baseDraft = buildDefaultEmailDraft({ clientName: report.client.name, periodStart, periodEnd });
+  const draft = options?.subjectSuffix ? { ...baseDraft, subject: baseDraft.subject + options.subjectSuffix } : baseDraft;
 
   // Recipients (and cc, and the ClickUp task to deliver through) come from
   // the client's own configuration, resolved by the backend -- never

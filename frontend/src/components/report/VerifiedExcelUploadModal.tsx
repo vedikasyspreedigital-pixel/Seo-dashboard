@@ -4,7 +4,8 @@ import { Modal } from '../ui/Modal';
 import { Spinner } from '../ui/Spinner';
 import { InlineError } from '../ui/InlineError';
 import { UploadDropIcon } from '../ui/icons';
-import { uploadVerifiedExcel, type ReportGenerationSummary } from '../../api/client';
+import { uploadVerifiedExcel, type ReportGenerationSummary, type ResendInfo } from '../../api/client';
+import { ResendConfirmModal } from './ResendConfirmModal';
 import type { RankingReport } from '../../api/types';
 
 interface Props {
@@ -31,23 +32,33 @@ const ACCEPTED = {
 export function VerifiedExcelUploadModal({ open, runId, onClose, onProcessed, updatingExisting = false }: Props) {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the report was already sent: the file is kept so Continue can
+  // re-submit it with the confirmation, without choosing it again.
+  const [pendingResend, setPendingResend] = useState<{ file: File; info: ResendInfo } | null>(null);
 
   function handleClose() {
     if (processing) return; // don't let the modal be dismissed mid-upload
     setError(null);
+    setPendingResend(null);
     onClose();
   }
 
   const handleFileSelected = useCallback(
-    async (file: File) => {
+    async (file: File, confirmResend = false) => {
       setProcessing(true);
       setError(null);
       try {
-        const result = await uploadVerifiedExcel(runId, file);
+        const result = await uploadVerifiedExcel(runId, file, { confirmResend });
         if ((result.outcome === 'CREATED' || result.outcome === 'UPDATED') && result.report && result.summary) {
+          setPendingResend(null);
           onProcessed(result.report, result.summary);
           return;
         }
+        if (result.outcome === 'NEEDS_RESEND_CONFIRM' && result.resend) {
+          setPendingResend({ file, info: result.resend });
+          return;
+        }
+        setPendingResend(null);
         if (result.outcome === 'LOCKED' || result.outcome === 'DUPLICATE') {
           setError(result.message ?? 'This report can’t be changed right now.');
         } else if (result.outcome === 'UNMATCHED_ROWS') {
@@ -112,6 +123,17 @@ export function VerifiedExcelUploadModal({ open, runId, onClose, onProcessed, up
       </div>
 
       {error && <InlineError message={error} className="mt-3" />}
+
+      <ResendConfirmModal
+        open={pendingResend !== null}
+        sendCount={pendingResend?.info.sendCount ?? 1}
+        lastSentAt={pendingResend?.info.lastSentAt ?? null}
+        busy={processing}
+        onCancel={() => setPendingResend(null)}
+        onContinue={() => {
+          if (pendingResend) void handleFileSelected(pendingResend.file, true);
+        }}
+      />
     </Modal>
   );
 }
