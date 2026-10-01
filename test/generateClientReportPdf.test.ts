@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildRowsAndSummary, describeOverallRankingChange, formatSearchEngineLabel } from "../backend/reporting/generateClientReportPdf.js";
+import { buildRowsAndSummary, describeOverallRankingChange, formatSearchEngineLabel, groupRowsByLocation, buildClientReportHtml } from "../backend/reporting/generateClientReportPdf.js";
 import type { RunAnalytics } from "../backend/reporting/computeRunAnalytics.js";
 
 // Pure logic, no DB/Playwright -- mirrors how computeRunAnalytics.test.mjs-
@@ -247,4 +247,112 @@ test("formatSearchEngineLabel: shows the run's real Google domain, not a hardcod
   assert.equal(formatSearchEngineLabel(["google.com.au", "google.co.nz"]), "Google.com.au / Google.co.nz");
   assert.equal(formatSearchEngineLabel([]), "Google");
   assert.equal(formatSearchEngineLabel(undefined), "Google");
+});
+
+// -- Multi-location reports (reference: Twin Crown, 31 Aug - 15 Sep 2026) ----
+// One table: the first location under the top "Current Ranking Status:"
+// header, then a section row per further location, each group sorted on its own.
+
+const TWIN_LOCATIONS = {
+  order: ["United Arab Emirates|google.ae", "Saudi Arabia|google.com.sa", "Qatar|google.com.qa"],
+  labels: {
+    "United Arab Emirates|google.ae": { locationName: "United Arab Emirates", seDomain: "google.ae" },
+    "Saudi Arabia|google.com.sa": { locationName: "Saudi Arabia", seDomain: "google.com.sa" },
+    "Qatar|google.com.qa": { locationName: "Qatar", seDomain: "google.com.qa" },
+  },
+  byRowUid: {
+    uae1: "United Arab Emirates|google.ae",
+    uae2: "United Arab Emirates|google.ae",
+    uae3: "United Arab Emirates|google.ae",
+    ksa1: "Saudi Arabia|google.com.sa",
+    ksa2: "Saudi Arabia|google.com.sa",
+    qa1: "Qatar|google.com.qa",
+  } as Record<string, string>,
+};
+
+function twinCrownAnalytics(): RunAnalytics {
+  return analytics({
+    improved: [
+      { keyword: "flow meter suppliers in saudi arabia", rowUid: "ksa1", previousRank: 25, currentRank: 19, delta: 6 },
+      { keyword: "oilfield equipment suppliers in dubai", rowUid: "uae2", previousRank: null, currentRank: 1, delta: null },
+    ],
+    declined: [{ keyword: "flow meter supplier in qatar", rowUid: "qa1", previousRank: 8, currentRank: 12, delta: -4 }],
+    unchanged: [
+      { keyword: "tcs meters uae", rowUid: "uae1", previousRank: 3, currentRank: 3, delta: 0 },
+      { keyword: "submersible pump suppliers in dubai", rowUid: "uae3", previousRank: null, currentRank: null, delta: null },
+      { keyword: "pump suppliers in saudi arabia", rowUid: "ksa2", previousRank: null, currentRank: null, delta: null },
+    ],
+  });
+}
+
+test("groupRowsByLocation: a single location (or no location data) is one flat group -- unchanged behavior", () => {
+  const { rows } = buildRowsAndSummary(twinCrownAnalytics());
+  assert.equal(groupRowsByLocation(rows, undefined).length, 1);
+  const one = { order: ["Australia|google.com.au"], labels: { "Australia|google.com.au": { locationName: "Australia", seDomain: "google.com.au" } }, byRowUid: {} };
+  const groups = groupRowsByLocation(rows, one);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].rows.length, rows.length);
+});
+
+test("groupRowsByLocation: rows grouped in the Excel's location order, each group still ranked first then Not in 100", () => {
+  const { rows } = buildRowsAndSummary(twinCrownAnalytics());
+  const groups = groupRowsByLocation(rows, TWIN_LOCATIONS);
+  assert.deepEqual(groups.map((g) => g.key), TWIN_LOCATIONS.order);
+  assert.deepEqual(groups[0].rows.map((r) => r.keyword), ["oilfield equipment suppliers in dubai", "tcs meters uae", "submersible pump suppliers in dubai"]);
+  assert.deepEqual(groups[1].rows.map((r) => r.keyword), ["flow meter suppliers in saudi arabia", "pump suppliers in saudi arabia"]);
+  assert.deepEqual(groups[2].rows.map((r) => r.keyword), ["flow meter supplier in qatar"]);
+});
+
+test("groupRowsByLocation: a row with no known location falls into the first group, never dropped", () => {
+  const { rows } = buildRowsAndSummary(twinCrownAnalytics());
+  const groups = groupRowsByLocation(rows, { ...TWIN_LOCATIONS, byRowUid: { ...TWIN_LOCATIONS.byRowUid, qa1: "nowhere|google.xx" } });
+  assert.equal(groups.reduce((n, g) => n + g.rows.length, 0), rows.length);
+});
+
+test("PDF HTML: multi-location report has the first Google in the header and a section row per further location, in order", () => {
+  const html = buildClientReportHtml({
+    clientName: "Twin Crown",
+    clientDomain: "twincrown.com",
+    searchEngineDomains: ["google.ae", "google.com.sa", "google.com.qa"],
+    locations: TWIN_LOCATIONS,
+    currentRunDate: new Date("2026-09-15T00:00:00Z"),
+    previousRunDate: new Date("2026-08-31T00:00:00Z"),
+    analytics: twinCrownAnalytics(),
+  });
+  const header = html.slice(html.indexOf("<thead>"), html.indexOf("</thead>"));
+  assert.ok(header.includes(">Google.ae<"), "top header names the first location's Google only");
+  assert.ok(!header.includes("Google.com.sa"), "not every domain joined into the header");
+  const body = html.slice(html.indexOf("<tbody>"));
+  const sections = [...body.matchAll(/<tr class="location-row">\s*<td>([^<]+)<\/td>\s*<td class="num">([^<]+)<\/td>/g)].map((m) => m[1] + " | " + m[2]);
+  assert.deepEqual(sections, ["Saudi Arabia | google.com.sa", "Qatar | google.com.qa"], "no section row for the first location");
+  const order = ["tcs meters uae", "Saudi Arabia", "flow meter suppliers in saudi arabia", "Qatar", "flow meter supplier in qatar"].map((t) => body.indexOf(t));
+  assert.ok(order.every((pos, i) => pos > -1 && (i === 0 || pos > order[i - 1])), "UAE rows, then Saudi section + rows, then Qatar section + rows");
+});
+
+test("PDF HTML: a single-location report has no section rows", () => {
+  const html = buildClientReportHtml({
+    clientName: "Twin Crown",
+    searchEngineDomains: ["google.ae"],
+    locations: { order: ["United Arab Emirates|google.ae"], labels: { "United Arab Emirates|google.ae": { locationName: "United Arab Emirates", seDomain: "google.ae" } }, byRowUid: {} },
+    currentRunDate: new Date("2026-09-15T00:00:00Z"),
+    previousRunDate: new Date("2026-08-31T00:00:00Z"),
+    analytics: twinCrownAnalytics(),
+  });
+  assert.ok(!html.includes('class="location-row"'));
+  assert.ok(html.includes(">Google.ae<"));
+});
+
+// Regression: the orange header rows were printed again at the top of every
+// page (Chromium repeats a table-header-group); the agency's reference
+// reports show them once, on page 1 only.
+test("PDF HTML: the orange header is printed once (row group), never repeated on every page", () => {
+  const html = buildClientReportHtml({
+    clientName: "Twin Crown",
+    searchEngineDomains: ["google.ae"],
+    currentRunDate: new Date("2026-09-15T00:00:00Z"),
+    previousRunDate: new Date("2026-08-31T00:00:00Z"),
+    analytics: twinCrownAnalytics(),
+  });
+  assert.match(html, /thead \{ display: table-row-group; \}/);
+  assert.doesNotMatch(html, /table-header-group/);
 });

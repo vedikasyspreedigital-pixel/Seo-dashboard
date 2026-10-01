@@ -16,6 +16,19 @@ export function normalizeKeyword(raw: string): string {
 // (not a parse error) regardless of internal spacing/case.
 const NOT_IN_100_PATTERN = /^not\s*in\s*100$/i;
 
+// A Google domain sitting where a rank should be ("google.com.sa",
+// "Google.ae", "www.google.co.in") marks a report's LOCATION SECTION row,
+// not a keyword: multi-location agency reports (e.g. Twin Crown, 2026-09)
+// group keywords under rows like "Saudi Arabia | google.com.sa |
+// google.com.sa", and the top "Current Ranking Status: | Google.ae |
+// Google.ae" row has the same shape. A real keyword's rank cell is a number,
+// "Not in 100" or blank -- never a search-engine domain.
+const SEARCH_ENGINE_CELL = /^(?:https?:\/\/)?(?:www\.)?google(?:\.[a-z]{2,3}){1,2}\/?$/i;
+
+export function isSearchEngineDomainCell(raw: string | null | undefined): boolean {
+  return SEARCH_ENGINE_CELL.test((raw ?? "").toString().trim());
+}
+
 /**
  * "8" -> 8, "Not in100" / "not in 100" -> null (explicitly "not ranked",
  * not a missing value), "" or unparseable -> null (same bucket -- a

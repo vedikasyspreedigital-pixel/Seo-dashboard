@@ -34,6 +34,33 @@ const BUILDABLE_STATUSES: ReportStatus[] = [ReportStatus.PENDING_ANALYSIS, Repor
  * beyond) still reject -- this never re-runs Claude/analytics/DataForSEO or
  * touches the email draft/approval state.
  */
+/**
+ * Each keyword's location for the PDF's per-location grouping, keyed by
+ * rowUid, with locations in the order they first appear in the run's Excel
+ * (sourceRowNumber). A location is Location + Google domain (domain compared
+ * case-insensitively, so "Google.ae" and "google.ae" are one group).
+ */
+export async function loadRowLocations(runId: string) {
+  const rows = await prisma.rankingRow.findMany({
+    where: { runId },
+    select: { rowUid: true, locationName: true, seDomain: true },
+    orderBy: { sourceRowNumber: "asc" },
+  });
+  const order: string[] = [];
+  const byRowUid: Record<string, string> = {};
+  const labels: Record<string, { locationName: string; seDomain: string }> = {};
+  for (const row of rows) {
+    const domain = row.seDomain.trim().toLowerCase();
+    const key = row.locationName.trim() + "|" + domain;
+    if (!labels[key]) {
+      labels[key] = { locationName: row.locationName.trim(), seDomain: domain };
+      order.push(key);
+    }
+    byRowUid[row.rowUid] = key;
+  }
+  return { order, byRowUid, labels };
+}
+
 export async function buildReport(reportId: string): Promise<BuildReportResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
@@ -56,10 +83,12 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
     select: { seDomain: true },
     distinct: ["seDomain"],
   });
+  const locations = await loadRowLocations(report.runId);
   const pdfBuffer = await generateClientReportPdf({
     clientName: report.client.name,
     clientDomain: report.client.domain,
     searchEngineDomains: domainRows.map((r) => r.seDomain),
+    locations,
     // The date shown under the title (and as the "current" column header in
     // the ranking table) is the day this PDF is actually being built, not
     // when the underlying run finished fetching -- the two can differ by

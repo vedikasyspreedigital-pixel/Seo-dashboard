@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { parseBaselineRank } from "./normalizeKeyword.js";
+import { parseBaselineRank, isSearchEngineDomainCell } from "./normalizeKeyword.js";
 import { parseDateLabel, pickNewestDateColumn } from "./parseDateColumn.js";
 
 // A lenient parser for an AGENCY'S OWN historical ranking export -- distinct
@@ -136,6 +136,8 @@ export async function parseBaselineExcel(fileBuffer: Buffer): Promise<BaselinePr
     const row = worksheet.getRow(rowNumber);
     const keyword = cellText(row.getCell(keywordColumn));
     if (!keyword) continue; // blank/trailing row
+    // A location section heading ("Saudi Arabia | google.com.sa | ..."), not a keyword.
+    if (dateColumns.some((d) => isSearchEngineDomainCell(cellText(row.getCell(d.column))))) continue;
     const { rankValue, rankDisplay } = parseBaselineRank(cellText(row.getCell(newest.column.column)));
     rows.push({ keyword, rankValue, rankDisplay });
   }

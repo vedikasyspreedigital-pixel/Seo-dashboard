@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { parseBaselineExcel } from "../backend/baselines/parseBaselineExcel.js";
+import { isSearchEngineDomainCell } from "../backend/baselines/normalizeKeyword.js";
 
 // Mirrors the real sample PDF's layout (2-row header where the "Keyword"
 // label and the date labels share one row; a title/status row above it),
@@ -128,4 +129,35 @@ test("parseBaselineExcel: a merged title row repeating ONE date is never taken a
   const preview = await parseBaselineExcel(Buffer.from(await workbook.xlsx.writeBuffer()));
   assert.equal(preview.baselineDateLabel, "15th September 2026");
   assert.deepEqual(preview.rows.map((r) => r.keyword), ["commercial photography services"]);
+});
+
+// Regression: a multi-location agency report (Twin Crown, 2026-09) groups
+// keywords under location section rows ("Saudi Arabia | google.com.sa |
+// google.com.sa"); those, and the top "Current Ranking Status: | Google.ae"
+// row, must never be imported as keywords.
+test("parseBaselineExcel: multi-location report -- location section rows are not imported as keywords", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Ranking");
+  sheet.addRow(["Current Ranking Status:", "Google.ae", "Google.ae"]);
+  sheet.addRow(["Keyword", "15th September 2026", "31st August 2026"]);
+  sheet.addRow(["tcs meters uae", "1", "1"]);
+  sheet.addRow(["oilfield equipment suppliers in dubai", "1", "Not in 100"]);
+  sheet.addRow(["Saudi Arabia", "google.com.sa", "google.com.sa"]);
+  sheet.addRow(["flow meter suppliers in saudi arabia", "19", "14"]);
+  sheet.addRow(["Congo", "Not In 100", "google.cg"]);
+  sheet.addRow(["fuel flow meters supplier congo", "1", "1"]);
+  sheet.addRow(["Somalia", "google.com", "google.com"]);
+  sheet.addRow(["fuel flow meters somalia", "1", "1"]);
+  const preview = await parseBaselineExcel(Buffer.from(await workbook.xlsx.writeBuffer()));
+  assert.equal(preview.baselineDateLabel, "15th September 2026");
+  assert.deepEqual(
+    preview.rows.map((r) => r.keyword),
+    ["tcs meters uae", "oilfield equipment suppliers in dubai", "flow meter suppliers in saudi arabia", "fuel flow meters supplier congo", "fuel flow meters somalia"],
+  );
+  assert.equal(preview.rows.find((r) => r.keyword === "flow meter suppliers in saudi arabia")!.rankValue, 19);
+});
+
+test("isSearchEngineDomainCell: Google domains in a rank cell are section markers; ranks are not", () => {
+  for (const cell of ["google.com.sa", "Google.ae", "google.com", "www.google.co.in", "https://google.cg/"]) assert.equal(isSearchEngineDomainCell(cell), true, cell);
+  for (const cell of ["1", "19", "Not in 100", "Not In 100", "", null, "googled", "flow meter google ads"]) assert.equal(isSearchEngineDomainCell(cell), false, String(cell));
 });

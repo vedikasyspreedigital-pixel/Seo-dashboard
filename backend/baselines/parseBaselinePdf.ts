@@ -1,6 +1,6 @@
 import { renderPdfPageImages } from "./renderPdfPageImages.js";
 import { ocrExtractTablePage } from "./ocrExtractTable.js";
-import { parseBaselineRank } from "./normalizeKeyword.js";
+import { parseBaselineRank, isSearchEngineDomainCell } from "./normalizeKeyword.js";
 import { parseDateLabel, pickNewestDateColumn } from "./parseDateColumn.js";
 import type { BaselinePreview, BaselinePreviewRow } from "./parseBaselineExcel.js";
 
@@ -34,6 +34,8 @@ export async function parseBaselinePdf(pdfBuffer: Buffer): Promise<BaselinePrevi
   const rows: BaselinePreviewRow[] = [];
   for (const ocrRow of ocrRows) {
     if (!ocrRow.keyword) continue;
+    // A location section heading ("Saudi Arabia | google.com.sa | ..."), not a keyword.
+    if (ocrRow.values.some((v) => isSearchEngineDomainCell(v))) continue;
     const rawValue = ocrRow.values[newestColumnIndex];
     const { rankValue, rankDisplay } = parseBaselineRank(rawValue);
     rows.push({ keyword: ocrRow.keyword, rankValue, rankDisplay });

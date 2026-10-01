@@ -5,9 +5,13 @@
 // this file calls Claude or accepts Claude-authored input.
 //
 // Rendered via Playwright printing plain HTML to PDF (same technique as the
-// rest of this app's PDF work) rather than a PDF-drawing library -- lets
-// the table use a normal <thead> and Chromium's print engine repeats it on
-// every page automatically when the table spans multiple A4 pages.
+// rest of this app's PDF work) rather than a PDF-drawing library.
+//
+// The two orange header rows appear ONCE, at the top of page 1 -- matching
+// the agency's reference reports (e.g. Twin Crown) -- not repeated on every
+// page: <thead> is rendered as an ordinary row group (see the CSS), because
+// Chromium's print engine otherwise repeats a table-header-group on every
+// new A4 page.
 
 import { chromium } from "playwright";
 import { readFileSync } from "node:fs";
@@ -33,6 +37,15 @@ export interface ClientReportPdfInput {
    * top header row. Was previously hardcoded to "Google.ae" for every client.
    */
   searchEngineDomains?: string[];
+  /**
+   * Each keyword's location, keyed by rowUid, in the order locations first
+   * appear in the run's Excel. With 2+ locations the table is grouped like a
+   * multi-location agency report (e.g. Twin Crown): the first location under
+   * the top "Current Ranking Status:" header, then a section row per further
+   * location ("Saudi Arabia | google.com.sa | google.com.sa"), each group
+   * sorted on its own. Omitted or a single location -> one flat table as before.
+   */
+  locations?: { order: string[]; byRowUid: Record<string, string>; labels: Record<string, { locationName: string; seDomain: string }> };
   currentRunDate: Date;
   previousRunDate: Date | null;
   analytics: RunAnalytics;
@@ -41,6 +54,7 @@ export interface ClientReportPdfInput {
 type MovementKind = "improved" | "dropped" | "unchanged" | "new" | "lost";
 
 interface TableRow {
+  rowUid: string;
   keyword: string;
   previousRankLabel: string;
   currentRankLabel: string;
@@ -99,31 +113,31 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
   for (const m of analytics.movements.improved) {
     if (m.previousRank === null) {
       enteredTop100Count++;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
+      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
     } else {
       improvedCount++;
       const delta = m.delta ?? 0;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↑ +${delta}`, kind: "improved", currentRank: m.currentRank });
+      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↑ +${delta}`, kind: "improved", currentRank: m.currentRank });
     }
   }
 
   for (const m of analytics.movements.declined) {
     if (m.currentRank === null) {
       droppedOutOfTop100Count++;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↓ Lost", kind: "lost", currentRank: m.currentRank });
+      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↓ Lost", kind: "lost", currentRank: m.currentRank });
     } else {
       droppedCount++;
-      rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↓ ${m.delta ?? 0}`, kind: "dropped", currentRank: m.currentRank });
+      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↓ ${m.delta ?? 0}`, kind: "dropped", currentRank: m.currentRank });
     }
   }
 
   for (const m of analytics.movements.unchanged) {
-    rows.push({ keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "→ 0", kind: "unchanged", currentRank: m.currentRank });
+    rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "→ 0", kind: "unchanged", currentRank: m.currentRank });
   }
 
   for (const m of analytics.movements.newlyTracked) {
     enteredTop100Count++;
-    rows.push({ keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
+    rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
   }
 
   // Ranked keywords first (rank ascending, 1..100), then a clearly separated
@@ -168,6 +182,7 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
  */
 function buildCurrentOnlyRowsAndSummary(analytics: RunAnalytics) {
   const rows: TableRow[] = analytics.movements.newlyTracked.map((m) => ({
+    rowUid: m.rowUid,
     keyword: m.keyword,
     previousRankLabel: "—",
     currentRankLabel: RANK_DISPLAY(m.currentRank),
@@ -222,22 +237,59 @@ export function formatSearchEngineLabel(domains: string[] | undefined): string {
   return unique.map((d) => d.charAt(0).toUpperCase() + d.slice(1)).join(" / ");
 }
 
+/**
+ * Splits the (already ranked-then-"Not in 100" sorted) rows into location
+ * groups, in the run's own location order. Sorting within each group is
+ * preserved because filtering keeps relative order. Returns a single group
+ * for a one-location run (or when no location data was passed), so the
+ * flat-table rendering is exactly what it was before.
+ */
+export function groupRowsByLocation<T extends { rowUid: string }>(rows: T[], locations: ClientReportPdfInput["locations"]): { key: string | null; rows: T[] }[] {
+  if (!locations || locations.order.length < 2) return [{ key: null, rows }];
+  const first = locations.order[0];
+  const groups = locations.order.map((key) => ({ key, rows: [] as T[] }));
+  const index = new Map(locations.order.map((key, i) => [key, i]));
+  for (const row of rows) {
+    const i = index.get(locations.byRowUid[row.rowUid] ?? first) ?? 0;
+    groups[i].rows.push(row);
+  }
+  return groups.filter((g) => g.rows.length > 0);
+}
+
+/** Exported for tests only -- the PDF is this HTML printed by headless Chromium. */
+export function buildClientReportHtml(input: ClientReportPdfInput): string {
+  return buildHtml(input);
+}
+
 function buildHtml(input: ClientReportPdfInput): string {
   const { rows } = buildRowsAndSummary(input.analytics);
-  const searchEngineLabel = escapeHtml(formatSearchEngineLabel(input.searchEngineDomains));
+  const groups = groupRowsByLocation(rows, input.locations);
+  const firstGroupLabel = groups[0].key && input.locations ? input.locations.labels[groups[0].key] : null;
+  // Grouped report: the top header names only the FIRST location's Google
+  // (each further location gets its own section row below), like the reference.
+  const searchEngineLabel = escapeHtml(formatSearchEngineLabel(firstGroupLabel ? [firstGroupLabel.seDomain] : input.searchEngineDomains));
 
   const currentDateLabel = formatOrdinalDate(input.currentRunDate);
   const previousDateLabel = input.previousRunDate ? formatOrdinalDate(input.previousRunDate) : "No prior run";
 
-  const tableRows = rows
-    .map(
-      (r) => `<tr>
+  const keywordRow = (r: TableRow) => `<tr>
         <td>${escapeHtml(r.keyword)}</td>
         <td class="num">${escapeHtml(r.currentRankLabel)}</td>
         <td class="num">${escapeHtml(r.previousRankLabel)}</td>
         <td class="num" style="color:${MOVEMENT_COLOR[r.kind]}; font-weight:600;">${escapeHtml(r.movementLabel)}</td>
-      </tr>`,
-    )
+      </tr>`;
+  const sectionRow = (key: string) => {
+    const label = input.locations!.labels[key];
+    const domain = escapeHtml(label.seDomain.trim().toLowerCase());
+    return `<tr class="location-row">
+        <td>${escapeHtml(label.locationName)}</td>
+        <td class="num">${domain}</td>
+        <td class="num">${domain}</td>
+        <td>&nbsp;</td>
+      </tr>`;
+  };
+  const tableRows = groups
+    .map((g, i) => (i > 0 && g.key ? sectionRow(g.key) : "") + g.rows.map(keywordRow).join(""))
     .join("");
 
   return `<!doctype html>
@@ -255,13 +307,14 @@ function buildHtml(input: ClientReportPdfInput): string {
   .brand-meta .title { font-size: 13px; font-weight: 700; }
   .brand-meta .line { font-size: 11px; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  thead { display: table-header-group; }
+  thead { display: table-row-group; } /* print the header once, never repeated per page */
   tr { page-break-inside: avoid; }
   th { text-align: left; background: #e8791a; color: #ffffff; padding: 7px 10px; font-size: 10.5px; font-weight: 700; border: 1px solid #ffffff; }
   th.label-row { background: #e8791a; }
   td { padding: 6px 10px; border-bottom: 1px solid #eceef1; }
   td.num, th.num { text-align: center; }
   tr:nth-child(even) td { background: #fafafa; }
+  tr.location-row td { background: #fde9d7; color: #111827; font-weight: 700; border-top: 2px solid #e8791a; }
 </style>
 </head>
 <body>
