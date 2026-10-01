@@ -6,6 +6,8 @@ import { prisma } from "../backend/db/client.js";
 import { ingestExcelRun } from "../backend/runs/ingestExcelRun.js";
 import { processVerifiedExcelUpload, regenerateReport } from "../backend/reporting/processVerifiedExcelUpload.js";
 import { formatOrdinalDate } from "../backend/reporting/formatOrdinalDate.js";
+import { buildRowsAndSummary, groupRowsByLocation } from "../backend/reporting/generateClientReportPdf.js";
+import { loadRowLocations } from "../backend/reporting/buildReport.js";
 import { approveAndSendReport } from "../backend/reporting/approveAndSend.js";
 import { createMockEmailSender, createFailingMockEmailSender } from "../backend/reporting/mockEmailSender.js";
 import { createBaselineFromRows } from "../backend/baselines/createBaselineFromRows.js";
@@ -560,6 +562,51 @@ test("re-send: a sent report that a newer report already compares against stays 
     assert.equal(blocked.outcome, "BASELINE_IN_USE");
   } finally {
     await prisma.reportSend.deleteMany({ where: { report: { clientId: client.id } } });
+    await cleanup(client.id);
+  }
+});
+
+
+// Regression (Twin Crown, 2026-10-01): a multi-location run compared against
+// a BASELINE came out as one flat table, because baseline-compared movements
+// are labelled with the normalized keyword, not the row's rowUid, and the
+// location lookup only knew rowUids. Goes through the real upload ->
+// compareRunToBaseline -> loadRowLocations -> grouping path.
+test("multi-location run compared against a baseline is grouped by location in the PDF (real comparison path)", async () => {
+  const client = await makeClient();
+  try {
+    await createBaselineFromRows(client.id, {
+      sourceFilename: "twin-15-sep.xlsx",
+      sourceType: "EXCEL",
+      baselineDate: new Date("2026-09-15"),
+      rows: [
+        { keyword: "tcs meters uae", rankValue: 1, rankDisplay: "1" },
+        { keyword: "Flow Meter Saudi Arabia", rankValue: 22, rankDisplay: "22" },
+        { keyword: "flow meter supplier in qatar", rankValue: 12, rankDisplay: "12" },
+      ],
+    });
+    const spec = [
+      { keyword: "tcs meters uae", targetUrl: "/a", locationName: "United Arab Emirates", seDomain: "google.ae", rank: "1" },
+      { keyword: "flow meter saudi arabia", targetUrl: "/b", locationName: "Saudi Arabia", seDomain: "google.com.sa", rank: "19" },
+      { keyword: "flow meter supplier in qatar", targetUrl: "/c", locationName: "Qatar", seDomain: "google.com.qa", rank: "12" },
+    ];
+    const run = await makeCompletedRun(client.id, spec);
+    const result = await processVerifiedExcelUpload(run.id, await buildWorkbookBuffer(spec), "twin-1-oct.xlsx", null);
+    assert.equal(result.outcome, "SUCCESS");
+    if (result.outcome !== "SUCCESS") return;
+
+    const { rows } = buildRowsAndSummary(result.report.analyticsJson as any);
+    const groups = groupRowsByLocation(rows, await loadRowLocations(run.id));
+    assert.deepEqual(
+      groups.map((g) => [g.key, g.rows.map((r) => r.keyword)]),
+      [
+        ["United Arab Emirates|google.ae", ["tcs meters uae"]],
+        ["Saudi Arabia|google.com.sa", ["flow meter saudi arabia"]],
+        ["Qatar|google.com.qa", ["flow meter supplier in qatar"]],
+      ],
+      "each keyword lands in its own location group, not all in the first one",
+    );
+  } finally {
     await cleanup(client.id);
   }
 });

@@ -7,6 +7,7 @@ import { generateClientReportPdf } from "./generateClientReportPdf.js";
 import { markReportReady } from "./reportTransitions.js";
 import { InvalidReportTransitionError } from "./errors.js";
 import type { RunAnalytics } from "./computeRunAnalytics.js";
+import { normalizeKeyword } from "../baselines/normalizeKeyword.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Same configurable-persistent-disk pattern as UPLOADS_DIR in runs.ts.
@@ -39,11 +40,19 @@ const BUILDABLE_STATUSES: ReportStatus[] = [ReportStatus.PENDING_ANALYSIS, Repor
  * rowUid, with locations in the order they first appear in the run's Excel
  * (sourceRowNumber). A location is Location + Google domain (domain compared
  * case-insensitively, so "Google.ae" and "google.ae" are one group).
+ *
+ * Keyed by BOTH the row's rowUid and its normalized keyword: analytics from a
+ * prior-run comparison (computeRunAnalytics) label movements with the real
+ * rowUid, but a baseline comparison (compareRunToBaseline -- the usual case)
+ * labels them with normalizeKeyword(keyword) instead. Keying by rowUid alone
+ * found no baseline-compared row, so every keyword fell into the first
+ * location and a multi-location report came out as one flat table (Twin
+ * Crown, 2026-10-01).
  */
 export async function loadRowLocations(runId: string) {
   const rows = await prisma.rankingRow.findMany({
     where: { runId },
-    select: { rowUid: true, locationName: true, seDomain: true },
+    select: { rowUid: true, keyword: true, locationName: true, seDomain: true },
     orderBy: { sourceRowNumber: "asc" },
   });
   const order: string[] = [];
@@ -57,6 +66,7 @@ export async function loadRowLocations(runId: string) {
       order.push(key);
     }
     byRowUid[row.rowUid] = key;
+    byRowUid[normalizeKeyword(row.keyword)] = key;
   }
   return { order, byRowUid, labels };
 }
