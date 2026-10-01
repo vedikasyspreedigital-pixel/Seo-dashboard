@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDataForSeoRequest } from "../backend/dataforseo/buildRequest.js";
+import { buildDataForSeoRequest, normalizeSeDomain, normalizeMatchDomain } from "../backend/dataforseo/buildRequest.js";
+import { callDataForSeoLive, DATAFORSEO_REQUEST_TIMEOUT_MS } from "../backend/dataforseo/client.js";
 import { mapDataForSeoResponse } from "../backend/dataforseo/mapResponse.js";
 
 // Pure unit tests -- no DB, no network. Fixtures mirror the real DataForSEO
@@ -520,4 +521,114 @@ test("malformed response: empty/non-object body -> MAPPING_ERROR", () => {
     "MAPPING_ERROR",
   );
   assert.equal(mapDataForSeoResponse({}).outcome, "MAPPING_ERROR");
+});
+
+// -- Input cleanup (regression: AKT, Advanced SEO, 2026-10-01) ----------------
+// Both runs failed 25/25 rows on the first try with 40501 "Invalid Field":
+//   Domain "Google.co.in"          -> Invalid Field: 'se_domain'
+//   Full URL "advkanchantalreja.com/" -> Invalid Field: 'stop_crawl_on_match' - invalid 'match_value'
+const AKT_ROW = {
+  keyword: "nri divorce lawyer mumbai",
+  targetUrl: "*advkanchantalreja.*",
+  fullUrl: "advkanchantalreja.com/",
+  locationName: "India",
+  seDomain: "Google.co.in",
+  languageName: "English",
+};
+
+test("buildDataForSeoRequest: the exact AKT row that DataForSEO rejected (40501) is now sent in a valid form", () => {
+  const payload = buildDataForSeoRequest(AKT_ROW);
+  assert.equal(payload.se_domain, "google.co.in", "se_domain must be lowercase");
+  assert.deepEqual(payload.stop_crawl_on_match, [{ match_type: "with_subdomains", match_value: "advkanchantalreja.com" }], "match_value must be a bare domain, no trailing slash");
+  assert.deepEqual(payload.find_targets_in, ["organic"]);
+  assert.equal(payload.target, "*advkanchantalreja.*", "the wildcard target is still sent verbatim");
+  assert.equal(payload.location_name, "India");
+});
+
+test("normalizeSeDomain: casing, whitespace, protocol, www. and trailing slash are cleaned", () => {
+  assert.equal(normalizeSeDomain("Google.co.in"), "google.co.in");
+  assert.equal(normalizeSeDomain("  GOOGLE.COM.AU  "), "google.com.au");
+  assert.equal(normalizeSeDomain("https://www.google.ae/"), "google.ae");
+  assert.equal(normalizeSeDomain("www.Google.com"), "google.com");
+  assert.equal(normalizeSeDomain("google.co.uk."), "google.co.uk");
+  assert.equal(normalizeSeDomain("google.com.au"), "google.com.au", "an already-valid value is unchanged");
+});
+
+test("normalizeMatchDomain: full URLs become the bare domain stop_crawl_on_match accepts", () => {
+  assert.equal(normalizeMatchDomain("advkanchantalreja.com/"), "advkanchantalreja.com");
+  assert.equal(normalizeMatchDomain("https://www.Example.com/services/page?x=1#top"), "example.com");
+  assert.equal(normalizeMatchDomain("http://shop.example.co.uk:8080/"), "shop.example.co.uk");
+  assert.equal(normalizeMatchDomain("  www.pangalark.com.au  "), "pangalark.com.au");
+  assert.equal(normalizeMatchDomain("xn--bcher-kva.example"), "xn--bcher-kva.example");
+  assert.equal(normalizeMatchDomain("cash-for-cars-perth.com.au"), "cash-for-cars-perth.com.au", "an already-valid value is unchanged");
+});
+
+test("normalizeMatchDomain: anything still not a hostname is dropped, never sent", () => {
+  for (const bad of ["", "   ", null, undefined, "*pangalark.*", "n/a", "not a url", "localhost", "-bad-.com", "example"]) {
+    assert.equal(normalizeMatchDomain(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("buildDataForSeoRequest: an unusable Full URL omits stop_crawl_on_match (full-depth crawl) instead of sending a request DataForSEO rejects", () => {
+  const payload = buildDataForSeoRequest({ ...AKT_ROW, fullUrl: "*advkanchantalreja.*" });
+  assert.equal(payload.stop_crawl_on_match, undefined);
+  assert.equal(payload.find_targets_in, undefined);
+  assert.equal(payload.depth, 100, "still the full depth-100 crawl");
+});
+
+test("buildDataForSeoRequest: only surrounding whitespace is trimmed from the wildcard target", () => {
+  assert.equal(buildDataForSeoRequest({ ...CASH_FOR_CARS_ROW, targetUrl: "  *cash-for-cars-perth.*  " }).target, "*cash-for-cars-perth.*");
+});
+
+// -- Request timeout (regression: 178 Advanced SEO calls cut off at 60s) -----
+
+test("DataForSEO request timeout is at least DataForSEO's recommended 120s for Live SERP calls", () => {
+  assert.ok(DATAFORSEO_REQUEST_TIMEOUT_MS >= 120_000, `got ${DATAFORSEO_REQUEST_TIMEOUT_MS}ms`);
+});
+
+async function withCreds(fn) {
+  const before = { login: process.env.DATAFORSEO_LOGIN, password: process.env.DATAFORSEO_PASSWORD };
+  process.env.DATAFORSEO_LOGIN = "test-login";
+  process.env.DATAFORSEO_PASSWORD = "test-password";
+  try {
+    return await fn();
+  } finally {
+    if (before.login === undefined) delete process.env.DATAFORSEO_LOGIN; else process.env.DATAFORSEO_LOGIN = before.login;
+    if (before.password === undefined) delete process.env.DATAFORSEO_PASSWORD; else process.env.DATAFORSEO_PASSWORD = before.password;
+  }
+}
+
+test("callDataForSeoLive: a slow response that arrives before the timeout is returned normally (no network -- injected fetch)", async () => {
+  await withCreds(async () => {
+    const body = successBody([organicItem()]);
+    let sawSignal = false;
+    const fetchImpl = async (_url, init) => {
+      sawSignal = init.signal instanceof AbortSignal;
+      await new Promise((r) => setTimeout(r, 50)); // "slow", but inside the (shortened) timeout
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    const result = await callDataForSeoLive(buildDataForSeoRequest(CASH_FOR_CARS_ROW), { fetchImpl, timeoutMs: 1_000 });
+    assert.ok(sawSignal, "every call carries an abort signal");
+    assert.equal(result.transportError, undefined);
+    assert.equal(result.httpStatus, 200);
+    assert.equal(mapDataForSeoResponse({ httpStatus: result.httpStatus, body: result.body }).rankValue, 8);
+  });
+});
+
+test("callDataForSeoLive: a call that exceeds the timeout is aborted into a retryable transport error -- never a rank or 'Not in 100'", async () => {
+  await withCreds(async () => {
+    const fetchImpl = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      }); // never answers on its own
+    // AbortSignal.timeout uses an unref'd timer, so keep the test process alive until it fires.
+    const keepAlive = setTimeout(() => {}, 2_000);
+    const result = await callDataForSeoLive(buildDataForSeoRequest(CASH_FOR_CARS_ROW), { fetchImpl, timeoutMs: 30 }).finally(() => clearTimeout(keepAlive));
+    assert.ok(result.transportError instanceof Error, "the abort surfaces as a transport error");
+    const mapped = mapDataForSeoResponse({ transportError: result.transportError });
+    assert.equal(mapped.outcome, "API_ERROR");
+    assert.equal(mapped.retryable, true);
+    assert.equal(mapped.rankValue, null);
+    assert.equal(mapped.rankDisplay, null, "a timeout must never become 'Not in 100'");
+  });
 });

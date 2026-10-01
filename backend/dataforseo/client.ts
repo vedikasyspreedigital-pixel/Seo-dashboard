@@ -30,19 +30,27 @@ export interface DataForSeoCallResult {
 // outside this module (e.g. the health endpoint) rather than just asserted.
 export const LIVE_ENDPOINT_URL = "https://api.dataforseo.com/v3/serp/google/organic/live/regular";
 
-// A live SERP crawl normally takes ~10-35s (confirmed from real recorded
-// attempts); this is generous headroom above that, not a tight budget.
-// Without SOME timeout, a hung/unresponsive call blocks forever -- plain
-// fetch has no default one -- which stalls processRun's sequential loop on
-// that one row permanently: the row stays PROCESSING, the row behind it
-// never even starts, and the run can never complete. Found via a real stuck
-// run in production-like local testing (DATAFORSEO_LIVE=true): the row's
-// second attempt never returned and never got recorded, so the retry loop
-// just sat there awaiting it indefinitely.
-const REQUEST_TIMEOUT_MS = 60_000;
+// DataForSEO's own guidance for Live SERP calls is a 120-second client
+// timeout "to prevent the request from being prematurely terminated"
+// (dataforseo.com/help-center/best-practices-live-endpoints-in-dataforseo-api);
+// +10s covers network/TLS overhead on top of their server-side budget.
+//
+// Was 60s, which was killing legitimate slow crawls: stored production data
+// (runs since 2026-09-21) showed 178 Advanced SEO calls with no response at
+// all, 42 rows failing on it after all 3 tries, and the slowest SUCCESSFUL
+// Advanced SEO call at 59.6s -- the distribution was being cut off exactly
+// at our limit (SEO calls are faster: p95 31s vs 51.5s, 0 cut off).
+//
+// A timeout is still required: without one, a hung call blocks forever --
+// plain fetch has no default -- stalling processRun's sequential loop on
+// that row permanently (found via a real stuck run). An abort still lands in
+// the transportError path below: retried, never a rank or "Not in 100".
+export const DATAFORSEO_REQUEST_TIMEOUT_MS = 130_000;
 
 export async function callDataForSeoLive(
   requestPayload: DataForSeoRequestPayload,
+  // Injectable for tests only -- production always uses the real fetch and the timeout above.
+  { fetchImpl = fetch, timeoutMs = DATAFORSEO_REQUEST_TIMEOUT_MS }: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<DataForSeoCallResult> {
   const login = process.env.DATAFORSEO_LOGIN;
   const password = process.env.DATAFORSEO_PASSWORD;
@@ -55,7 +63,7 @@ export async function callDataForSeoLive(
     "Basic " + Buffer.from(`${login}:${password}`).toString("base64");
 
   try {
-    const response = await fetch(
+    const response = await fetchImpl(
       LIVE_ENDPOINT_URL,
       {
         method: "POST",
@@ -64,7 +72,7 @@ export async function callDataForSeoLive(
           "Content-Type": "application/json",
         },
         body: JSON.stringify([requestPayload]),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       },
     );
     const body = await response.json();
