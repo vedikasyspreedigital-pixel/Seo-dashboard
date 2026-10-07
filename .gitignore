@@ -12,3 +12,6 @@ tsconfig.tsbuildinfo
 # parsing (backend/baselines/ocrExtractTable.ts) -- a 5MB+ runtime asset,
 # not source, never meant to live in git history.
 eng.traineddata
+
+# Local Claude Code settings (preview launch config etc.) -- never committed.
+.claude/

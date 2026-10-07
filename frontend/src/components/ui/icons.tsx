@@ -263,3 +263,15 @@ export function EyeIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+/** Two documents side by side with arrows between them -- the Compare Reports tab. */
+export function CompareIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <rect x="2.5" y="3" width="5.5" height="14" rx="1" />
+      <rect x="12" y="3" width="5.5" height="14" rx="1" />
+      <path d="M9 8h2.5M10.5 6.5 12 8l-1.5 1.5" />
+      <path d="M11 12H8.5M9.5 10.5 8 12l1.5 1.5" />
+    </svg>
+  );
+}

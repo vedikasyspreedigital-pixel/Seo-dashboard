@@ -1,10 +1,17 @@
 import { renderPdfPageImages } from "./renderPdfPageImages.js";
 import { ocrExtractTablePage } from "./ocrExtractTable.js";
 import { parseBaselineRank, isSearchEngineDomainCell } from "./normalizeKeyword.js";
+import { normalizeSeDomain } from "../dataforseo/buildRequest.js";
+import { parseBaselinePdfText } from "./parseBaselinePdfText.js";
 import { parseDateLabel, pickNewestDateColumn } from "./parseDateColumn.js";
 import type { BaselinePreview, BaselinePreviewRow } from "./parseBaselineExcel.js";
 
 export async function parseBaselinePdf(pdfBuffer: Buffer): Promise<BaselinePreview> {
+  // Text-based report PDFs (this app's own, and the agency's) are read exactly
+  // from their text layer; only a scanned/image PDF falls through to OCR.
+  const fromText = await parseBaselinePdfText(pdfBuffer);
+  if (fromText) return fromText;
+
   const pageImages = await renderPdfPageImages(pdfBuffer);
   if (pageImages.length === 0) throw new Error("The uploaded PDF has no pages.");
 
@@ -32,13 +39,21 @@ export async function parseBaselinePdf(pdfBuffer: Buffer): Promise<BaselinePrevi
   const newestColumnIndex = dateColumns.findIndex((c) => c.label === newest.column.label);
 
   const rows: BaselinePreviewRow[] = [];
+  const sections: { name: string; domain: string }[] = [];
+  let currentSection: string | null = null;
   for (const ocrRow of ocrRows) {
     if (!ocrRow.keyword) continue;
-    // A location section heading ("Saudi Arabia | google.com.sa | ..."), not a keyword.
-    if (ocrRow.values.some((v) => isSearchEngineDomainCell(v))) continue;
+    // A location section heading ("Saudi Arabia | google.com.sa | ..."), not
+    // a keyword: remembered, and every row below it belongs to it.
+    const sectionDomain = ocrRow.values.find((v) => isSearchEngineDomainCell(v));
+    if (sectionDomain) {
+      currentSection = ocrRow.keyword;
+      sections.push({ name: ocrRow.keyword, domain: normalizeSeDomain(sectionDomain) });
+      continue;
+    }
     const rawValue = ocrRow.values[newestColumnIndex];
     const { rankValue, rankDisplay } = parseBaselineRank(rawValue);
-    rows.push({ keyword: ocrRow.keyword, rankValue, rankDisplay });
+    rows.push({ keyword: ocrRow.keyword, rankValue, rankDisplay, section: currentSection });
   }
 
   return {
@@ -46,5 +61,6 @@ export async function parseBaselinePdf(pdfBuffer: Buffer): Promise<BaselinePrevi
     baselineDate: newest.date.toISOString(),
     baselineDateLabel: newest.column.label,
     rows,
+    sections,
   };
 }

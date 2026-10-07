@@ -445,3 +445,66 @@ export async function getBaselines(clientId: string): Promise<BaselineRecord[]> 
   const res = await apiFetch(`/clients/${clientId}/baselines`);
   return handle<BaselineRecord[]>(res);
 }
+
+// -- Compare Reports (standalone tab -- nothing is saved) -------------------
+
+export interface ComparedRow {
+  keyword: string;
+  rankValue: number | null;
+  rankDisplay: string | null;
+  section: string | null;
+}
+
+export interface ComparedReport {
+  fileName: string;
+  date: string;
+  dateLabel: string;
+  keywordCount: number;
+}
+
+/** Result of comparing two uploaded report files -- sent back as-is to get the PDF. */
+export interface ReportComparison {
+  older: ComparedReport;
+  newer: ComparedReport;
+  clientName: string;
+  clientDomain: string | null;
+  sections: { name: string; domain: string }[];
+  primarySearchDomain: string | null;
+  currentRows: ComparedRow[];
+  previousRows: ComparedRow[];
+  summary: { matched: number; onlyInNewer: number; onlyInOlder: number; improved: number; declined: number; unchanged: number };
+}
+
+/** Upload two report files (Excel or PDF); older/newer is worked out from their dates. */
+export async function compareReports(file1: File, file2: File): Promise<ReportComparison> {
+  const formData = new FormData();
+  formData.append('file1', file1);
+  formData.append('file2', file2);
+  const res = await apiFetch('/compare-reports/preview', { method: 'POST', body: formData });
+  return handle<ReportComparison>(res);
+}
+
+/** Build the comparison PDF (same layout as the client reports). Returns the PDF and its download file name -- built here, since a cross-origin response hides Content-Disposition. */
+export async function compareReportsPdf(comparison: ReportComparison, clientName: string, clientDomain: string): Promise<{ blob: Blob; fileName: string }> {
+  const res = await apiFetch('/compare-reports/pdf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      clientName,
+      clientDomain,
+      olderDate: comparison.older.date,
+      newerDate: comparison.newer.date,
+      currentRows: comparison.currentRows,
+      previousRows: comparison.previousRows,
+      sections: comparison.sections,
+      primarySearchDomain: comparison.primarySearchDomain,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as { error?: string });
+    throw new Error(body.error ?? `Request failed with status ${res.status}`);
+  }
+  const safeName = clientName.replace(/[\\/:*?"<>|]/g, '').trim() || 'Client';
+  const fileName = `${safeName} - Keyword Ranking Report - ${comparison.older.dateLabel} - ${comparison.newer.dateLabel}.pdf`;
+  return { blob: await res.blob(), fileName };
+}

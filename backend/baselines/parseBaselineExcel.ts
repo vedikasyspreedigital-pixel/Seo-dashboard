@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
-import { parseBaselineRank, isSearchEngineDomainCell } from "./normalizeKeyword.js";
+import { parseBaselineRank, isSearchEngineDomainCell, isWebsiteCell } from "./normalizeKeyword.js";
+import { normalizeSeDomain } from "../dataforseo/buildRequest.js";
 import { parseDateLabel, pickNewestDateColumn } from "./parseDateColumn.js";
 
 // A lenient parser for an AGENCY'S OWN historical ranking export -- distinct
@@ -25,6 +26,8 @@ export interface BaselinePreviewRow {
   keyword: string;
   rankValue: number | null;
   rankDisplay: string | null;
+  /** Location section the keyword sits under in a multi-location report ("Saudi Arabia"); null before the first section. */
+  section?: string | null;
 }
 
 export interface BaselinePreview {
@@ -32,6 +35,12 @@ export interface BaselinePreview {
   baselineDate: string; // ISO -- the auto-selected newest column
   baselineDateLabel: string; // the original header text, for display
   rows: BaselinePreviewRow[];
+  /** Location sections in file order, from rows like "Saudi Arabia | google.com.sa | google.com.sa". Empty for a single-location report. */
+  sections?: { name: string; domain: string }[];
+  /** The Google domain in the title block's "Current Ranking Status: | Google.ae" row (lowercased), when present. */
+  primarySearchDomain?: string | null;
+  /** The client's website from the report's title block ("twincrown.com"), when present. */
+  clientDomain?: string | null;
 }
 
 // Was 5 -- a real agency export (Altered Images Photography, 2026-09-21)
@@ -46,10 +55,18 @@ const HEADER_SEARCH_ROWS = 20;
 const KEYWORD_HEADER_LABELS = new Set(["keyword", "keywords"]);
 
 function cellText(cell: ExcelJS.Cell): string {
-  const value = cell.value;
+  return valueText(cell.value);
+}
+
+// Hyperlink cells ({ text, hyperlink } -- e.g. an auto-linked "twincrown.com"
+// or "google.ae") and formula cells ({ result }) used to come through as
+// "[object Object]".
+function valueText(value: unknown): string {
   if (value === null || value === undefined) return "";
-  if (typeof value === "object" && "richText" in value) {
-    return (value.richText as { text: string }[]).map((p) => p.text).join("");
+  if (typeof value === "object") {
+    if ("richText" in value) return (value.richText as { text: string }[]).map((p) => p.text).join("").trim();
+    if ("text" in value) return valueText((value as { text: unknown }).text);
+    if ("result" in value) return valueText((value as { result: unknown }).result);
   }
   return String(value).trim();
 }
@@ -131,15 +148,35 @@ export async function parseBaselineExcel(fileBuffer: Buffer): Promise<BaselinePr
   const newest = pickNewestDateColumn(dateColumns.map((d) => ({ label: d.label, column: d.column })));
   if (!newest) throw new Error("Could not determine the most recent date column.");
 
+  // Title block above the table: the client's website ("twincrown.com") and
+  // the "Current Ranking Status: | Google.ae" row's Google domain.
+  let clientDomain: string | null = null;
+  let primarySearchDomain: string | null = null;
+  for (let rowNumber = 1; rowNumber < headerRowNumber; rowNumber++) {
+    worksheet.getRow(rowNumber).eachCell({ includeEmpty: false }, (cell) => {
+      const text = cellText(cell);
+      if (!primarySearchDomain && isSearchEngineDomainCell(text)) primarySearchDomain = normalizeSeDomain(text);
+      else if (!clientDomain && isWebsiteCell(text)) clientDomain = text.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+    });
+  }
+
   const rows: BaselinePreviewRow[] = [];
+  const sections: { name: string; domain: string }[] = [];
+  let currentSection: string | null = null;
   for (let rowNumber = headerRowNumber + 1; rowNumber <= worksheet.rowCount; rowNumber++) {
     const row = worksheet.getRow(rowNumber);
     const keyword = cellText(row.getCell(keywordColumn));
     if (!keyword) continue; // blank/trailing row
-    // A location section heading ("Saudi Arabia | google.com.sa | ..."), not a keyword.
-    if (dateColumns.some((d) => isSearchEngineDomainCell(cellText(row.getCell(d.column))))) continue;
+    // A location section heading ("Saudi Arabia | google.com.sa | ..."), not
+    // a keyword: remembered, and every row below it belongs to it.
+    const sectionDomain = dateColumns.map((d) => cellText(row.getCell(d.column))).find((t) => isSearchEngineDomainCell(t));
+    if (sectionDomain) {
+      currentSection = keyword;
+      sections.push({ name: keyword, domain: normalizeSeDomain(sectionDomain) });
+      continue;
+    }
     const { rankValue, rankDisplay } = parseBaselineRank(cellText(row.getCell(newest.column.column)));
-    rows.push({ keyword, rankValue, rankDisplay });
+    rows.push({ keyword, rankValue, rankDisplay, section: currentSection });
   }
 
   return {
@@ -147,5 +184,8 @@ export async function parseBaselineExcel(fileBuffer: Buffer): Promise<BaselinePr
     baselineDate: newest.date.toISOString(),
     baselineDateLabel: newest.column.label,
     rows,
+    sections,
+    primarySearchDomain,
+    clientDomain,
   };
 }

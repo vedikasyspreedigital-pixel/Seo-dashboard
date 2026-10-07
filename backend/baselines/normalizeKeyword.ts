@@ -29,6 +29,15 @@ export function isSearchEngineDomainCell(raw: string | null | undefined): boolea
   return SEARCH_ENGINE_CELL.test((raw ?? "").toString().trim());
 }
 
+// A bare website in a report's title block ("twincrown.com",
+// "www.alteredimages.com.au/") -- not a Google domain, not a sentence.
+const WEBSITE_CELL = /^(?:https?:\/\/)?(?:www\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}\/?$/i;
+
+export function isWebsiteCell(raw: string | null | undefined): boolean {
+  const text = (raw ?? "").toString().trim();
+  return WEBSITE_CELL.test(text) && !isSearchEngineDomainCell(text);
+}
+
 /**
  * "8" -> 8, "Not in100" / "not in 100" -> null (explicitly "not ranked",
  * not a missing value), "" or unparseable -> null (same bucket -- a
