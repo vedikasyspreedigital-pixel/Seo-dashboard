@@ -20,8 +20,8 @@ export function KpiCard({ icon: Icon, label, value, caption, iconTone = 'default
         <span
           className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
             iconTone === 'violet'
-              ? 'bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.25)]'
-              : 'border border-white/[0.07] bg-white/[0.03] text-[var(--color-ink-muted)]'
+              ? 'accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(0,169,195,0.25)]'
+              : 'border border-overlay/[0.07] bg-overlay/[0.03] text-[var(--color-ink-muted)]'
           }`}
         >
           <Icon className="h-4 w-4" />

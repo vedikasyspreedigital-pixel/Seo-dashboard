@@ -251,19 +251,19 @@ export function ClientsPage() {
                   <td className="cell-cozy">
                     <div className="flex items-center justify-end gap-2">
                       {client.archivedAt ? (
-                        <button type="button" title="Restore" onClick={() => handleRestore(client)} className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]">
+                        <button type="button" title="Restore" onClick={() => handleRestore(client)} className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]">
                           <UndoIcon className="h-4 w-4" />
                         </button>
                       ) : (
                         <>
-                          <button type="button" title="Edit" onClick={() => openEdit(client)} className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]">
+                          <button type="button" title="Edit" onClick={() => openEdit(client)} className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]">
                             <PencilIcon className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
                             title="Upload Previous Ranking"
                             onClick={() => setBaselineTarget(client)}
-                            className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
+                            className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]"
                           >
                             <UploadIcon className="h-4 w-4" />
                           </button>
@@ -271,7 +271,7 @@ export function ClientsPage() {
                             type="button"
                             title={client.isActive ? 'Deactivate' : 'Activate'}
                             onClick={() => handleToggleActive(client)}
-                            className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
+                            className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]"
                           >
                             <PowerIcon className="h-4 w-4" />
                           </button>

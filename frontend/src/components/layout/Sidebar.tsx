@@ -22,7 +22,7 @@ function SidebarIcon({
         type="button"
         disabled
         title={label}
-        className={`${base} cursor-not-allowed border-white/[0.06] bg-white/[0.02] text-[var(--color-ink-faint)] opacity-50`}
+        className={`${base} cursor-not-allowed border-overlay/[0.06] bg-overlay/[0.02] text-[var(--color-ink-faint)] opacity-50`}
       >
         <Icon className="h-4.5 w-4.5" />
       </button>
@@ -36,8 +36,8 @@ function SidebarIcon({
       className={({ isActive }) =>
         `${base} ${
           isActive
-            ? 'border-transparent bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]'
-            : 'border-white/[0.06] bg-white/[0.02] text-[var(--color-ink-muted)] hover:border-white/[0.1] hover:bg-white/[0.05] hover:text-[var(--color-ink)]'
+            ? 'border-transparent accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(0,169,195,0.3),0_0_35px_rgba(0,169,195,0.12)]'
+            : 'border-overlay/[0.06] bg-overlay/[0.02] text-[var(--color-ink-muted)] hover:border-overlay/[0.1] hover:bg-overlay/[0.05] hover:text-[var(--color-ink)]'
         }`
       }
     >
@@ -49,7 +49,7 @@ function SidebarIcon({
 export function Sidebar() {
   return (
     <aside className="flex h-screen w-[84px] shrink-0 flex-col items-center gap-1.5 border-r border-[var(--color-border)] py-6">
-      <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]">
+      <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-full accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(0,169,195,0.3),0_0_35px_rgba(0,169,195,0.12)]">
         <BarChartIcon className="h-5 w-5" />
       </div>
 

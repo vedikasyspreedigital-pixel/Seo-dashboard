@@ -65,7 +65,7 @@ export function NotificationPanel({ open, onClose, notifications }: Props) {
             type="button"
             onClick={onClose}
             aria-label="Close notifications"
-            className="rounded-full p-1.5 text-[var(--color-ink-faint)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
+            className="rounded-full p-1.5 text-[var(--color-ink-faint)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]"
           >
             &times;
           </button>
@@ -90,8 +90,8 @@ export function NotificationPanel({ open, onClose, notifications }: Props) {
                         : undefined
                     }
                     className={`flex items-start gap-3 border-b border-[var(--color-border)] px-5 py-3.5 ${
-                      clickable ? 'cursor-pointer hover:bg-white/[0.03]' : ''
-                    } ${n.read ? '' : 'bg-white/[0.02]'}`}
+                      clickable ? 'cursor-pointer hover:bg-overlay/[0.03]' : ''
+                    } ${n.read ? '' : 'bg-overlay/[0.02]'}`}
                   >
                     <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${DOT_CLASSES[n.type]}`} />
                     <span>

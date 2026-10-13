@@ -2,27 +2,63 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
 
-  /* Premium dark-enterprise violet accent -- restrained, not dominant.
-     brand-400/600 are the exact gradient stops used for primary buttons
-     and glow accents (linear-gradient(135deg, brand-400, brand-600)). */
-  --color-brand-50: #f3eeff;
-  --color-brand-100: #e4d9ff;
-  --color-brand-200: #cbb3ff;
-  --color-brand-300: #c4a6ff;
-  --color-brand-400: #9b5cff;
-  --color-brand-500: #7c3aed;
-  --color-brand-600: #6330c9;
-  --color-brand-700: #5227a3;
-  --color-brand-800: #3d1d7a;
-  --color-brand-900: #291352;
+  /* Coral-orange accent, used sparingly (numbers, icons, chart lines,
+     highlights) on a flat neutral UI. Main buttons are neutral pills -- see
+     .accent-fill in base.css. brand-300 is the accent TEXT shade: lighter on
+     dark, darker on white (light overrides below) so it stays readable. */
+  --color-brand-50: #fdf1ec;
+  --color-brand-100: #fbe1d7;
+  --color-brand-200: #f8b9a3;
+  --color-brand-300: #f08a6c;
+  --color-brand-400: #e5603e;
+  --color-brand-500: #dc5532;
+  --color-brand-600: #c94a28;
+  --color-brand-700: #a53c20;
+  --color-brand-800: #7f2f19;
+  --color-brand-900: #5c2212;
 
-  --color-ink: #f5f5f7;
-  --color-ink-muted: #a1a1aa;
-  --color-ink-faint: #6f6b78;
+  --color-ink: #f5f5f5;
+  --color-ink-muted: #a3a3a3;
+  --color-ink-faint: #6e6e6e;
 
-  --color-surface: #0d0c11;
-  --color-surface-2: #121117;
-  --color-surface-3: #18171e;
+  --color-surface: #0c0c0c;
+  --color-surface-2: #242424;
+  --color-surface-3: #2a2a2a;
   --color-border: rgba(255, 255, 255, 0.06);
   --color-border-strong: rgba(255, 255, 255, 0.1);
+
+  /* Tint for subtle hover/fill layers (bg-overlay/[0.04]): white on dark,
+     black on white. */
+  --color-overlay: #ffffff;
+}
+
+/* ---- White theme (toggle in the header; dark stays the default) ----
+   The same flat design in reverse: white page, light-grey cards, black pill
+   buttons. Overrides the same variables the utilities read, so every
+   component switches without per-component light classes. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-brand-200: #c2451f;
+  --color-brand-300: #d9532f;
+
+  --color-ink: #141414;
+  --color-ink-muted: #5f5f5f;
+  --color-ink-faint: #9b9b9b;
+
+  --color-surface: #ffffff;
+  --color-surface-2: #ffffff;
+  --color-surface-3: #ffffff;
+  --color-border: rgba(0, 0, 0, 0.06);
+  --color-border-strong: rgba(0, 0, 0, 0.1);
+  --color-overlay: #000000;
+
+  --color-rose-200: #be123c;
+  --color-rose-300: #e11d48;
+  --color-amber-300: #b45309;
+  --color-emerald-300: #047857;
+}
+
+:root:not([data-theme="light"]) {
+  color-scheme: dark;
 }

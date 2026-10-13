@@ -20,8 +20,8 @@ export function IconButton({
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={`relative flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.02] text-[var(--color-ink-muted)] transition-colors ${
-        disabled ? 'opacity-60' : 'hover:border-white/[0.12] hover:text-[var(--color-ink)]'
+      className={`relative flex h-10 w-10 items-center justify-center rounded-full border border-overlay/[0.06] bg-overlay/[0.02] text-[var(--color-ink-muted)] transition-colors ${
+        disabled ? 'opacity-60' : 'hover:border-overlay/[0.12] hover:text-[var(--color-ink)]'
       }`}
     >
       {children}

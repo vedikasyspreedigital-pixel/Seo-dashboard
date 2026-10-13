@@ -123,7 +123,7 @@ export function RunsListPage() {
                         to={`/runs/${run.id}`}
                         title="View"
                         aria-label={`View run ${shortId(run.id)}`}
-                        className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
+                        className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]"
                       >
                         <EyeIcon className="h-4 w-4" />
                       </Link>

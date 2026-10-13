@@ -1,49 +1,66 @@
 body {
   font-family: var(--font-sans);
-  background-color: #050507;
+  background-color: #0c0c0c;
   color: var(--color-ink);
   font-weight: 400;
 }
 
-/* Deep, dimensional backdrop for the whole app shell: near-black base with
-   extremely subtle layered violet radial gradients for atmospheric depth,
-   plus a barely-visible grid texture -- never a flat solid color, never a
-   full-screen purple wash. */
+/* Flat, neutral design in both themes (dark default, white via the header
+   toggle): plain page, soft grey cards with no blur/border/shadow, neutral
+   pill buttons, and the orange accent kept for details. These rules are
+   unlayered, so they win over the components' gradient/glow utilities. */
+
 .app-backdrop {
-  background-color: #050507;
-  background-image:
-    radial-gradient(
-      900px 500px at 15% -10%,
-      rgba(124, 58, 237, 0.1),
-      transparent 60%
-    ),
-    radial-gradient(
-      700px 600px at 100% 10%,
-      rgba(139, 92, 246, 0.06),
-      transparent 55%
-    ),
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size:
-    auto,
-    auto,
-    48px 48px,
-    48px 48px;
+  background: #0c0c0c;
 }
 
-/* Ambient violet glow -- used sparingly, behind hero/header areas only. */
 .ambient-glow {
-  background: radial-gradient(
-    600px 300px at 20% -10%,
-    rgba(124, 58, 237, 0.12),
-    transparent 55%
-  );
+  background: none;
 }
 
+/* Cards, panels, modals, toasts. */
 .glass-surface {
-  background: rgba(18, 17, 23, 0.7);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: #1a1a1a;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Filled controls (primary buttons, active tab/pill, avatars, highlight
+   card): a neutral pill instead of the brand gradient -- white on dark,
+   black on white. */
+.accent-fill {
+  background: #f5f5f5;
+  color: #141414;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+button.accent-fill:hover:not(:disabled) {
+  background: #dcdcdc;
+}
+
+.accent-glow,
+.glow-soft,
+.glow-accent {
+  box-shadow: none;
+}
+
+:root[data-theme="light"] body,
+:root[data-theme="light"] .app-backdrop {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .glass-surface {
+  background: #f4f4f4;
+}
+
+:root[data-theme="light"] .accent-fill {
+  background: #141414;
+  color: #ffffff;
+}
+
+:root[data-theme="light"] button.accent-fill:hover:not(:disabled) {
+  background: #2b2b2b;
 }
 
 .scrollbar-hidden {
@@ -53,20 +70,6 @@ body {
 
 .scrollbar-hidden::-webkit-scrollbar {
   display: none;
-}
-
-/* Soft ambient violet glow -- diffused, never sharp/neon. Apply to
-   important interactive or highlighted elements only. */
-.glow-soft {
-  box-shadow:
-    0 0 20px rgba(139, 92, 246, 0.15),
-    0 0 40px rgba(139, 92, 246, 0.08);
-}
-
-.glow-accent {
-  box-shadow:
-    0 0 15px rgba(139, 92, 246, 0.3),
-    0 0 35px rgba(139, 92, 246, 0.12);
 }
 
 @keyframes shimmer {

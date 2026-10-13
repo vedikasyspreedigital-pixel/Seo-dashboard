@@ -2,7 +2,9 @@ import { useActiveClient } from '../../context/ClientContext';
 import { useSession } from '../../context/SessionContext';
 import { Select } from '../ui/Select';
 import { NotificationBell } from './NotificationBell';
-import { UserIcon } from '../ui/icons';
+import { IconButton } from '../ui/IconButton';
+import { MoonIcon, SunIcon, UserIcon } from '../ui/icons';
+import { useTheme } from '../../hooks/useTheme';
 
 /** Global top bar, present on every page inside AppShell -- houses the
  * client switcher that used to live in the old text-label sidebar (every
@@ -16,6 +18,7 @@ import { UserIcon } from '../ui/icons';
 export function Header() {
   const { clients, activeClient, setActiveClientId } = useActiveClient();
   const { user, workspaces, activeWorkspace, setActiveWorkspaceId, logout } = useSession();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <header className="flex items-center justify-between gap-4 border-b border-[var(--color-border)] px-8 py-4">
@@ -42,9 +45,12 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
+        <IconButton title={theme === 'light' ? 'Switch to dark theme' : 'Switch to white theme'} onClick={toggleTheme}>
+          {theme === 'light' ? <MoonIcon className="h-4.5 w-4.5" /> : <SunIcon className="h-4.5 w-4.5" />}
+        </IconButton>
         <NotificationBell />
-        <div className="ml-1 flex items-center gap-2.5 rounded-full border border-white/[0.06] bg-white/[0.02] py-1.5 pl-1.5 pr-3.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-white">
+        <div className="ml-1 flex items-center gap-2.5 rounded-full border border-overlay/[0.06] bg-overlay/[0.02] py-1.5 pl-1.5 pr-3.5">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white">
             <UserIcon className="h-3.5 w-3.5" />
           </span>
           <span className="leading-tight">

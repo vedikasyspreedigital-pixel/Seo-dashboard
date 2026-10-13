@@ -23,7 +23,7 @@ export function ClientDetailsCard({ client, totalRunsForClient }: { client: Clie
   return (
     <Card className="p-6">
       <div className="flex items-center gap-3">
-        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-white">
+        <span className="flex h-11 w-11 items-center justify-center rounded-full accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white">
           <UserIcon className="h-5 w-5" />
         </span>
         <span>
@@ -31,7 +31,7 @@ export function ClientDetailsCard({ client, totalRunsForClient }: { client: Clie
             <span className="text-sm font-semibold text-[var(--color-ink)]">{client.name}</span>
             <StatusBadge
               label={client.isActive ? 'Active' : 'Inactive'}
-              toneClassName={client.isActive ? 'bg-brand-400/15 text-brand-300' : 'bg-white/[0.05] text-[var(--color-ink-faint)]'}
+              toneClassName={client.isActive ? 'bg-brand-400/15 text-brand-300' : 'bg-overlay/[0.05] text-[var(--color-ink-faint)]'}
               dot={false}
               size="sm"
             />
@@ -41,21 +41,21 @@ export function ClientDetailsCard({ client, totalRunsForClient }: { client: Clie
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-3">
-        <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5">
+        <div className="rounded-xl border border-overlay/[0.05] bg-overlay/[0.02] px-3.5 py-2.5">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Client ID</p>
           <p className="mt-1 truncate font-mono text-[13px] text-[var(--color-ink)]" title={client.id}>
             {client.id.slice(0, 8)}
           </p>
         </div>
-        <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5">
+        <div className="rounded-xl border border-overlay/[0.05] bg-overlay/[0.02] px-3.5 py-2.5">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Client Since</p>
           <p className="mt-1 text-[13px] text-[var(--color-ink)]">{clientSince}</p>
         </div>
-        <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5">
+        <div className="rounded-xl border border-overlay/[0.05] bg-overlay/[0.02] px-3.5 py-2.5">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Total Runs</p>
           <p className="mt-1 text-[13px] text-[var(--color-ink)]">{totalRunsForClient ?? '—'}</p>
         </div>
-        <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5">
+        <div className="rounded-xl border border-overlay/[0.05] bg-overlay/[0.02] px-3.5 py-2.5">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-faint)]">Status</p>
           <p className="mt-1 text-[13px] text-[var(--color-ink)]">{client.isActive ? 'Active' : 'Inactive'}</p>
         </div>

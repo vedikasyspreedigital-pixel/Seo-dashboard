@@ -63,14 +63,14 @@ export function MovementsChart({ data }: { data: OverviewData['dailyMovements'] 
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="mt-4 h-full min-h-0 w-full flex-1" preserveAspectRatio="none">
           <defs>
             <linearGradient id="movementsFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(139,92,246,0.22)" />
-              <stop offset="100%" stopColor="rgba(139,92,246,0)" />
+              <stop offset="0%" stopColor="var(--color-brand-400)" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="var(--color-brand-400)" stopOpacity="0" />
             </linearGradient>
           </defs>
 
           {Array.from({ length: gridLines }).map((_, i) => {
             const y = PAD_TOP + ((HEIGHT - PAD_TOP - PAD_BOTTOM) / (gridLines - 1)) * i;
-            return <line key={i} x1={PAD_LEFT} x2={WIDTH - PAD_RIGHT} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />;
+            return <line key={i} x1={PAD_LEFT} x2={WIDTH - PAD_RIGHT} y1={y} y2={y} stroke="var(--color-border)" strokeWidth="1" />;
           })}
 
           {data.length > 1 && (

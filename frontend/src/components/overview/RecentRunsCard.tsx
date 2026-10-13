@@ -20,13 +20,13 @@ function iconFor(status: string) {
   if (status === "CANCELLED")
     return {
       Icon: XCircleIcon,
-      tone: "text-[var(--color-ink-faint)] bg-white/[0.04]",
+      tone: "text-[var(--color-ink-faint)] bg-overlay/[0.04]",
     };
   if (status === "PROCESSING")
     return { Icon: LoaderIcon, tone: "text-brand-300 bg-brand-400/10" };
   return {
     Icon: ClockIcon,
-    tone: "text-[var(--color-ink-muted)] bg-white/[0.04]",
+    tone: "text-[var(--color-ink-muted)] bg-overlay/[0.04]",
   };
 }
 
@@ -73,7 +73,7 @@ export function RecentRunsCard({ runs }: { runs: OverviewRecentRun[] }) {
             <Link
               key={run.id}
               to={`/runs/${run.id}`}
-              className="flex items-center gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-white/[0.03]"
+              className="flex items-center gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-overlay/[0.03]"
             >
               <span
                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${tone}`}
