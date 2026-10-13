@@ -13,10 +13,9 @@ import { compareReports, compareReportsPdf, type ReportComparison } from '../api
 
 const ACCEPTED = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-  'application/pdf': ['.pdf'],
 };
 
-/** One upload box: drop or browse a single report file from your folder. */
+/** One upload box: drop or browse a single rankings Excel from your folder. */
 function UploadBox({ label, file, onFile, disabled }: { label: string; file: File | null; onFile: (f: File) => void; disabled: boolean }) {
   const onDrop = useCallback((accepted: File[]) => accepted[0] && onFile(accepted[0]), [onFile]);
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept: ACCEPTED, maxFiles: 1, disabled });
@@ -41,20 +40,35 @@ function UploadBox({ label, file, onFile, disabled }: { label: string; file: Fil
           {file.name}
         </p>
       ) : (
-        <p className="mt-1 text-xs text-[var(--color-ink-faint)]">Drop a report here or click to browse · .xlsx or .pdf</p>
+        <p className="mt-1 text-xs text-[var(--color-ink-faint)]">Drop a rankings Excel here or click to browse · .xlsx</p>
       )}
     </div>
   );
 }
 
+/** An upload box with the date its rankings were checked underneath (a rankings Excel has no date inside). */
+function UploadWithDate(props: { label: string; file: File | null; onFile: (f: File) => void; date: string; onDate: (d: string) => void; disabled: boolean }) {
+  const id = `cmp-date-${props.label.replace(/s+/g, '-').toLowerCase()}`;
+  return (
+    <div className="flex flex-1 flex-col gap-3">
+      <UploadBox label={props.label} file={props.file} onFile={props.onFile} disabled={props.disabled} />
+      <FormField label="Date these rankings were checked" htmlFor={id}>
+        <TextInput id={id} type="date" value={props.date} disabled={props.disabled} onChange={(e) => props.onDate(e.target.value)} />
+      </FormField>
+    </div>
+  );
+}
+
 /**
- * "Compare Reports": pick two finished report files from your folder, compare
- * them, and download the comparison PDF. Nothing is saved -- no client, run,
+ * "Compare Reports": pick two rankings Excels from your folder, give each the
+ * date it was checked, compare them, and download the comparison PDF. Nothing is saved -- no client, run,
  * baseline or report in the app is read or changed, and no email is sent.
  */
 export function CompareReportsPage() {
   const [file1, setFile1] = useState<File | null>(null);
   const [file2, setFile2] = useState<File | null>(null);
+  const [date1, setDate1] = useState('');
+  const [date2, setDate2] = useState('');
   const [comparing, setComparing] = useState(false);
   const [comparison, setComparison] = useState<ReportComparison | null>(null);
   const [clientName, setClientName] = useState('');
@@ -80,11 +94,11 @@ export function CompareReportsPage() {
   }
 
   async function handleCompare() {
-    if (!file1 || !file2 || comparing) return;
+    if (!ready || comparing) return;
     setComparing(true);
     setError(null);
     try {
-      const result = await compareReports(file1, file2);
+      const result = await compareReports(file1!, date1, file2!, date2);
       setComparison(result);
       setClientName(result.clientName);
       setClientDomain(result.clientDomain ?? '');
@@ -101,8 +115,13 @@ export function CompareReportsPage() {
     setPdf(null);
     setFile1(null);
     setFile2(null);
+    setDate1('');
+    setDate2('');
     setError(null);
   }
+
+  const sameDate = !!date1 && date1 === date2;
+  const ready = !!file1 && !!file2 && !!date1 && !!date2 && !sameDate;
 
   // ---- Step 2: the generated PDF, with Download top-right ----
   if (comparison) {
@@ -129,8 +148,8 @@ export function CompareReportsPage() {
             <span className="font-semibold text-[var(--color-ink)]">{comparison.older.dateLabel}</span>
             <span className="text-[var(--color-ink-faint)]">
               {' '}
-              · {s.matched} keywords matched{s.onlyInNewer ? ` · ${s.onlyInNewer} only in the newer report` : ''}
-              {s.onlyInOlder ? ` · ${s.onlyInOlder} only in the older report` : ''}
+              · {s.matched} keywords matched{s.onlyInNewer ? ` · ${s.onlyInNewer} only in ${comparison.newer.dateLabel}` : ''}
+              {s.onlyInOlder ? ` · ${s.onlyInOlder} only in ${comparison.older.dateLabel}` : ''}
             </span>
           </p>
           <p className="mt-1 text-sm">
@@ -140,6 +159,13 @@ export function CompareReportsPage() {
             <span className="text-[var(--color-ink-faint)]"> · </span>
             <span className="text-[var(--color-ink-muted)]">{s.unchanged} unchanged</span>
           </p>
+          {comparison.warnings.length > 0 && (
+            <ul className="mt-3 space-y-1 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              {comparison.warnings.map((w) => (
+                <li key={w}>⚠ {w}</li>
+              ))}
+            </ul>
+          )}
           <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
             <FormField label="Client name (PDF title)" htmlFor="cmp-client">
               <TextInput id="cmp-client" value={clientName} onChange={(e) => setClientName(e.target.value)} />
@@ -175,17 +201,18 @@ export function CompareReportsPage() {
     <AppShell>
       <PageTitle
         title="Compare Reports"
-        subtitle="Upload two finished report files from your folder (Excel or PDF). The older and newer report are worked out from their dates. Nothing is saved and no email is sent."
+        subtitle="Upload two rankings Excels from your folder and pick the date each one was checked. The later date is compared against the earlier one. Nothing is saved and no email is sent."
         className="mt-0"
       />
       <Card className="mt-6 p-6">
-        <div className="flex flex-col items-stretch gap-4 md:flex-row md:items-center">
-          <UploadBox label="Upload 1" file={file1} onFile={setFile1} disabled={comparing} />
-          <span className="text-center text-sm font-medium text-[var(--color-ink-faint)]">and</span>
-          <UploadBox label="Upload 2" file={file2} onFile={setFile2} disabled={comparing} />
+        <div className="flex flex-col items-stretch gap-4 md:flex-row md:items-start">
+          <UploadWithDate label="Upload 1" file={file1} onFile={setFile1} date={date1} onDate={setDate1} disabled={comparing} />
+          <span className="text-center text-sm font-medium text-[var(--color-ink-faint)] md:mt-[68px]">and</span>
+          <UploadWithDate label="Upload 2" file={file2} onFile={setFile2} date={date2} onDate={setDate2} disabled={comparing} />
         </div>
+        {sameDate && <p className="mt-3 text-center text-xs text-amber-300">Both dates are the same — pick two different dates.</p>}
         <div className="mt-6 flex justify-center">
-          <Button disabled={!file1 || !file2 || comparing} onClick={() => void handleCompare()}>
+          <Button disabled={!ready || comparing} onClick={() => void handleCompare()}>
             {comparing && <Spinner />}
             {comparing ? 'Comparing…' : 'Compare and next'}
           </Button>

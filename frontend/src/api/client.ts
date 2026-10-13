@@ -452,32 +452,36 @@ export interface ComparedRow {
   keyword: string;
   rankValue: number | null;
   rankDisplay: string | null;
-  section: string | null;
+  /** "Australia|google.com.au" */
+  location: string;
 }
 
-export interface ComparedReport {
+export interface ComparedFile {
   fileName: string;
+  sheetName: string;
   date: string;
   dateLabel: string;
   keywordCount: number;
+  missingRankCount: number;
 }
 
-/** Result of comparing two uploaded report files -- sent back as-is to get the PDF. */
+/** Result of comparing two uploaded rankings Excels -- sent back as-is to get the PDF. */
 export interface ReportComparison {
-  older: ComparedReport;
-  newer: ComparedReport;
+  older: ComparedFile;
+  newer: ComparedFile;
   clientName: string;
   clientDomain: string | null;
-  sections: { name: string; domain: string }[];
-  primarySearchDomain: string | null;
   currentRows: ComparedRow[];
   previousRows: ComparedRow[];
+  warnings: string[];
   summary: { matched: number; onlyInNewer: number; onlyInOlder: number; improved: number; declined: number; unchanged: number };
 }
 
-/** Upload two report files (Excel or PDF); older/newer is worked out from their dates. */
-export async function compareReports(file1: File, file2: File): Promise<ReportComparison> {
+/** Upload two rankings Excels with the date each was checked ("2026-09-30"); the later date is the current one. */
+export async function compareReports(file1: File, date1: string, file2: File, date2: string): Promise<ReportComparison> {
   const formData = new FormData();
+  formData.append('date1', date1);
+  formData.append('date2', date2);
   formData.append('file1', file1);
   formData.append('file2', file2);
   const res = await apiFetch('/compare-reports/preview', { method: 'POST', body: formData });
@@ -496,8 +500,6 @@ export async function compareReportsPdf(comparison: ReportComparison, clientName
       newerDate: comparison.newer.date,
       currentRows: comparison.currentRows,
       previousRows: comparison.previousRows,
-      sections: comparison.sections,
-      primarySearchDomain: comparison.primarySearchDomain,
     }),
   });
   if (!res.ok) {
