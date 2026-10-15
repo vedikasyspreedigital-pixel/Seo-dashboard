@@ -6,6 +6,7 @@ import { createMockEmailSender } from './reporting/mockEmailSender.js';
 import { createClickUpEmailSender, verifyChromiumLaunch } from './reporting/clickupEmailSender.js';
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
 import { recoverStaleProcessingRows } from './worker/recoverStaleRuns.js';
+import { createClickUpCommentPoster, createMockCommentPoster } from './domainIntel/clickupCommentPoster.js';
 
 if (typeof process.loadEnvFile === 'function') {
   try {
@@ -78,6 +79,28 @@ if (useClickUp) {
   console.log('Report delivery: MOCK mode (default). Set CLICKUP_EMAIL_LIVE=true to send through ClickUp for real.');
 }
 
+// Domain Intelligence posts its reports as ClickUp COMMENTS -- a different
+// composer flow from the email sender above, not yet confirmed against real
+// ClickUp, so it has its own gate: MOCK unless CLICKUP_COMMENTS_LIVE=true.
+// Uses the same saved session(s) as the email sender.
+const useClickUpComments = process.env.CLICKUP_COMMENTS_LIVE === 'true';
+const postComment = useClickUpComments
+  ? createClickUpCommentPoster({
+      sessionStatePath: process.env.CLICKUP_SESSION_PATH ?? path.resolve('spikes/clickup-feasibility/session/clickup-storage-state.json'),
+      sessionStatePathByWorkspace,
+    })
+  : createMockCommentPoster();
+console.log(
+  useClickUpComments
+    ? 'Domain Intelligence: LIVE -- reports are posted as comments on each client\'s domain-report ClickUp task.'
+    : 'Domain Intelligence: MOCK posting (default). Set CLICKUP_COMMENTS_LIVE=true to post to ClickUp for real.',
+);
+console.log(
+  process.env.ANTHROPIC_API_KEY
+    ? 'Domain Intelligence: keyword intent uses patterns, then Claude for unclear keywords.'
+    : 'Domain Intelligence: no ANTHROPIC_API_KEY -- keyword intent uses patterns only.',
+);
+
 async function start() {
   // Deploy-time environment check, not part of the send flow -- proves
   // Chromium can actually launch in THIS environment before any real user
@@ -106,7 +129,7 @@ async function start() {
   const app = createApp(callDataForSeo, useLive ? 'live' : 'mock', useLive ? LIVE_ENDPOINT_URL : undefined, {
     sendEmail,
     generateExcelAttachment: generateExcelPdfAttachment,
-  });
+  }, { postComment });
   app.listen(PORT, () => {
     console.log(`API listening on http://localhost:${PORT}`);
   });

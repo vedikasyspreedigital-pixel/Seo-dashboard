@@ -14,6 +14,8 @@ export interface ClientRecord {
   domain?: string | null;
   clickupTaskId?: string | null;
   clickupTaskUrl?: string | null;
+  // Domain Intelligence reports are posted to this task -- separate from the ranking reports' task.
+  domainReportTaskId?: string | null;
   // The client's default email To/Cc, auto-populated into every new
   // report's email draft (still editable per-report afterward). Empty
   // array (not null/undefined) when the client has no config yet.
@@ -33,6 +35,7 @@ export interface CreateClientInput {
   notes?: string;
   recipients?: string[];
   cc?: string[];
+  domainReportTaskId?: string;
 }
 
 export interface UpdateClientInput {
@@ -43,6 +46,7 @@ export interface UpdateClientInput {
   clickupTaskUrl?: string;
   recipients?: string[];
   cc?: string[];
+  domainReportTaskId?: string;
 }
 
 export interface WorkspaceRecord {

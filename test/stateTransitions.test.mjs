@@ -13,6 +13,7 @@ import {
   startRun,
   cancelRun,
   recomputeRunCompletion,
+  rerunFailedRows,
 } from "../backend/statemachine/runTransitions.js";
 import {
   InvalidRowTransitionError,
@@ -90,9 +91,10 @@ test("run transition graph matches the locked state machine", () => {
     true,
   );
   assert.equal(isValidRunTransition("COMPLETED", "PROCESSING"), false);
+  // "Rerun failed" (rerunFailedRows) reopens a run that has failed rows.
   assert.equal(
     isValidRunTransition("COMPLETED_WITH_ERRORS", "PROCESSING"),
-    false,
+    true,
   );
 });
 
@@ -462,6 +464,50 @@ test("cancelRun: UPLOADED or PROCESSING -> CANCELLED, terminal after that", asyn
 
     await assert.rejects(() => cancelRun(run.id), InvalidRunTransitionError);
     await assert.rejects(() => startRun(run.id), InvalidRunTransitionError);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("rerunFailedRows: reopens the run and resets only FAILED rows; COMPLETED rows untouched", async () => {
+  const client = await makeClient("rerun-failed");
+  try {
+    const run = await makeRun(client.id, { status: "COMPLETED_WITH_ERRORS", totalRows: 3, completedAt: new Date() });
+    const ranked = await makeRow(run.id, { sourceRowNumber: 2, status: "COMPLETED", rankValue: 16, rankDisplay: "16", rankingUrl: "https://x.com/" });
+    const notIn100 = await makeRow(run.id, { sourceRowNumber: 3, status: "COMPLETED", rankDisplay: "Not in 100" });
+    const failed = await makeRow(run.id, { sourceRowNumber: 4, status: "FAILED", retryCount: 3, lastErrorMessage: "Internal SE Server Error." });
+
+    const { run: reopened, resetCount } = await rerunFailedRows(run.id);
+    assert.equal(resetCount, 1);
+    assert.equal(reopened.status, "PROCESSING");
+    assert.equal(reopened.completedAt, null);
+
+    const after = await prisma.rankingRow.findUniqueOrThrow({ where: { id: failed.id } });
+    assert.equal(after.status, "PENDING");
+    assert.equal(after.retryCount, 0);
+    assert.equal(after.lastErrorMessage, null);
+    assert.equal((await prisma.rankingRow.findUniqueOrThrow({ where: { id: ranked.id } })).rankDisplay, "16");
+    assert.equal((await prisma.rankingRow.findUniqueOrThrow({ where: { id: notIn100.id } })).rankDisplay, "Not in 100");
+
+    // Already reopened -- a second click is refused, not applied twice.
+    await assert.rejects(rerunFailedRows(run.id), InvalidRunTransitionError);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("rerunFailedRows: refused for a run without failed rows, or not COMPLETED_WITH_ERRORS (nothing changes)", async () => {
+  const client = await makeClient("rerun-failed-refused");
+  try {
+    const clean = await makeRun(client.id, { status: "COMPLETED", completedAt: new Date() });
+    await makeRow(clean.id, { status: "COMPLETED", rankDisplay: "5", rankValue: 5 });
+    await assert.rejects(rerunFailedRows(clean.id), InvalidRunTransitionError);
+
+    // Inconsistent run (marked with errors, but no FAILED row): the reopen is rolled back.
+    const noFailed = await makeRun(client.id, { status: "COMPLETED_WITH_ERRORS", completedAt: new Date() });
+    await makeRow(noFailed.id, { status: "COMPLETED", rankDisplay: "Not in 100" });
+    await assert.rejects(rerunFailedRows(noFailed.id), InvalidRunTransitionError);
+    assert.equal((await prisma.rankingRun.findUniqueOrThrow({ where: { id: noFailed.id } })).status, "COMPLETED_WITH_ERRORS");
   } finally {
     await cleanupClient(client.id);
   }

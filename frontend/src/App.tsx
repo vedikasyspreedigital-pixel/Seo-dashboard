@@ -8,6 +8,8 @@ import { RunDetailPage } from './pages/RunDetailPage';
 import { ReportsListPage } from './pages/ReportsListPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { CompareReportsPage } from './pages/CompareReportsPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { DomainIntelligencePage } from './pages/DomainIntelligencePage';
 import { AnalyticsPreviewPage } from './pages/report-wizard/AnalyticsPreviewPage';
 import { ReportPreviewWizardPage } from './pages/report-wizard/ReportPreviewWizardPage';
 import { EmailDraftPage } from './pages/report-wizard/EmailDraftPage';
@@ -36,6 +38,8 @@ export default function App() {
         <Route path="/reports" element={<ReportsListPage />} />
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/compare" element={<CompareReportsPage />} />
+        <Route path="/domain-intelligence" element={<DomainIntelligencePage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="/reports/:reportId/analytics" element={<AnalyticsPreviewPage />} />
         <Route path="/reports/:reportId/preview" element={<ReportPreviewWizardPage />} />
         <Route path="/reports/:reportId/email" element={<EmailDraftPage />} />

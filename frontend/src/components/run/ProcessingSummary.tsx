@@ -22,7 +22,7 @@ export function ProcessingSummary({ progress }: { progress: RunProgress }) {
     <div>
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
-          <span className="h-2 w-2 accent-glow rounded-full bg-brand-400 shadow-[0_0_8px_rgba(0,169,195,0.6)]" />
+          <span className="h-2 w-2 accent-glow rounded-full bg-brand-400 shadow-[0_0_8px_rgba(139,92,246,0.6)]" />
           <span className="font-semibold text-brand-300">Processing</span>
           <span className="font-mono text-sm text-[var(--color-ink-faint)]">
             {numerator}/{progress.total} rows

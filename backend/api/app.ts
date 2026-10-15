@@ -7,6 +7,8 @@ import { baselinesRouter } from "./routes/baselines.js";
 import { compareReportsRouter } from "./routes/compareReports.js";
 import { createRunsRouter } from "./routes/runs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
+import { createDomainIntelRouter, type DomainIntelRouterDeps } from "./routes/domainIntel.js";
+import { createMockCommentPoster } from "../domainIntel/clickupCommentPoster.js";
 import { createMockEmailSender } from "../reporting/mockEmailSender.js";
 import type { CallDataForSeoFn } from "../worker/processRun.js";
 
@@ -32,6 +34,7 @@ export function createApp(
   reportingDeps: ReportsRouterDeps = {
     sendEmail: createMockEmailSender(),
   },
+  domainIntelDeps: DomainIntelRouterDeps = { postComment: createMockCommentPoster() },
 ) {
   const app = express();
   app.use(express.json());
@@ -63,6 +66,7 @@ export function createApp(
   app.use("/api/compare-reports", compareReportsRouter);
   app.use("/api/runs", createRunsRouter(callDataForSeo));
   app.use("/api/reports", createReportsRouter(reportingDeps));
+  app.use("/api/domain-intel", createDomainIntelRouter(domainIntelDeps));
 
   // Reports the actual mode/endpoint this running process was constructed
   // with -- not a config file's intent, but what this process's

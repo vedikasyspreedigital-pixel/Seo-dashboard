@@ -5,7 +5,8 @@ export const RUN_TRANSITIONS = {
   UPLOADED: ['PROCESSING', 'CANCELLED'],
   PROCESSING: ['COMPLETED', 'COMPLETED_WITH_ERRORS', 'CANCELLED'],
   COMPLETED: [],
-  COMPLETED_WITH_ERRORS: [],
+  // Only via rerunFailedRows: re-checks just the FAILED keywords, in place.
+  COMPLETED_WITH_ERRORS: ['PROCESSING'],
   CANCELLED: [],
 };
 
@@ -21,6 +22,33 @@ export async function startRun(runId) {
   });
   if (count === 0) throw new InvalidRunTransitionError(runId, 'start (UPLOADED -> PROCESSING)');
   return prisma.rankingRun.findUniqueOrThrow({ where: { id: runId } });
+}
+
+/**
+ * COMPLETED_WITH_ERRORS -> PROCESSING, re-checking ONLY the run's FAILED
+ * rows in place ("Rerun failed" on the Run Detail page). Those rows go back
+ * to PENDING with a fresh retry budget and their failed result cleared;
+ * COMPLETED rows (ranks and "Not in 100") are untouched and never sent to
+ * DataForSEO again. Attempt history is kept -- recordAttemptAndApply numbers
+ * new attempts after the old ones. One transaction, and the run update is
+ * conditional on its status, so a double click can't reopen it twice.
+ * Resolves to { run, resetCount }.
+ */
+export async function rerunFailedRows(runId) {
+  return prisma.$transaction(async (tx) => {
+    const { count } = await tx.rankingRun.updateMany({
+      where: { id: runId, status: 'COMPLETED_WITH_ERRORS' },
+      data: { status: 'PROCESSING', completedAt: null },
+    });
+    if (count === 0) throw new InvalidRunTransitionError(runId, 'rerun failed rows (COMPLETED_WITH_ERRORS -> PROCESSING)');
+    const { count: resetCount } = await tx.rankingRow.updateMany({
+      where: { runId, status: 'FAILED' },
+      data: { status: 'PENDING', retryCount: 0, lastErrorMessage: null, rankValue: null, rankDisplay: null, rankingUrl: null },
+    });
+    if (resetCount === 0) throw new InvalidRunTransitionError(runId, 'rerun failed rows (no FAILED rows)');
+    const run = await tx.rankingRun.findUniqueOrThrow({ where: { id: runId } });
+    return { run, resetCount };
+  });
 }
 
 /** UPLOADED | PROCESSING -> CANCELLED. */

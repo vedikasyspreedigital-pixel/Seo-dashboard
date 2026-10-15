@@ -790,7 +790,7 @@ async function performClientWorkflowActions(_page: Page, _params: SendEmailParam
  * getByText("Comment") that could match unrelated "Comment" text anywhere
  * on the page.
  */
-async function getComposerBarRoot(page: Page, timeoutMs = 8000): Promise<Locator | null> {
+export async function getComposerBarRoot(page: Page, timeoutMs = 8000): Promise<Locator | null> {
   const marker = "data-clickup-agent-composer-bar-root";
   const send = page.locator('[data-test="comment-bar__send-btn"]').first();
   if (!(await send.waitFor({ state: "attached", timeout: timeoutMs }).then(() => true).catch(() => false))) return null;
@@ -835,7 +835,7 @@ async function getComposerRoot(page: Page, timeoutMs = 8000): Promise<Locator | 
   return page.locator(`[${marker}]`).first();
 }
 
-async function firstMatch(page: Page, candidates: Array<() => Locator>): Promise<Locator | null> {
+export async function firstMatch(page: Page, candidates: Array<() => Locator>): Promise<Locator | null> {
   for (const candidate of candidates) {
     const locator = candidate();
     if (await locator.count().catch(() => 0)) return locator;
@@ -885,7 +885,7 @@ async function fillFirstMatch(page: Page, candidates: Array<() => Locator>, valu
  * reliably times out waiting for the chooser event) -- so 2+ files are
  * attached one at a time, reopening this same dropdown for each.
  */
-async function attachFile(page: Page, filePaths: string | string[]): Promise<boolean> {
+export async function attachFile(page: Page, filePaths: string | string[]): Promise<boolean> {
   const paths = Array.isArray(filePaths) ? filePaths : [filePaths];
   const attachToggle = page.locator('[data-test="comment-bar__attachment-dropdown-toggle"]');
   if (!(await attachToggle.count().catch(() => 0))) return false;

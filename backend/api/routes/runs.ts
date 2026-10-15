@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { prisma } from '../../db/client.js';
 import { ingestExcelRun } from '../../runs/ingestExcelRun.js';
 import { parseRankingExcel, COLUMN_HEADERS } from '../../excel/parser.js';
-import { startRun, cancelRun } from '../../statemachine/runTransitions.js';
+import { startRun, cancelRun, rerunFailedRows } from '../../statemachine/runTransitions.js';
 import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { processVerifiedExcelUpload, describeRegenerationBlock, describeReportGeneration } from '../../reporting/processVerifiedExcelUpload.js';
@@ -137,6 +137,33 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       res.json(run);
     } catch (err) {
       res.status(409).json({ error: (err as Error).message });
+    }
+  });
+
+  // "Rerun failed": re-checks only this run's FAILED keywords, in place
+  // (rerunFailedRows), then processes them exactly like /start. The
+  // downloaded Excel is built from the rows on demand, so it picks up the
+  // new results automatically. Refused once a report exists for the run --
+  // its comparison and PDF were built from the current ranks.
+  router.post('/:id/rerun-failed', expensiveActionRateLimit, async (req, res) => {
+    const runId = req.params.id as string;
+    if (!(await findOwnedRunOrRespond(req, res, runId, { requireActive: true }))) return;
+    if (await prisma.rankingReport.findFirst({ where: { runId }, select: { id: true } })) {
+      res.status(409).json({ error: 'This run already has a report. Rerun failed keywords before uploading the verified Excel.' });
+      return;
+    }
+    try {
+      const { run, resetCount } = await rerunFailedRows(runId);
+      processRun(run.id, callDataForSeo).catch((err) => {
+        console.error(`processRun failed for run ${run.id} (rerun failed):`, err);
+      });
+      res.json({ ...run, resetCount });
+    } catch (err) {
+      if (err instanceof InvalidRunTransitionError) {
+        res.status(409).json({ error: 'Only a finished run with failed keywords can be rerun.' });
+        return;
+      }
+      throw err;
     }
   });
 

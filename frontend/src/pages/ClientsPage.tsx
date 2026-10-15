@@ -29,9 +29,10 @@ interface ClientFormState {
   notes: string;
   recipients: string;
   cc: string;
+  domainReportTaskId: string;
 }
 
-const EMPTY_FORM: ClientFormState = { name: '', domain: '', clickupTaskId: '', clickupTaskUrl: '', notes: '', recipients: '', cc: '' };
+const EMPTY_FORM: ClientFormState = { name: '', domain: '', clickupTaskId: '', clickupTaskUrl: '', notes: '', recipients: '', cc: '', domainReportTaskId: '' };
 
 function clientStatusBadge(client: ClientRecord) {
   if (client.archivedAt) return <StatusBadge label="Archived" toneClassName="bg-[var(--color-surface-3)] text-[var(--color-ink-faint)]" />;
@@ -108,6 +109,7 @@ export function ClientsPage() {
       domain: client.domain ?? '',
       clickupTaskId: client.clickupTaskId ?? '',
       clickupTaskUrl: client.clickupTaskUrl ?? '',
+      domainReportTaskId: client.domainReportTaskId ?? '',
       notes: client.notes ?? '',
       recipients: (client.recipients ?? []).join(', '),
       cc: (client.cc ?? []).join(', '),
@@ -136,6 +138,7 @@ export function ClientsPage() {
           domain: form.domain.trim() || undefined,
           clickupTaskId: form.clickupTaskId.trim() || undefined,
           clickupTaskUrl: form.clickupTaskUrl.trim() || undefined,
+          domainReportTaskId: form.domainReportTaskId.trim() || undefined,
           notes: form.notes.trim() || undefined,
           recipients: parsedRecipients,
           cc: parsedCc,
@@ -146,6 +149,7 @@ export function ClientsPage() {
           domain: form.domain.trim(),
           clickupTaskId: form.clickupTaskId.trim(),
           clickupTaskUrl: form.clickupTaskUrl.trim(),
+          domainReportTaskId: form.domainReportTaskId.trim(),
           notes: form.notes.trim(),
           recipients: parsedRecipients,
           cc: parsedCc,
@@ -329,6 +333,9 @@ export function ClientsPage() {
           </FormField>
           <FormField label="ClickUp Task URL (fallback)">
             <TextInput value={form.clickupTaskUrl} onChange={(e) => setForm((f) => ({ ...f, clickupTaskUrl: e.target.value }))} placeholder="https://app.clickup.com/t/xxxxxxx" />
+          </FormField>
+          <FormField label="Domain report ClickUp Task ID">
+            <TextInput value={form.domainReportTaskId} onChange={(e) => setForm((f) => ({ ...f, domainReportTaskId: e.target.value }))} placeholder="Task that receives Domain Intelligence reports" />
           </FormField>
           <FormField label="Internal notes" error={formError}>
             <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={3} />

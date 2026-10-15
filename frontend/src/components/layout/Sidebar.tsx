@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import type { ComponentType, SVGProps } from 'react';
-import { BarChartIcon, CompareIcon, DocumentIcon, GridIcon, LayoutIcon, UserIcon } from '../ui/icons';
+import { BarChartIcon, CompareIcon, DocumentIcon, GlobeIcon, GridIcon, LayoutIcon, SettingsIcon, UserIcon } from '../ui/icons';
 
 function SidebarIcon({
   to,
@@ -36,7 +36,7 @@ function SidebarIcon({
       className={({ isActive }) =>
         `${base} ${
           isActive
-            ? 'border-transparent accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(0,169,195,0.3),0_0_35px_rgba(0,169,195,0.12)]'
+            ? 'border-transparent accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]'
             : 'border-overlay/[0.06] bg-overlay/[0.02] text-[var(--color-ink-muted)] hover:border-overlay/[0.1] hover:bg-overlay/[0.05] hover:text-[var(--color-ink)]'
         }`
       }
@@ -49,7 +49,7 @@ function SidebarIcon({
 export function Sidebar() {
   return (
     <aside className="flex h-screen w-[84px] shrink-0 flex-col items-center gap-1.5 border-r border-[var(--color-border)] py-6">
-      <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-full accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(0,169,195,0.3),0_0_35px_rgba(0,169,195,0.12)]">
+      <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-full accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]">
         <BarChartIcon className="h-5 w-5" />
       </div>
 
@@ -58,10 +58,12 @@ export function Sidebar() {
         <SidebarIcon to="/runs" icon={GridIcon} label="Runs" />
         <SidebarIcon to="/reports" icon={DocumentIcon} label="Reports" />
         <SidebarIcon to="/compare" icon={CompareIcon} label="Compare Reports" />
+        <SidebarIcon to="/domain-intelligence" icon={GlobeIcon} label="Domain Intelligence" />
       </nav>
 
       <div className="mt-auto flex flex-col items-center gap-2">
         <SidebarIcon to="/clients" icon={UserIcon} label="Client Management" />
+        <SidebarIcon to="/settings" icon={SettingsIcon} label="Settings" />
       </div>
     </aside>
   );

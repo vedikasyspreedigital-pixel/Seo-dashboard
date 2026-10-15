@@ -19,7 +19,7 @@ import { useRunProgress } from '../hooks/useRunProgress';
 import { useToast } from '../context/ToastContext';
 import { isRunReportable } from '../components/run/runStatus';
 import { resolveRunCompletionNotification } from '../components/run/runCompletionNotification';
-import { cancelRun, getExportUrl, getRun, getRunRows, startRun } from '../api/client';
+import { cancelRun, getExportUrl, getRun, getRunRows, rerunFailedRows, startRun } from '../api/client';
 import type { RankingRun, RunRow, RunStatus } from '../api/types';
 
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS', 'CANCELLED']);
@@ -47,6 +47,8 @@ export function RunDetailPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [confirmingRerun, setConfirmingRerun] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
   // Tracks the last-seen runStatus for THIS runId, purely to detect the edge
   // into a terminal state for the completion toast -- reset alongside the
   // other per-runId state below so switching runs never fires a stale toast.
@@ -61,6 +63,7 @@ export function RunDetailPage() {
     setRun(null);
     setRows([]);
     setActionError(null);
+    setConfirmingRerun(false);
     previousStatusRef.current = null;
   }, [runId]);
 
@@ -131,6 +134,24 @@ export function RunDetailPage() {
     }
   }
 
+  // Re-checks only the FAILED keywords, in this same run; the poll loop
+  // stopped at the terminal status, so it's restarted here to follow the rerun.
+  async function handleRerunFailed() {
+    if (!runId) return;
+    setRerunning(true);
+    setActionError(null);
+    try {
+      const updated = await rerunFailedRows(runId);
+      setRun((prev) => (prev ? { ...prev, ...updated } : updated));
+      setConfirmingRerun(false);
+      refreshProgress();
+    } catch (err) {
+      setActionError((err as Error).message);
+    } finally {
+      setRerunning(false);
+    }
+  }
+
   // Manual fallback, not the fix -- the real fix is deriving all status-gated
   // UI from `status` (above) instead of the stale one-time `run` fetch. This
   // just re-fires both fetches immediately for anyone who wants to force a
@@ -191,6 +212,11 @@ export function RunDetailPage() {
             // here since cancelRun only ever accepts UPLOADED/PROCESSING.
             isReportable && (
               <div className="flex items-center gap-3">
+                {status === 'COMPLETED_WITH_ERRORS' && totals.failed > 0 && (
+                  <Button variant="secondary" disabled={rerunning} onClick={() => setConfirmingRerun(true)}>
+                    Rerun failed ({totals.failed})
+                  </Button>
+                )}
                 <a href={getExportUrl(runId)}>
                   <Button variant="secondary">Download Excel</Button>
                 </a>
@@ -222,6 +248,21 @@ export function RunDetailPage() {
           <Button disabled={starting || cancelling} onClick={handleStart}>
             {starting && <Spinner />}
             Confirm Start Run
+          </Button>
+        </div>
+      )}
+
+      {confirmingRerun && status === 'COMPLETED_WITH_ERRORS' && totals.failed > 0 && (
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-3 text-sm">
+          <span className="font-medium text-amber-300">
+            Re-check {totals.failed} failed keyword{totals.failed === 1 ? '' : 's'} &mdash; up to {totals.failed * 3} DataForSEO requests. Finished keywords are kept. Confirm?
+          </span>
+          <Button variant="ghost" disabled={rerunning} onClick={() => setConfirmingRerun(false)}>
+            Cancel
+          </Button>
+          <Button disabled={rerunning} onClick={handleRerunFailed}>
+            {rerunning && <Spinner />}
+            Confirm Rerun
           </Button>
         </div>
       )}

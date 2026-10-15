@@ -9,7 +9,7 @@ export function FilterPills<T extends string>({ options, value, onChange }: { op
           onClick={() => onChange(option)}
           className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
             value === option
-              ? 'accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(0,169,195,0.3),0_0_35px_rgba(0,169,195,0.12)]'
+              ? 'accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]'
               : 'text-[var(--color-ink-muted)] hover:bg-overlay/[0.04]'
           }`}
         >

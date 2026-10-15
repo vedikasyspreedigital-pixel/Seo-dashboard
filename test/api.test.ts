@@ -432,6 +432,57 @@ test("POST /api/runs/validate: missing required column returns 400 with a clear 
   }
 });
 
+test("POST /api/runs/:id/rerun-failed re-checks ONLY the failed keywords, in the same run", async () => {
+  const requested: string[] = [];
+  const countingMock: CallDataForSeoFn = async (payload) => {
+    requested.push((payload as { keyword: string }).keyword);
+    return mockCallDataForSeo(payload);
+  };
+  const app = createApp(countingMock, 'mock');
+  const client = await prisma.client.create({
+    data: { name: `API Test ${randomUUID()}`, workspaceId: sharedAuth.workspace.id },
+  });
+
+  try {
+    const uploadRes = await authedApp(app)
+      .post("/api/runs")
+      .field("clientId", client.id)
+      .attach("file", await buildTestWorkbookBuffer(), "test.xlsx");
+    const runId = uploadRes.body.run.id;
+
+    // A finished run: one keyword confirmed "Not in 100", one FAILED.
+    await prisma.rankingRun.update({ where: { id: runId }, data: { status: "COMPLETED_WITH_ERRORS", startedAt: new Date(), completedAt: new Date() } });
+    await prisma.rankingRow.updateMany({ where: { runId, keyword: "cash for cars perth" }, data: { status: "COMPLETED", rankDisplay: "Not in 100" } });
+    await prisma.rankingRow.updateMany({ where: { runId, keyword: "sell my car perth" }, data: { status: "FAILED", retryCount: 3, lastErrorMessage: "Internal SE Server Error." } });
+
+    const rerun = await authedApp(app).post(`/api/runs/${runId}/rerun-failed`);
+    assert.equal(rerun.status, 200);
+    assert.equal(rerun.body.resetCount, 1);
+    assert.equal(rerun.body.status, "PROCESSING");
+
+    let progress;
+    for (let i = 0; i < 50; i++) {
+      progress = (await authedApp(app).get(`/api/runs/${runId}/progress`)).body;
+      if (progress.runStatus !== "PROCESSING") break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(progress.runStatus, "COMPLETED");
+    assert.deepEqual(requested, ["sell my car perth"], "only the failed keyword was sent to DataForSEO");
+
+    const rows = (await authedApp(app).get(`/api/runs/${runId}/rows`)).body as { keyword: string; status: string; rankDisplay: string | null }[];
+    assert.deepEqual(
+      rows.map((r) => [r.keyword, r.status, r.rankDisplay]),
+      [["cash for cars perth", "COMPLETED", "Not in 100"], ["sell my car perth", "COMPLETED", "5"]],
+    );
+    assert.equal((await prisma.rankingRun.count({ where: { clientId: client.id } })), 1, "same run, no new run created");
+
+    // Nothing failed any more -- a second rerun is refused.
+    assert.equal((await authedApp(app).post(`/api/runs/${runId}/rerun-failed`)).status, 409);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test.after(async () => {
   await sharedAuth.cleanup();
   await prisma.$disconnect();

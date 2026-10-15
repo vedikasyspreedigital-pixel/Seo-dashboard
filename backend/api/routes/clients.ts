@@ -31,6 +31,9 @@ const DEFAULT_REPORT_CONFIG = {
   templateId: 'standard-v1',
 };
 
+/** Trimmed string, or null for empty/non-string. */
+const optionalText = (value: unknown) => (typeof value === 'string' && value.trim().length > 0 ? value.trim() : null);
+
 function flattenClient<
   T extends {
     id: string;
@@ -103,7 +106,7 @@ clientsRouter.get('/', async (req, res) => {
 });
 
 clientsRouter.post('/', async (req, res) => {
-  const { workspaceId, name, domain, clickupTaskId, clickupTaskUrl, notes, recipients, cc } = req.body ?? {};
+  const { workspaceId, name, domain, clickupTaskId, clickupTaskUrl, notes, recipients, cc, domainReportTaskId } = req.body ?? {};
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
     res.status(400).json({ error: 'workspaceId is required' });
     return;
@@ -145,6 +148,7 @@ clientsRouter.post('/', async (req, res) => {
       workspaceId,
       notes: typeof notes === 'string' && notes.trim().length > 0 ? notes.trim() : null,
       domain: typeof domain === 'string' && domain.trim().length > 0 ? domain.trim() : null,
+      domainReportTaskId: optionalText(domainReportTaskId),
       ...(hasClickup || hasEmailFields
         ? {
             reportConfigs: {
@@ -168,7 +172,7 @@ clientsRouter.patch('/:id', async (req, res) => {
   const client = await findOwnedClientOrRespond(req, res, req.params.id as string);
   if (!client) return;
 
-  const { name, notes, domain, clickupTaskId, clickupTaskUrl, recipients, cc } = req.body ?? {};
+  const { name, notes, domain, clickupTaskId, clickupTaskUrl, recipients, cc, domainReportTaskId } = req.body ?? {};
   if (name !== undefined && (typeof name !== 'string' || name.trim().length === 0)) {
     res.status(400).json({ error: 'name must be a non-empty string' });
     return;
@@ -198,6 +202,7 @@ clientsRouter.patch('/:id', async (req, res) => {
       ...(name !== undefined ? { name: (name as string).trim() } : {}),
       ...(notes !== undefined ? { notes: typeof notes === 'string' && notes.trim().length > 0 ? notes.trim() : null } : {}),
       ...(domain !== undefined ? { domain: typeof domain === 'string' && domain.trim().length > 0 ? domain.trim() : null } : {}),
+      ...(domainReportTaskId !== undefined ? { domainReportTaskId: optionalText(domainReportTaskId) } : {}),
     },
   });
 

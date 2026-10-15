@@ -5,21 +5,24 @@ body {
   font-weight: 400;
 }
 
-/* Flat, neutral design in both themes (dark default, white via the header
-   toggle): plain page, soft grey cards with no blur/border/shadow, neutral
-   pill buttons, and the orange accent kept for details. These rules are
-   unlayered, so they win over the components' gradient/glow utilities. */
+/* Three themes, picked in Settings (src/hooks/useTheme.ts):
+   - dark (default) / light: flat and neutral -- plain page, soft grey cards
+     with no blur/border/shadow, neutral pill buttons, orange accent kept for
+     details. These rules are unlayered, so they win over the components'
+     gradient/glow utilities.
+   - violet: the original dark-enterprise look -- those gradient/glow
+     utilities show through, on a violet-tinted backdrop with a grid. */
 
-.app-backdrop {
+:root:not([data-theme="violet"]) .app-backdrop {
   background: #0c0c0c;
 }
 
-.ambient-glow {
+:root:not([data-theme="violet"]) .ambient-glow {
   background: none;
 }
 
 /* Cards, panels, modals, toasts. */
-.glass-surface {
+:root:not([data-theme="violet"]) .glass-surface {
   background: #1a1a1a;
   border-color: transparent;
   box-shadow: none;
@@ -28,20 +31,20 @@ body {
 /* Filled controls (primary buttons, active tab/pill, avatars, highlight
    card): a neutral pill instead of the brand gradient -- white on dark,
    black on white. */
-.accent-fill {
+:root:not([data-theme="violet"]) .accent-fill {
   background: #f5f5f5;
   color: #141414;
   border-color: transparent;
   box-shadow: none;
 }
 
-button.accent-fill:hover:not(:disabled) {
+:root:not([data-theme="violet"]) button.accent-fill:hover:not(:disabled) {
   background: #dcdcdc;
 }
 
-.accent-glow,
-.glow-soft,
-.glow-accent {
+:root:not([data-theme="violet"]) .accent-glow,
+:root:not([data-theme="violet"]) .glow-soft,
+:root:not([data-theme="violet"]) .glow-accent {
   box-shadow: none;
 }
 
@@ -61,6 +64,51 @@ button.accent-fill:hover:not(:disabled) {
 
 :root[data-theme="light"] button.accent-fill:hover:not(:disabled) {
   background: #2b2b2b;
+}
+
+/* ---- Violet theme ---- */
+
+:root[data-theme="violet"] body {
+  background-color: #050507;
+}
+
+/* Near-black base with extremely subtle layered violet radial gradients for
+   depth, plus a barely-visible grid texture. */
+:root[data-theme="violet"] .app-backdrop {
+  background-color: #050507;
+  background-image:
+    radial-gradient(900px 500px at 15% -10%, rgba(124, 58, 237, 0.1), transparent 60%),
+    radial-gradient(700px 600px at 100% 10%, rgba(139, 92, 246, 0.06), transparent 55%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    auto,
+    48px 48px,
+    48px 48px;
+}
+
+/* Ambient violet glow behind the header/hero area. */
+:root[data-theme="violet"] .ambient-glow {
+  background: radial-gradient(600px 300px at 20% -10%, rgba(124, 58, 237, 0.12), transparent 55%);
+}
+
+:root[data-theme="violet"] .glass-surface {
+  background: rgba(18, 17, 23, 0.7);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+:root[data-theme="violet"] .glow-soft {
+  box-shadow:
+    0 0 20px rgba(139, 92, 246, 0.15),
+    0 0 40px rgba(139, 92, 246, 0.08);
+}
+
+:root[data-theme="violet"] .glow-accent {
+  box-shadow:
+    0 0 15px rgba(139, 92, 246, 0.3),
+    0 0 35px rgba(139, 92, 246, 0.12);
 }
 
 .scrollbar-hidden {

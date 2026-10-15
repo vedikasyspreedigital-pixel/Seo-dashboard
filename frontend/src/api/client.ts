@@ -146,6 +146,12 @@ export async function startRun(runId: string): Promise<RankingRun> {
   return handle<RankingRun>(res);
 }
 
+/** Re-checks only the run's failed keywords, in the same run. Finished keywords are kept and not re-requested. */
+export async function rerunFailedRows(runId: string): Promise<RankingRun & { resetCount: number }> {
+  const res = await apiFetch(`/runs/${runId}/rerun-failed`, { method: 'POST' });
+  return handle<RankingRun & { resetCount: number }>(res);
+}
+
 export async function cancelRun(runId: string): Promise<RankingRun> {
   const res = await apiFetch(`/runs/${runId}/cancel`, { method: 'POST' });
   return handle<RankingRun>(res);
@@ -509,4 +515,68 @@ export async function compareReportsPdf(comparison: ReportComparison, clientName
   const safeName = clientName.replace(/[\\/:*?"<>|]/g, '').trim() || 'Client';
   const fileName = `${safeName} - Keyword Ranking Report - ${comparison.older.dateLabel} - ${comparison.newer.dateLabel}.pdf`;
   return { blob: await res.blob(), fileName };
+}
+
+// -- Domain Intelligence ----------------------------------------------------
+
+export type DomainSource = 'semrush' | 'ubersuggest' | 'ahrefs';
+export type DomainReportMode = 'combined' | 'individual' | 'both';
+export type DomainReportStatus = 'GENERATING' | 'GENERATED' | 'POSTING' | 'POSTED' | 'POST_FAILED' | 'NOT_POSTED';
+
+export interface DomainReport {
+  id: string;
+  clientId: string;
+  websiteUrl: string;
+  location: string | null;
+  sources: DomainSource[];
+  reportMode: DomainReportMode;
+  summary: {
+    sources?: Partial<Record<DomainSource, { keywords: number; duplicatesRemoved: number }>>;
+    intents?: Record<'Informational' | 'Navigational' | 'Commercial' | 'Transactional', number>;
+    intentFromSource?: number;
+    intentByPattern?: number;
+    intentByAi?: number;
+    intentUnresolved?: number;
+  };
+  files: { name: string }[];
+  createdBy: string | null;
+  status: DomainReportStatus;
+  clickupTaskId: string | null;
+  error: string | null;
+  postedAt: string | null;
+  createdAt: string;
+}
+
+/** Upload the tool exports; the report is generated right away and posted to ClickUp in the background. */
+export async function createDomainReport(input: {
+  clientId: string;
+  websiteUrl: string;
+  location: string;
+  reportMode: DomainReportMode;
+  files: Partial<Record<DomainSource, File>>;
+}): Promise<DomainReport> {
+  const formData = new FormData();
+  formData.append('clientId', input.clientId);
+  formData.append('websiteUrl', input.websiteUrl);
+  formData.append('location', input.location);
+  formData.append('reportMode', input.reportMode);
+  for (const [source, file] of Object.entries(input.files)) if (file) formData.append(source, file);
+  const res = await apiFetch('/domain-intel/reports', { method: 'POST', body: formData });
+  return handle<DomainReport>(res);
+}
+
+export async function getDomainReports(clientId: string): Promise<DomainReport[]> {
+  const res = await apiFetch(`/domain-intel/reports?clientId=${encodeURIComponent(clientId)}`);
+  return handle<DomainReport[]>(res);
+}
+
+export async function retryDomainReportPost(reportId: string): Promise<void> {
+  const res = await apiFetch(`/domain-intel/reports/${reportId}/post`, { method: 'POST' });
+  await handle<{ ok: boolean }>(res);
+}
+
+export async function downloadDomainReportFile(reportId: string, index: number): Promise<Blob> {
+  const res = await apiFetch(`/domain-intel/reports/${reportId}/files/${index}`);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  return res.blob();
 }

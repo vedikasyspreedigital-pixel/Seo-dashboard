@@ -189,6 +189,10 @@ model Client {
   // isn't generally possible anyway: Client -> RankingRun/ClientReportConfig/
   // RankingReport are all ON DELETE RESTRICT in the DB.
   archivedAt DateTime? @map("archived_at")
+  // Domain Intelligence: the bare ClickUp task id its domain keyword reports
+  // are posted to as a comment -- deliberately separate from the ranking
+  // reports' task (ClientReportConfig.clickupTaskId).
+  domainReportTaskId String? @map("domain_report_task_id")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -196,6 +200,7 @@ model Client {
   reportConfigs ClientReportConfig[]
   reports       RankingReport[]
   baselines     RankingBaseline[]
+  domainReports DomainReport[]
 
   @@index([workspaceId, isActive])
   @@map("clients")
@@ -477,4 +482,31 @@ model RankingReport {
   @@index([clientId, status])
   @@index([runId])
   @@map("ranking_reports")
+}
+
+// Domain Intelligence: one generated set of domain keyword Excel reports
+// (Semrush / Ubersuggest / Ahrefs) for a client, and its ClickUp delivery.
+// Files live under REPORTS_DIR/domain-intel/<id>/ -- `files` lists them.
+model DomainReport {
+  id           String    @id @default(uuid())
+  clientId     String    @map("client_id")
+  client       Client    @relation(fields: [clientId], references: [id])
+  websiteUrl   String    @map("website_url")
+  // Country whose Google results the tools report on, e.g. "au" (Semrush database code).
+  location     String?
+  sources      Json // ["semrush","ubersuggest","ahrefs"] -- the ones that had data
+  reportMode   String    @map("report_mode") // "combined" | "individual" | "both"
+  // Per source: { keywords, skippedRows }, plus intent label counts and how many were labelled by AI.
+  summary      Json
+  files        Json // [{ name, path }] in the order they were posted
+  createdBy    String?   @map("created_by")
+  // GENERATED -> POSTING -> POSTED | POST_FAILED; NOT_POSTED when the client has no domain task id.
+  status       String
+  clickupTaskId String?  @map("clickup_task_id")
+  error        String?
+  postedAt     DateTime? @map("posted_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([clientId, createdAt])
+  @@map("domain_reports")
 }
