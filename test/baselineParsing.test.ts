@@ -67,3 +67,11 @@ test("pickNewestDateColumn: ignores non-date columns (e.g. a 'Keyword' header) w
 test("pickNewestDateColumn: returns null when nothing parses as a date", () => {
   assert.equal(pickNewestDateColumn([{ label: "Keyword" }, { label: "Status" }]), null);
 });
+
+// Advanced SEO reports (2026-10-15) write two-digit years: "05th Oct 26", "15th Sept 26".
+test("parseDateLabel: two-digit years are 20xx", () => {
+  assert.equal(parseDateLabel("05th Oct 26")?.toISOString(), "2026-10-05T00:00:00.000Z");
+  assert.equal(parseDateLabel("15th Sept 26")?.toISOString(), "2026-09-15T00:00:00.000Z");
+  assert.equal(parseDateLabel("01st Oct 2026")?.toISOString(), "2026-10-01T00:00:00.000Z");
+  assert.equal(parseDateLabel("31st Feb 26"), null);
+});

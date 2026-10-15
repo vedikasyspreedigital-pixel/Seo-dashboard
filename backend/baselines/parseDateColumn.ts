@@ -23,9 +23,12 @@ export function parseDateLabel(raw: string): Date | null {
   const cleaned = raw.trim().replace(/(\d+)(st|nd|rd|th)\b/gi, "$1");
   if (cleaned === "") return null;
 
-  const dayMonthYear = cleaned.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
+  // A two-digit year ("05th Oct 26", "15th Sept 26" -- the Advanced SEO
+  // reports, 2026-10-15) is 20xx.
+  const dayMonthYear = cleaned.match(/^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{4}|\d{2})$/);
   if (dayMonthYear) {
-    const [, day, monthName, year] = dayMonthYear;
+    const [, day, monthName, yearText] = dayMonthYear;
+    const year = yearText.length === 2 ? 2000 + Number(yearText) : Number(yearText);
     const monthIndex = MONTHS.findIndex((m) => m.startsWith(monthName.toLowerCase()) && monthName.length >= 3);
     if (monthIndex >= 0) {
       const date = new Date(Date.UTC(Number(year), monthIndex, Number(day)));

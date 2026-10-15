@@ -83,11 +83,18 @@ export async function parseBaselineExcel(fileBuffer: Buffer): Promise<BaselinePr
   let headerRowNumber: number | null = null;
   let keywordColumn: number | null = null;
 
-  // Strategy 1: an explicit "Keyword"/"Keywords" label.
+  // Strategy 1: an explicit "Keyword"/"Keywords" label -- in a row that also
+  // has a date header. A lone "Keywords" line above the real header (Oracle
+  // Immigration, 2026-10-15: "Keywords" on row 2, the dates on row 3 next to
+  // "Current Ranking Status:") is skipped, so strategy 2 finds the date row.
   for (let rowNumber = 1; rowNumber <= Math.min(HEADER_SEARCH_ROWS, worksheet.rowCount); rowNumber++) {
     const row = worksheet.getRow(rowNumber);
     const col = row.values ? (row.values as unknown[]).findIndex((_, i) => i > 0 && KEYWORD_HEADER_LABELS.has(cellText(row.getCell(i)).toLowerCase())) : -1;
-    if (col > 0) {
+    let rowHasDate = false;
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      if (colNumber > col && parseDateLabel(cellText(cell))) rowHasDate = true;
+    });
+    if (col > 0 && rowHasDate) {
       headerRowNumber = rowNumber;
       keywordColumn = col;
       break;

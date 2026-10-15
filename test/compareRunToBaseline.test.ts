@@ -236,6 +236,49 @@ test("full-match: every current keyword has a matching baseline row -- previousT
   }
 });
 
+// Two keyword sets under one client (Eleevate Overseas, 2026-10-15: a
+// "regular" and a "local keywords" run): each run must compare with its own
+// set's previous report, not just the client's newest one.
+test("selectPreviousBaseline: picks the newest baseline with the SAME keyword set; falls back to the newest otherwise", async () => {
+  const { selectPreviousBaseline } = await import("../backend/baselines/selectPreviousBaseline.js");
+  const client = await makeClient();
+  const kw = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix} keyword ${i + 1}`);
+  const regular = kw("regular", 10);
+  const local = [...regular.slice(0, 4), ...kw("local", 6)]; // 4 of 10 shared = 40%
+  const baselineOn = (date: string, keywords: string[]) =>
+    prisma.rankingBaseline.create({
+      data: {
+        clientId: client.id, sourceFilename: `${date}.xlsx`, sourceType: "EXCEL", baselineDate: new Date(`${date}T00:00:00Z`),
+        rows: { create: keywords.map((k) => ({ keyword: k, normalizedKeyword: normalizeKeyword(k), rankValue: 5, rankDisplay: "5" })) },
+      },
+    });
+  const runWith = async (keywords: string[]) => {
+    const run = await prisma.rankingRun.create({ data: { clientId: client.id, sourceFilename: "r.xlsx", sourceFilePath: "local-test/r.xlsx", totalRows: keywords.length, status: "COMPLETED", completedAt: new Date("2026-10-14T08:00:00Z"), createdAt: new Date("2026-10-14T07:00:00Z") } });
+    for (const k of keywords) await makeRow(run.id, k, 3, "3");
+    return run;
+  };
+  try {
+    const regularOct5 = await baselineOn("2026-10-05", regular);
+    const localOct7 = await baselineOn("2026-10-07", local); // newest overall
+    await baselineOn("2026-09-15", regular);
+
+    const regularRun = await runWith(regular);
+    assert.equal((await selectPreviousBaseline(regularRun))?.id, regularOct5.id, "regular run skips the newer LOCAL report");
+    const localRun = await runWith(local);
+    assert.equal((await selectPreviousBaseline(localRun))?.id, localOct7.id, "local run gets its own 7 Oct report");
+
+    // A brand-new keyword set matches nothing -- same as before: the newest.
+    const otherRun = await runWith(kw("brand new", 10));
+    assert.equal((await selectPreviousBaseline(otherRun))?.id, localOct7.id);
+
+    // Ordinary churn (8 of 10 kept, 2 reworded) still counts as the same set.
+    const churnRun = await runWith([...regular.slice(0, 8), "reworded one", "reworded two"]);
+    assert.equal((await selectPreviousBaseline(churnRun))?.id, regularOct5.id);
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
 test.after(async () => {
   await prisma.$disconnect();
 });

@@ -161,3 +161,24 @@ test("isSearchEngineDomainCell: Google domains in a rank cell are section marker
   for (const cell of ["google.com.sa", "Google.ae", "google.com", "www.google.co.in", "https://google.cg/"]) assert.equal(isSearchEngineDomainCell(cell), true, cell);
   for (const cell of ["1", "19", "Not in 100", "Not In 100", "", null, "googled", "flow meter google ads"]) assert.equal(isSearchEngineDomainCell(cell), false, String(cell));
 });
+
+// Oracle Immigration's report (2026-10-15): a lone "Keywords" cell on row 2,
+// then the real header on row 3 labelled "Current Ranking Status:" next to
+// two-digit-year dates. The lone label must not be taken as the header.
+test("parseBaselineExcel: skips a 'Keywords' label with no dates beside it and reads the date row below", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Table 1");
+  sheet.addRow(["Client Keyword Ranking Report oracleimmigration.com.au"]);
+  sheet.addRow(["Keywords"]);
+  sheet.addRow(["Current Ranking Status:", "05th Oct 26", "15th Sep 26"]);
+  sheet.addRow(["best immigration consultant wollert", "1", "1"]);
+  sheet.addRow(["best immigration agent bundoora", "3", "7"]);
+  sheet.addRow(["visa 186 australia", "Not in 100", "Not in 100"]);
+  const preview = await parseBaselineExcel(Buffer.from(await workbook.xlsx.writeBuffer()));
+  assert.equal(preview.baselineDate.slice(0, 10), "2026-10-05");
+  assert.deepEqual(preview.rows.map((r) => [r.keyword, r.rankDisplay]), [
+    ["best immigration consultant wollert", "1"],
+    ["best immigration agent bundoora", "3"],
+    ["visa 186 australia", "Not in 100"],
+  ]);
+});
