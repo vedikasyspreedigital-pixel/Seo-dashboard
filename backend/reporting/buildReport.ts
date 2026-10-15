@@ -87,7 +87,7 @@ export async function loadRowSourceOrder(runId: string): Promise<Record<string, 
   return order;
 }
 
-/** Workspaces whose report tables put lost keywords first, then Excel order (2026-10-15). */
+/** Workspaces whose report tables put lost keywords first (by last rank), then never-ranked in Excel order (2026-10-15). */
 const EXCEL_ORDER_WORKSPACES = new Set(["advanced-seo"]);
 
 export async function buildReport(reportId: string): Promise<BuildReportResult> {

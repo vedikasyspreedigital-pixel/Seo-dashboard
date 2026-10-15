@@ -358,14 +358,16 @@ test("PDF HTML: the orange header is printed once (row group), never repeated on
 });
 
 // Advanced SEO (2026-10-15, AKT): under the ranked keywords, the ones that
-// WERE ranked last time ("Lost") come first, then the never-ranked ones --
-// each in the run's Excel order. Without sourceOrder (SEO): alphabetical.
-test("buildRowsAndSummary: with sourceOrder, lost keywords lead the Not-in-100 tail, both groups in Excel order", () => {
+// WERE ranked last time ("Lost") come first, by last rank ascending (12, 33,
+// 55 -- the Excel order read 33, 12, 55), then the never-ranked ones in the
+// run's Excel order. Without sourceOrder (SEO): alphabetical.
+test("buildRowsAndSummary: with sourceOrder, lost keywords lead the Not-in-100 tail by last rank, then never-ranked in Excel order", () => {
   const a = analytics({
     improved: [{ keyword: "nri divorce lawyer mumbai", rowUid: "nri divorce lawyer mumbai", previousRank: 19, currentRank: 17, delta: 2 }],
     declined: [
-      { keyword: "family lawyer in mumbai", rowUid: "family lawyer in mumbai", previousRank: 56, currentRank: null, delta: null },
-      { keyword: "zebra lost keyword", rowUid: "zebra lost keyword", previousRank: 80, currentRank: null, delta: null },
+      { keyword: "zebra lost keyword", rowUid: "zebra lost keyword", previousRank: 33, currentRank: null, delta: null },
+      { keyword: "family lawyer in mumbai", rowUid: "family lawyer in mumbai", previousRank: 12, currentRank: null, delta: null },
+      { keyword: "mid lost keyword", rowUid: "mid lost keyword", previousRank: 55, currentRank: null, delta: null },
     ],
     unchanged: [
       { keyword: "divorce lawyer in india", rowUid: "divorce lawyer in india", previousRank: null, currentRank: null, delta: null },
@@ -373,13 +375,14 @@ test("buildRowsAndSummary: with sourceOrder, lost keywords lead the Not-in-100 t
       { keyword: "a never ranked keyword", rowUid: "a never ranked keyword", previousRank: null, currentRank: null, delta: null },
     ],
   });
-  // Excel order: zebra (2), family (3), divorce lawyer in india (4), contested (5), "a never..." (6).
-  const sourceOrder = { "nri divorce lawyer mumbai": 1, "zebra lost keyword": 2, "family lawyer in mumbai": 3, "divorce lawyer in india": 4, "contested divorce lawyer": 5, "a never ranked keyword": 6 };
+  // Excel order: zebra (was 33), family (was 12), mid (was 55), then the never-ranked: divorce, contested, "a never...".
+  const sourceOrder = { "nri divorce lawyer mumbai": 1, "zebra lost keyword": 2, "family lawyer in mumbai": 3, "mid lost keyword": 4, "divorce lawyer in india": 5, "contested divorce lawyer": 6, "a never ranked keyword": 7 };
 
   assert.deepEqual(buildRowsAndSummary(a, sourceOrder).rows.map((r) => r.keyword), [
     "nri divorce lawyer mumbai",
-    "zebra lost keyword",
-    "family lawyer in mumbai",
+    "family lawyer in mumbai", // was 12
+    "zebra lost keyword", // was 33
+    "mid lost keyword", // was 55
     "divorce lawyer in india",
     "contested divorce lawyer",
     "a never ranked keyword",
@@ -391,6 +394,7 @@ test("buildRowsAndSummary: with sourceOrder, lost keywords lead the Not-in-100 t
     "contested divorce lawyer",
     "divorce lawyer in india",
     "family lawyer in mumbai",
+    "mid lost keyword",
     "zebra lost keyword",
   ]);
 });

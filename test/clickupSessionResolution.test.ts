@@ -26,3 +26,34 @@ test("resolveSessionStatePath: an undefined map (no per-workspace config at all)
   const resolved = resolveSessionStatePath("advanced-seo", undefined, "/data/default-session.json");
   assert.equal(resolved, "/data/default-session.json");
 });
+
+// 2026-10-15: 319 debug snapshots (410 MB) filled the 434 MB uploads volume
+// (ENOSPC on every upload/PDF). Only the newest few may stay, and nothing
+// but debug-* files is ever touched.
+test("pruneDebugArtifacts: keeps only the newest debug-* files and never touches other files", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { pruneDebugArtifacts } = await import("../backend/reporting/clickupEmailSender.js");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "debug-prune-"));
+  try {
+    for (let i = 0; i < 20; i++) {
+      const f = path.join(dir, `debug-before-email-click-${String(i).padStart(2, "0")}.html`);
+      await fs.writeFile(f, "x");
+      const t = new Date(Date.UTC(2026, 9, 1, 0, i)); // file 19 is the newest
+      await fs.utimes(f, t, t);
+    }
+    await fs.writeFile(path.join(dir, "clickup-storage-state.json"), "{}");
+    await fs.writeFile(path.join(dir, "AKT Automation Template.xlsx"), "x");
+
+    await pruneDebugArtifacts(dir, 10);
+
+    const left = (await fs.readdir(dir)).sort();
+    assert.deepEqual(left.filter((n) => n.startsWith("debug-")), Array.from({ length: 10 }, (_, i) => `debug-before-email-click-${i + 10}.html`));
+    assert.ok(left.includes("clickup-storage-state.json") && left.includes("AKT Automation Template.xlsx"), "non-debug files untouched");
+
+    await pruneDebugArtifacts(path.join(dir, "does-not-exist")); // never throws
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

@@ -52,7 +52,7 @@
 //      components with two different class names.
 
 import { chromium, type Browser, type Page, type Locator } from "playwright";
-import { writeFile, rm } from "node:fs/promises";
+import { writeFile, rm, readdir, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -699,6 +699,7 @@ function enrichWithCrashContext(err: Error, crashedOnAnyAttempt: boolean): Error
 async function captureDebugArtifacts(page: Page | undefined, sessionStatePath: string): Promise<void> {
   if (!page) return;
   const dir = path.dirname(sessionStatePath);
+  await pruneDebugArtifacts(dir);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const screenshotPath = path.join(dir, `debug-failure-${stamp}.png`);
   const htmlPath = path.join(dir, `debug-failure-${stamp}.html`);
@@ -728,9 +729,17 @@ async function captureDebugArtifacts(page: Page | undefined, sessionStatePath: s
  * crashed", the renderer is already dead and there's nothing left to read.
  * This shows the exact DOM state one step before whatever kills it. Same
  * swallow-your-own-errors rule as captureDebugArtifacts.
+ *
+ * OFF unless CLICKUP_DEBUG_SNAPSHOTS=true (2026-10-15): it ran before EVERY
+ * send, successful ones included -- ~3.4 MB per capture, never cleaned up --
+ * and 319 of these files (410 MB) filled the 434 MB uploads volume, so every
+ * upload and report PDF failed with ENOSPC. Switch it on only while
+ * diagnosing a ClickUp click problem.
  */
 async function captureDebugArtifactsBefore(page: Page, sessionStatePath: string, label: string): Promise<void> {
+  if (process.env.CLICKUP_DEBUG_SNAPSHOTS !== "true") return;
   const dir = path.dirname(sessionStatePath);
+  await pruneDebugArtifacts(dir);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const screenshotPath = path.join(dir, `debug-before-${label}-${stamp}.png`);
   const htmlPath = path.join(dir, `debug-before-${label}-${stamp}.html`);
@@ -746,6 +755,27 @@ async function captureDebugArtifactsBefore(page: Page, sessionStatePath: string,
     .then((html) => writeFile(htmlPath, html, "utf8"))
     .then(() => console.error(`[clickupEmailSender] pre-action debug HTML saved: ${htmlPath}`))
     .catch((e) => console.error(`[clickupEmailSender] pre-action debug HTML failed: ${(e as Error).message}`));
+}
+
+/** How many debug-* files (screenshot + HTML = 2 per capture) are kept on the volume. */
+export const MAX_DEBUG_FILES = 12;
+
+/**
+ * Deletes all but the newest MAX_DEBUG_FILES - 2 "debug-*" files in `dir`,
+ * making room for the capture about to be written, so debug snapshots can
+ * never fill the uploads volume again (they share it with uploaded Excels
+ * and report PDFs). Touches nothing but files named debug-*. Never throws.
+ */
+export async function pruneDebugArtifacts(dir: string, keep = MAX_DEBUG_FILES - 2): Promise<void> {
+  try {
+    const names = (await readdir(dir)).filter((n) => n.startsWith("debug-"));
+    if (names.length <= keep) return;
+    const withTimes = await Promise.all(names.map(async (n) => ({ n, t: (await stat(path.join(dir, n))).mtimeMs })));
+    withTimes.sort((a, b) => b.t - a.t);
+    for (const { n } of withTimes.slice(keep)) await rm(path.join(dir, n), { force: true });
+  } catch (e) {
+    console.error(`[clickupEmailSender] debug snapshot cleanup failed: ${(e as Error).message}`);
+  }
 }
 
 /**

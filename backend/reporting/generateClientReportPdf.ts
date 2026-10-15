@@ -70,6 +70,8 @@ interface TableRow {
   movementLabel: string;
   kind: MovementKind;
   currentRank: number | null;
+  /** Set on "lost" rows -- their last rank, which orders them in the Advanced SEO tail. */
+  previousRank?: number | null;
 }
 
 const RANK_DISPLAY = (rank: number | null): string => (rank === null ? "Not in 100" : String(rank));
@@ -113,16 +115,18 @@ function round1(value: number): number {
 /**
  * The "Not in 100" tail. Default: alphabetical. With sourceOrder (Advanced
  * SEO, 2026-10-15): keywords that WERE ranked last time ("↓ Lost") come
- * first, right under the ranked ones, then the never-ranked ones -- each
- * group in the run's Excel order, like the agency's own reports. The
- * alphabetical list buried a keyword that dropped out from rank 56 (AKT)
- * among keywords that never ranked.
+ * first, right under the ranked ones, by their last rank ascending (12, 33,
+ * 55 -- not Excel order, which read 33, 12, 55), then the never-ranked ones
+ * in the run's Excel order, like the agency's own reports. The alphabetical
+ * list buried a keyword that dropped out from rank 56 (AKT) among keywords
+ * that never ranked.
  */
 function orderNotRanked(rows: TableRow[], sourceOrder: Record<string, number> | undefined): TableRow[] {
   if (!sourceOrder) return [...rows].sort((a, b) => a.keyword.localeCompare(b.keyword));
   const position = (r: TableRow) => sourceOrder[r.rowUid] ?? sourceOrder[normalizeKeyword(r.keyword)] ?? Number.MAX_SAFE_INTEGER;
   const byExcelOrder = (a: TableRow, b: TableRow) => position(a) - position(b) || a.keyword.localeCompare(b.keyword);
-  const lost = rows.filter((r) => r.kind === "lost").sort(byExcelOrder);
+  const lastRank = (r: TableRow) => r.previousRank ?? Number.MAX_SAFE_INTEGER;
+  const lost = rows.filter((r) => r.kind === "lost").sort((a, b) => lastRank(a) - lastRank(b) || byExcelOrder(a, b));
   const rest = rows.filter((r) => r.kind !== "lost").sort(byExcelOrder);
   return [...lost, ...rest];
 }
@@ -150,7 +154,7 @@ export function buildRowsAndSummary(analytics: RunAnalytics, sourceOrder?: Recor
   for (const m of analytics.movements.declined) {
     if (m.currentRank === null) {
       droppedOutOfTop100Count++;
-      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↓ Lost", kind: "lost", currentRank: m.currentRank });
+      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↓ Lost", kind: "lost", currentRank: m.currentRank, previousRank: m.previousRank });
     } else {
       droppedCount++;
       rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: `↓ ${m.delta ?? 0}`, kind: "dropped", currentRank: m.currentRank });
