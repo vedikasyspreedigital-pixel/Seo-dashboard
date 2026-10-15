@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunAnalytics } from "./computeRunAnalytics.js";
+import { normalizeKeyword } from "../baselines/normalizeKeyword.js";
 import { formatOrdinalDate } from "./formatOrdinalDate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +47,14 @@ export interface ClientReportPdfInput {
    * sorted on its own. Omitted or a single location -> one flat table as before.
    */
   locations?: { order: string[]; byRowUid: Record<string, string>; labels: Record<string, { locationName: string; seDomain: string }> };
+  /**
+   * Advanced SEO only (buildReport sets it for that workspace): each
+   * keyword's position in the run's Excel, keyed by rowUid and by normalized
+   * keyword. When set, the "Not in 100" tail puts lost keywords first, each
+   * group in Excel order (see orderNotRanked). Omitted -> alphabetical, as
+   * before (SEO workspace, Compare Reports).
+   */
+  sourceOrder?: Record<string, number>;
   currentRunDate: Date;
   previousRunDate: Date | null;
   analytics: RunAnalytics;
@@ -101,8 +110,25 @@ function round1(value: number): number {
  * table's per-row "↓ Lost" label already distinguished these, this just also
  * sums them separately for the summary.
  */
-export function buildRowsAndSummary(analytics: RunAnalytics) {
-  if (!analytics.hasComparison) return buildCurrentOnlyRowsAndSummary(analytics);
+/**
+ * The "Not in 100" tail. Default: alphabetical. With sourceOrder (Advanced
+ * SEO, 2026-10-15): keywords that WERE ranked last time ("↓ Lost") come
+ * first, right under the ranked ones, then the never-ranked ones -- each
+ * group in the run's Excel order, like the agency's own reports. The
+ * alphabetical list buried a keyword that dropped out from rank 56 (AKT)
+ * among keywords that never ranked.
+ */
+function orderNotRanked(rows: TableRow[], sourceOrder: Record<string, number> | undefined): TableRow[] {
+  if (!sourceOrder) return [...rows].sort((a, b) => a.keyword.localeCompare(b.keyword));
+  const position = (r: TableRow) => sourceOrder[r.rowUid] ?? sourceOrder[normalizeKeyword(r.keyword)] ?? Number.MAX_SAFE_INTEGER;
+  const byExcelOrder = (a: TableRow, b: TableRow) => position(a) - position(b) || a.keyword.localeCompare(b.keyword);
+  const lost = rows.filter((r) => r.kind === "lost").sort(byExcelOrder);
+  const rest = rows.filter((r) => r.kind !== "lost").sort(byExcelOrder);
+  return [...lost, ...rest];
+}
+
+export function buildRowsAndSummary(analytics: RunAnalytics, sourceOrder?: Record<string, number>) {
+  if (!analytics.hasComparison) return buildCurrentOnlyRowsAndSummary(analytics, sourceOrder);
 
   const rows: TableRow[] = [];
   let improvedCount = 0;
@@ -141,7 +167,7 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
   }
 
   // Ranked keywords first (rank ascending, 1..100), then a clearly separated
-  // "Not in Top 100" tail (alphabetical) -- never interleaved. Previously
+  // "Not in Top 100" tail (orderNotRanked) -- never interleaved. Previously
   // this was a single alphabetical sort across everything, which mixed
   // "Not in 100" rows in among ranked ones in whatever order their keyword
   // happened to fall. Kept as one flat, already-grouped array (rather than
@@ -149,7 +175,7 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
   // need to know about the split -- buildHtml locates the boundary itself
   // (first row with currentRank === null) to render the section heading.
   const ranked = rows.filter((r) => r.currentRank !== null).sort((a, b) => (a.currentRank as number) - (b.currentRank as number));
-  const notInTop100 = rows.filter((r) => r.currentRank === null).sort((a, b) => a.keyword.localeCompare(b.keyword));
+  const notInTop100 = orderNotRanked(rows.filter((r) => r.currentRank === null), sourceOrder);
 
   return {
     rows: [...ranked, ...notInTop100],
@@ -180,7 +206,7 @@ export function buildRowsAndSummary(analytics: RunAnalytics) {
  * top 100" if reused as-is (there was no previous state to have entered
  * from). Renders a plain current-standing table/summary instead.
  */
-function buildCurrentOnlyRowsAndSummary(analytics: RunAnalytics) {
+function buildCurrentOnlyRowsAndSummary(analytics: RunAnalytics, sourceOrder?: Record<string, number>) {
   const rows: TableRow[] = analytics.movements.newlyTracked.map((m) => ({
     rowUid: m.rowUid,
     keyword: m.keyword,
@@ -192,7 +218,7 @@ function buildCurrentOnlyRowsAndSummary(analytics: RunAnalytics) {
   }));
 
   const ranked = rows.filter((r) => r.currentRank !== null).sort((a, b) => (a.currentRank as number) - (b.currentRank as number));
-  const notInTop100 = rows.filter((r) => r.currentRank === null).sort((a, b) => a.keyword.localeCompare(b.keyword));
+  const notInTop100 = orderNotRanked(rows.filter((r) => r.currentRank === null), sourceOrder);
 
   return {
     rows: [...ranked, ...notInTop100],
@@ -262,7 +288,7 @@ export function buildClientReportHtml(input: ClientReportPdfInput): string {
 }
 
 function buildHtml(input: ClientReportPdfInput): string {
-  const { rows } = buildRowsAndSummary(input.analytics);
+  const { rows } = buildRowsAndSummary(input.analytics, input.sourceOrder);
   const groups = groupRowsByLocation(rows, input.locations);
   const firstGroupLabel = groups[0].key && input.locations ? input.locations.labels[groups[0].key] : null;
   // Grouped report: the top header names only the FIRST location's Google

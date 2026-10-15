@@ -71,10 +71,29 @@ export async function loadRowLocations(runId: string) {
   return { order, byRowUid, labels };
 }
 
+/**
+ * Each keyword's Excel row number, keyed by rowUid and by normalized keyword
+ * (same double keying as loadRowLocations) -- the order of the PDF's
+ * "Not in 100" tail for Advanced SEO reports (see generateClientReportPdf's
+ * orderNotRanked).
+ */
+export async function loadRowSourceOrder(runId: string): Promise<Record<string, number>> {
+  const rows = await prisma.rankingRow.findMany({ where: { runId }, select: { rowUid: true, keyword: true, sourceRowNumber: true } });
+  const order: Record<string, number> = {};
+  for (const row of rows) {
+    order[row.rowUid] = row.sourceRowNumber;
+    order[normalizeKeyword(row.keyword)] ??= row.sourceRowNumber;
+  }
+  return order;
+}
+
+/** Workspaces whose report tables put lost keywords first, then Excel order (2026-10-15). */
+const EXCEL_ORDER_WORKSPACES = new Set(["advanced-seo"]);
+
 export async function buildReport(reportId: string): Promise<BuildReportResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({
     where: { id: reportId },
-    include: { client: true, run: true, previousRun: true, previousBaseline: true },
+    include: { client: { include: { workspace: { select: { slug: true } } } }, run: true, previousRun: true, previousBaseline: true },
   });
 
   if (!BUILDABLE_STATUSES.includes(report.status)) {
@@ -94,11 +113,13 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
     distinct: ["seDomain"],
   });
   const locations = await loadRowLocations(report.runId);
+  const sourceOrder = EXCEL_ORDER_WORKSPACES.has(report.client.workspace?.slug ?? "") ? await loadRowSourceOrder(report.runId) : undefined;
   const pdfBuffer = await generateClientReportPdf({
     clientName: report.client.name,
     clientDomain: report.client.domain,
     searchEngineDomains: domainRows.map((r) => r.seDomain),
     locations,
+    sourceOrder,
     // The date shown under the title (and as the "current" column header in
     // the ranking table) is the day this PDF is actually being built, not
     // when the underlying run finished fetching -- the two can differ by
