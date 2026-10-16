@@ -509,6 +509,13 @@ export function createClickUpEmailSender({
           await writeFile(pdfPath, params.excelPdfBuffer);
           tempAttachmentPaths.push(pdfPath);
         }
+        // Extra PDFs (e.g. Google Analytics reports), each under its own
+        // name -- the upload check below matches files by name.
+        for (const extra of params.extraAttachments ?? []) {
+          const extraPath = path.join(os.tmpdir(), extra.filename);
+          await writeFile(extraPath, extra.buffer);
+          tempAttachmentPaths.push(extraPath);
+        }
         if (tempAttachmentPaths.length > 0) {
           const attached = await attachFile(page, tempAttachmentPaths);
           if (!attached) throw new Error("Could not attach the report/Excel files via the composer's own attachment dropdown.");

@@ -8,6 +8,7 @@ import { notifyReportSent, notifyReportSendFailed } from "../notifications/creat
 import { promoteSentReportToBaseline } from "./processVerifiedExcelUpload.js";
 import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
+import { loadExtraAttachmentFiles } from "./extraAttachments.js";
 
 // Ties the approval decision to the actual send, with recipients resolved
 // entirely from what was already persisted at draft time (ClientReportConfig,
@@ -126,6 +127,10 @@ export async function approveAndSendReport(
       excelPdfBuffer = excelAttachment.buffer;
       excelPdfFilename = excelAttachment.filename;
     }
+    // Extra PDFs (e.g. Google Analytics reports) go out TOGETHER WITH the
+    // report PDF above. A missing one throws -> SEND_FAILED, never a send
+    // without it.
+    const extraAttachments = await loadExtraAttachmentFiles(current.extraAttachments);
 
     const sendResult = await sendEmail({
       to: recipients,
@@ -139,6 +144,8 @@ export async function approveAndSendReport(
       attachmentFilename: current.reportHtml ? `seo-report-${reportId}.html` : undefined,
       excelPdfBuffer,
       excelPdfFilename,
+      // Only present when there are extras -- a send without them is unchanged.
+      ...(extraAttachments.length > 0 ? { extraAttachments } : {}),
     });
     await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
     // Send history -- a corrected report can go out more than once.

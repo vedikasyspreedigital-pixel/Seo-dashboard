@@ -29,6 +29,9 @@ export interface SendEmailParams {
   // by approveAndSendReport from the report's run, not by the caller.
   excelPdfBuffer?: Buffer;
   excelPdfFilename?: string;
+  // Extra PDFs attached ALONGSIDE the report PDF (e.g. Google Analytics
+  // reports uploaded on the email draft page), in upload order.
+  extraAttachments?: { buffer: Buffer; filename: string }[];
 }
 
 export interface SendEmailResult {

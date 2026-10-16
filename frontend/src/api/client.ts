@@ -4,6 +4,7 @@ import type {
   ClientRecord,
   CreateClientInput,
   CreateRunResult,
+  EmailVariant,
   NotificationsResponse,
   OverviewData,
   RankingReport,
@@ -30,7 +31,32 @@ const BASE = `${import.meta.env?.VITE_API_BASE_URL ?? ''}/api`;
  * accidentally be added later without it.
  */
 function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${path}`, { ...init, credentials: 'include' });
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const request = () => fetch(`${BASE}${path}`, { ...init, credentials: 'include' });
+  return method === 'GET' ? withRetry(request) : request();
+}
+
+/** Statuses a restarting/redeploying backend answers with for a few seconds. */
+const RETRYABLE_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAYS_MS = [800, 2000, 4000];
+
+/**
+ * Read-only (GET) requests are retried when the backend is briefly
+ * unreachable -- a Railway deploy/restart, a network blip. Before this, one
+ * failed GET during a deploy made a list page show "No reports yet" as if the
+ * data were gone (2026-10-16). Writes are never retried: repeating one could
+ * apply it twice.
+ */
+export async function withRetry(request: () => Promise<Response>, delaysMs: number[] = RETRY_DELAYS_MS): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await request();
+      if (!RETRYABLE_STATUSES.has(res.status) || attempt >= delaysMs.length) return res;
+    } catch (err) {
+      if (attempt >= delaysMs.length) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+  }
 }
 
 async function handle<T>(res: Response): Promise<T> {
@@ -382,6 +408,40 @@ export async function updateReportDraft(reportId: string, edits: UpdateReportDra
   return handle<RankingReport>(res);
 }
 
+export interface StorageUsage {
+  /** The uploads disk; null if it can't be read (e.g. fresh local setup). */
+  disk: { totalBytes: number; freeBytes: number } | null;
+  usedByApp: Record<'reportPdfs' | 'extraPdfs' | 'domainReports' | 'uploadedExcels' | 'debugSnapshots' | 'other', number>;
+  appTotalBytes: number;
+}
+
+/** Settings > Storage: how full the uploads disk is and what uses it. */
+export async function getStorageUsage(): Promise<StorageUsage> {
+  return handle<StorageUsage>(await apiFetch('/storage'));
+}
+
+/** Extra PDFs (e.g. Google Analytics reports) sent together with the report PDF. Only while the report awaits approval. */
+export async function uploadExtraAttachments(reportId: string, files: File[]): Promise<RankingReport> {
+  const formData = new FormData();
+  for (const file of files) formData.append('files', file);
+  const res = await apiFetch(`/reports/${reportId}/extra-attachments`, { method: 'POST', body: formData });
+  return handle<RankingReport>(res);
+}
+
+export async function removeExtraAttachment(reportId: string, attachmentId: string): Promise<RankingReport> {
+  const res = await apiFetch(`/reports/${reportId}/extra-attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' });
+  return handle<RankingReport>(res);
+}
+
+/** Switches the draft to the Regular or Google Analytics template (replaces the body; subject/recipients kept). */
+export async function setEmailVariant(reportId: string, variant: EmailVariant): Promise<RankingReport> {
+  const res = await apiFetch(`/reports/${reportId}/email-variant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ variant }),
+  });
+  return handle<RankingReport>(res);
+}
 
 export interface ApproveAndSendResult {
   outcome: 'SENT' | 'NO_RECIPIENTS' | 'ALREADY_PROCESSED' | 'SEND_FAILED';

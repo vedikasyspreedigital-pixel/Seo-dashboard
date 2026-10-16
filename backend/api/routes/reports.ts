@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import multer from "multer";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +7,8 @@ import { prisma } from "../../db/client.js";
 import { rejectReport } from "../../reporting/reportTransitions.js";
 import { updateReportDraft, setCustomPdfAttachment } from "../../reporting/editReportDraft.js";
 import { approveAndSendReport } from "../../reporting/approveAndSend.js";
-import { generateEmailDraft, regenerateEmailDraft } from "../../reporting/generateEmailDraft.js";
+import { generateEmailDraft, regenerateEmailDraft, setEmailVariant } from "../../reporting/generateEmailDraft.js";
+import { addExtraAttachments, removeExtraAttachment, ExtraAttachmentError, MAX_EXTRA_ATTACHMENTS, MAX_EXTRA_ATTACHMENT_BYTES } from "../../reporting/extraAttachments.js";
 import { createReportForRun } from "../../reporting/createReport.js";
 import { buildReport } from "../../reporting/buildReport.js";
 import { regenerateReport, describeRegenerationBlock, describeReportGeneration } from "../../reporting/processVerifiedExcelUpload.js";
@@ -33,6 +34,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // the other.
 const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, "../../../reports");
 const uploadCustomPdf = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const uploadExtraPdfs = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_EXTRA_ATTACHMENT_BYTES, files: MAX_EXTRA_ATTACHMENTS } });
 
 export interface ReportsRouterDeps {
   sendEmail: SendEmailFn;
@@ -259,6 +261,84 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     } catch (err) {
       if (err instanceof InvalidReportTransitionError) {
         res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // Extra PDFs sent TOGETHER WITH the report PDF (e.g. Google Analytics
+  // reports) -- upload one or more, or remove one. Only while the report
+  // awaits approval, like every draft edit.
+  const receiveExtraPdfs: express.RequestHandler = (req, res, next) =>
+    uploadExtraPdfs.array("files", MAX_EXTRA_ATTACHMENTS)(req, res, (err: unknown) => {
+      if (err instanceof multer.MulterError) {
+        const message =
+          err.code === "LIMIT_FILE_SIZE"
+            ? "Each PDF must be 15 MB or smaller."
+            : err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE"
+              ? `Upload at most ${MAX_EXTRA_ATTACHMENTS} PDFs at a time.`
+              : err.message;
+        res.status(400).json({ error: message });
+        return;
+      }
+      next(err);
+    });
+
+  router.post("/:id/extra-attachments", receiveExtraPdfs, async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    try {
+      const updated = await addExtraAttachments(reportId, files.map((f) => ({ buffer: f.buffer, originalname: f.originalname })));
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof ExtraAttachmentError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      if (err instanceof InvalidReportTransitionError) {
+        res.status(409).json({ error: "Attachments can only be changed while the report is waiting for approval." });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  router.delete("/:id/extra-attachments/:attachmentId", async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    try {
+      const updated = await removeExtraAttachment(reportId, req.params.attachmentId as string);
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof ExtraAttachmentError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof InvalidReportTransitionError) {
+        res.status(409).json({ error: "Attachments can only be changed while the report is waiting for approval." });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // Regular / Google Analytics email template toggle: replaces the draft
+  // body with the chosen template (subject/recipients untouched).
+  router.post("/:id/email-variant", async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    const variant = req.body?.variant;
+    if (variant !== "regular" && variant !== "ga") {
+      res.status(400).json({ error: 'variant must be "regular" or "ga"' });
+      return;
+    }
+    try {
+      res.json(await setEmailVariant(reportId, variant));
+    } catch (err) {
+      if (err instanceof InvalidReportTransitionError) {
+        res.status(409).json({ error: "The email can only be changed while the report is waiting for approval." });
         return;
       }
       throw err;

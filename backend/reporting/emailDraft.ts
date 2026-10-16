@@ -45,3 +45,42 @@ ${SIGNATURE}`;
     bodyText,
   };
 }
+
+export type EmailVariant = "regular" | "ga";
+export const EMAIL_VARIANTS: EmailVariant[] = ["regular", "ga"];
+
+/**
+ * The Google Analytics version of the template (the agency's own wording,
+ * 2026-10-16): same subject and period as the regular draft, but it also
+ * mentions the attached Google Analytics reports (Traffic Acquisition and
+ * Engagement Overview). The GA numbers are not in the dashboard, so they are
+ * left as [bracketed] placeholders the SEO team replaces before approving.
+ */
+export function buildGaEmailDraft({ clientName, periodStart, periodEnd }: EmailDraftInput): EmailDraftOutput {
+  const start = formatOrdinalDate(periodStart);
+  const end = formatOrdinalDate(periodEnd);
+
+  const bodyText = `Dear Client,
+
+We are pleased to share with you the website ranking report for ${start} - ${end}. This report summarizes the development and performance of the search engine rankings for your website during this period.
+
+We would like to emphasize that various variables might affect search engine results, such as user behavior, competition, algorithm upgrades, and website design. However, we've been working hard to optimize your website and improve its standing in search engine rankings.
+
+We would be glad to receive your feedback on how these efforts have impacted your business. Please find the attached ranking report and Google Analytics reports (Traffic Acquisition and Engagement Overview).
+
+The Google Analytics reports show [organic search users] organic search users and [event count] event counts for [month].
+
+Thank you for your continued trust and partnership.
+
+${SIGNATURE}`;
+
+  return {
+    subject: `${clientName} Keyword Ranking Report ${start} - ${end}`,
+    bodyText,
+  };
+}
+
+/** The draft for a report's chosen template. */
+export function buildEmailDraft(variant: string | null | undefined, input: EmailDraftInput): EmailDraftOutput {
+  return variant === "ga" ? buildGaEmailDraft(input) : buildDefaultEmailDraft(input);
+}

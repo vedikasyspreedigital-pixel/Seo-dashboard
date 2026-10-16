@@ -120,6 +120,81 @@ body {
   display: none;
 }
 
+/* ---- Polish shared by all themes (2026-10-16) ---- */
+
+/* Each page eases in when it opens. */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.page-enter {
+  animation: page-enter 0.28s ease-out both;
+}
+
+/* Table rows respond to the pointer. */
+table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+table tbody tr:hover {
+  background-color: color-mix(in srgb, var(--color-overlay) 4%, transparent);
+}
+
+/* Buttons give a little press feedback; keyboard focus is clearly visible. */
+button:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-brand-400);
+  outline-offset: 2px;
+}
+
+/* Skeleton bars for loading lists. */
+.skeleton-bar {
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-overlay) 7%, transparent);
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-overlay) 9%, transparent), transparent);
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .skeleton-bar::after {
+    animation: none;
+  }
+  button:not(:disabled):active {
+    transform: none;
+  }
+}
+
 @keyframes shimmer {
   0% {
     background-position: -400px 0;

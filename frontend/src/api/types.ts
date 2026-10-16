@@ -210,6 +210,16 @@ export interface AnalystOutput {
   recommendedFocusAreas: string[];
 }
 
+export interface ExtraAttachment {
+  id: string;
+  filename: string;
+  size: number;
+  uploadedAt: string;
+}
+
+/** "regular" = the standard ranking-report email; "ga" = also mentions the attached Google Analytics reports. */
+export type EmailVariant = 'regular' | 'ga';
+
 export interface RankingReport {
   id: string;
   runId: string;
@@ -228,6 +238,10 @@ export interface RankingReport {
   customPdfPath: string | null;
   /** Original uploaded filename -- shown in the UI and used as the attachment's display name when sending, since customPdfPath itself is a generated on-disk name. */
   customPdfFilename: string | null;
+  /** Extra PDFs sent TOGETHER WITH the report PDF (e.g. Google Analytics reports), in upload order. */
+  extraAttachments: ExtraAttachment[];
+  /** Which email template the draft uses. */
+  emailVariant: EmailVariant;
   emailSubject: string | null;
   emailBody: string | null;
   emailBodyHtml: string | null;

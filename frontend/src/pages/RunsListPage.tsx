@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../components/layout/PageHeader';
@@ -7,8 +7,9 @@ import { Button } from '../components/ui/Button';
 import { Spinner } from '../components/ui/Spinner';
 import { EyeIcon, RefreshIcon, TrashIcon } from '../components/ui/icons';
 import { StatusBadge } from '../components/run/StatusBadge';
-import { EmptyState } from '../components/ui/EmptyState';
+import { EmptyState, LoadingRows } from '../components/ui/EmptyState';
 import { useActiveClient } from '../context/ClientContext';
+import { useClientScopedList } from '../hooks/useClientScopedList';
 import { deleteRun, getRuns } from '../api/client';
 import { formatDate, formatDateTime } from '../utils/formatters';
 import type { RankingRun } from '../api/types';
@@ -19,30 +20,9 @@ function shortId(id: string) {
 
 export function RunsListPage() {
   const { activeClient } = useActiveClient();
-  const [runs, setRuns] = useState<RankingRun[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { items: runs, setItems: setRuns, loading, error, reload } = useClientScopedList<RankingRun>(activeClient?.id ?? null, getRuns);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!activeClient) {
-      setRuns([]);
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    getRuns(activeClient.id)
-      .then((data) => {
-        if (!cancelled) setRuns(data);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeClient]);
 
   async function handleDelete(run: RankingRun) {
     if (
@@ -91,8 +71,17 @@ export function RunsListPage() {
 
       <Card className="mt-6 overflow-hidden p-0">
         {actionError && <p className="border-b border-rose-500/20 bg-rose-500/10 px-6 py-3 text-sm text-rose-200">{actionError}</p>}
-        {loading ? (
-          <EmptyState label="Loading..." />
+        {!activeClient ? (
+          <EmptyState label="Select a client in the top bar to see its runs." />
+        ) : error && runs.length === 0 ? (
+          <EmptyState
+            tone="error"
+            label="Couldn't load runs."
+            hint={`${error} -- your runs are safe; this is a loading problem, not lost data.`}
+            action={<Button variant="secondary" onClick={reload}>Retry</Button>}
+          />
+        ) : loading && runs.length === 0 ? (
+          <LoadingRows label="Loading runs" />
         ) : runs.length === 0 ? (
           <EmptyState label="No runs yet for this client." />
         ) : (

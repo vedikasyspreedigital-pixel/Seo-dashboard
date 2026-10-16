@@ -121,14 +121,6 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
           <p className="mt-1.5 text-xs text-[var(--color-ink-faint)]">Optional -- if empty, sending falls back to whatever email provider is configured.</p>
         </div>
 
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Attachment</label>
-          <p className="text-sm text-[var(--color-ink)]">
-            Generated report PDF
-            {report.clientPdfPath && <span className="text-[var(--color-ink-faint)]"> (Report-{report.id.slice(0, 8)}.pdf)</span>}
-          </p>
-        </div>
-
         {editable && (
           <div className="flex items-center gap-3">
             <Button

@@ -441,6 +441,16 @@ model RankingReport {
   attachmentSource   String  @default("generated") @map("attachment_source") // "generated" | "custom"
   customPdfPath      String? @map("custom_pdf_path")
   customPdfFilename  String? @map("custom_pdf_filename") // original uploaded filename -- used as the attachment's display name when sending, since customPdfPath itself is a generated on-disk name
+  // Extra PDFs sent IN ADDITION to the report PDF (e.g. Google Analytics
+  // Traffic Acquisition / Engagement Overview), uploaded on the email draft
+  // page: [{ id, path, filename, size, uploadedAt }] in upload order. Unlike
+  // customPdfPath these never replace anything. A missing file at send time
+  // fails the send (see approveAndSend.ts) rather than sending without it.
+  extraAttachments   Json    @default("[]") @map("extra_attachments")
+  // Which email template the draft uses: "regular" (buildDefaultEmailDraft)
+  // or "ga" (buildGaEmailDraft -- also mentions the attached Google Analytics
+  // reports). Kept across Regenerate.
+  emailVariant       String  @default("regular") @map("email_variant")
   emailSubject       String? @map("email_subject") // buildDefaultEmailDraft's deterministic template output (subject) -- no AI
   emailBody          String? @map("email_body") // buildDefaultEmailDraft's deterministic template output (bodyText) -- no AI
   emailBodyHtml      String? @map("email_body_html") // buildDefaultEmailDraft's deterministic template output (bodyHtml) -- no AI

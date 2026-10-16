@@ -18,6 +18,10 @@ import type { RankingReport } from '../../api/types';
 
 const SEND_PAGE_STATUSES: RankingReport['status'][] = ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SENT'];
 
+// The Google Analytics template's placeholders (backend emailDraft.ts buildGaEmailDraft).
+const GA_PLACEHOLDER = /\[(organic search users|event count|month)\]/i;
+const GA_PLACEHOLDER_ALL = /\[(organic search users|event count|month)\]/gi;
+
 export function SendConfirmationPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const navigate = useNavigate();
@@ -199,7 +203,21 @@ export function SendConfirmationPage() {
             <span className="text-[var(--color-ink-faint)]">Report</span>
             <span className="text-right text-[var(--color-ink)]">Ranking report #{report.id.slice(0, 8)}</span>
           </div>
+          <div className="flex justify-between gap-4">
+            <span className="text-[var(--color-ink-faint)]">Attachments</span>
+            <span className="text-right text-[var(--color-ink)]">
+              {[report.attachmentSource === 'custom' && report.customPdfFilename ? report.customPdfFilename : 'Ranking report PDF', ...(report.extraAttachments ?? []).map((a) => a.filename)].join(', ')}
+            </span>
+          </div>
         </div>
+
+        {GA_PLACEHOLDER.test(report.emailBody ?? '') && (
+          <AlertPanel tone="warning" className="mt-5">
+            <p className="text-sm text-amber-300">
+              The email still has unfilled placeholders: {[...new Set((report.emailBody ?? '').match(GA_PLACEHOLDER_ALL) ?? [])].join(', ')}. Go back to the Email Draft and replace them first.
+            </p>
+          </AlertPanel>
+        )}
 
         <div className="mt-5">
           <p className="eyebrow-label mb-1.5">Body</p>

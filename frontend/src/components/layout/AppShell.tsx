@@ -15,7 +15,7 @@ export function AppShell({
       <div className="ambient-glow flex flex-1 flex-col overflow-hidden">
         <Header />
         <main className="scrollbar-hidden flex-1 overflow-y-auto px-10 py-8">
-          <div className={wide ? "mx-auto max-w-7xl" : "mx-auto max-w-5xl"}>
+          <div className={`page-enter ${wide ? "mx-auto max-w-7xl" : "mx-auto max-w-5xl"}`}>
             {children}
           </div>
         </main>

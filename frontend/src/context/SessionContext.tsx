@@ -8,6 +8,8 @@ interface SessionContextValue {
   workspaces: WorkspaceRecord[];
   /** null only until the initial GET /auth/me resolves -- RequireAuth waits on this before deciding to redirect. */
   loading: boolean;
+  /** True while the server can't be reached to check the session (e.g. a deploy restart) -- NOT the same as logged out. */
+  unreachable: boolean;
   activeWorkspace: WorkspaceRecord | null;
   setActiveWorkspaceId: (id: string) => void;
   login: (email: string, password: string) => Promise<void>;
@@ -31,27 +33,42 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserRecord | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [unreachable, setUnreachable] = useState(false);
   const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    getMe()
-      .then((session) => {
-        if (cancelled) return;
-        if (session) {
-          setUser(session.user);
-          setWorkspaces(session.workspaces);
-          const stored = readStoredWorkspaceId(session.user.id);
-          const resolved = resolveActiveWorkspaceId(stored, session.workspaces);
-          if (stored && stored !== resolved) clearStoredWorkspaceId(session.user.id); // no longer a member -- don't keep it around
-          setActiveWorkspaceIdState(resolved);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    let timer: number | undefined;
+    // Only a real 401 (getMe -> null) means "logged out". A server that can't
+    // be reached (deploy restart, network blip) used to land here too and
+    // sent everyone to the Sign-in page, as if their data were gone
+    // (2026-10-16). Now it keeps checking every few seconds until it answers.
+    const check = () => {
+      getMe()
+        .then((session) => {
+          if (cancelled) return;
+          setUnreachable(false);
+          if (session) {
+            setUser(session.user);
+            setWorkspaces(session.workspaces);
+            const stored = readStoredWorkspaceId(session.user.id);
+            const resolved = resolveActiveWorkspaceId(stored, session.workspaces);
+            if (stored && stored !== resolved) clearStoredWorkspaceId(session.user.id); // no longer a member -- don't keep it around
+            setActiveWorkspaceIdState(resolved);
+          }
+          setLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setUnreachable(true);
+          setLoading(false);
+          timer = window.setTimeout(check, 5000);
+        });
+    };
+    check();
     return () => {
       cancelled = true;
+      if (timer) window.clearTimeout(timer);
     };
   }, []);
 
@@ -80,7 +97,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
 
   return (
-    <SessionContext.Provider value={{ user, workspaces, loading, activeWorkspace, setActiveWorkspaceId, login, logout }}>
+    <SessionContext.Provider value={{ user, workspaces, loading, unreachable, activeWorkspace, setActiveWorkspaceId, login, logout }}>
       {children}
     </SessionContext.Provider>
   );

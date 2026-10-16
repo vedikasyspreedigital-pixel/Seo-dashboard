@@ -7,11 +7,13 @@ import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { EmailDraftEditor } from '../../components/report/EmailDraftEditor';
+import { EmailTemplateToggle } from '../../components/report/EmailTemplateToggle';
+import { ExtraAttachmentsCard } from '../../components/report/ExtraAttachmentsCard';
 import { Badge } from '../../components/ui/Badge';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
-import { canRegenerate, canApproveOrReject } from '../../components/report/reportStatus';
-import { getReport, regenerateEmailDraft, rejectReport, updateReportDraft, type UpdateReportDraftInput } from '../../api/client';
-import type { RankingReport } from '../../api/types';
+import { canRegenerate, canApproveOrReject, isDraftEditable } from '../../components/report/reportStatus';
+import { getReport, regenerateEmailDraft, rejectReport, setEmailVariant, updateReportDraft, type UpdateReportDraftInput } from '../../api/client';
+import type { EmailVariant, RankingReport } from '../../api/types';
 
 export function EmailDraftPage() {
   const { reportId } = useParams<{ reportId: string }>();
@@ -95,6 +97,22 @@ export function EmailDraftPage() {
     }
   }
 
+  async function handleTemplateChange(variant: EmailVariant) {
+    if (!reportId || busy || !report) return;
+    const label = variant === 'ga' ? 'Google Analytics' : 'Regular';
+    if (!window.confirm(`Switch to the ${label} email? The email body will be replaced by the ${label} template -- the subject, recipients and CC stay as they are. Unsaved changes to the body will be lost.`)) return;
+    setBusy(true);
+    setError(null);
+    setJustSaved(false);
+    try {
+      setReport(await setEmailVariant(reportId, variant));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleReject() {
     if (!reportId || busy || !report || !canApproveOrReject(report.status)) return;
     setBusy(true);
@@ -142,6 +160,10 @@ export function EmailDraftPage() {
       )}
 
       <div className="mt-6">
+        <EmailTemplateToggle value={report.emailVariant ?? 'regular'} onChange={(v) => void handleTemplateChange(v)} disabled={busy || !isDraftEditable(report.status)} />
+      </div>
+
+      <div className="mt-4">
         <EmailDraftEditor
           report={report}
           onSave={handleSave}
@@ -149,6 +171,10 @@ export function EmailDraftPage() {
           disabled={busy}
           justSaved={justSaved}
         />
+      </div>
+
+      <div className="mt-4">
+        <ExtraAttachmentsCard report={report} editable={isDraftEditable(report.status) && !busy} onChange={setReport} />
       </div>
 
       {(canRegenerate(report.status) || canApproveOrReject(report.status)) && (

@@ -1,7 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db/client.js";
-import { buildDefaultEmailDraft } from "./emailDraft.js";
-import { markEmailDrafted, submitForApproval, regenerateEmailDraftFromApproval } from "./reportTransitions.js";
+import { buildEmailDraft } from "./emailDraft.js";
+import { ReportStatus } from "@prisma/client";
+import { markEmailDrafted, submitForApproval, regenerateEmailDraftFromApproval, guardedUpdate } from "./reportTransitions.js";
 
 // The email draft service: fills the standard template with the report's
 // real period dates, then -- always successfully, since there's no external
@@ -80,7 +81,8 @@ export async function generateEmailDraft(
 
   const { periodStart, periodEnd } = computeReportPeriod(report);
 
-  const baseDraft = buildDefaultEmailDraft({ clientName: report.client.name, periodStart, periodEnd });
+  // The report's chosen template ("regular" or "ga") -- kept across Regenerate.
+  const baseDraft = buildEmailDraft(report.emailVariant, { clientName: report.client.name, periodStart, periodEnd });
   const draft = options?.subjectSuffix ? { ...baseDraft, subject: baseDraft.subject + options.subjectSuffix } : baseDraft;
 
   // Recipients (and cc, and the ClickUp task to deliver through) come from
@@ -109,6 +111,28 @@ export async function generateEmailDraft(
  * and immediately re-runs generateEmailDraft to produce a fresh one (the same
  * default template -- this is effectively "reset to the default template").
  */
+/**
+ * The Regular / GA toggle on the email draft page: switches the report's
+ * template and replaces the draft BODY with that template, filled with the
+ * same period. Subject, recipients, CC and the ClickUp task are left exactly
+ * as edited. Only while the report awaits approval (same guard as every
+ * draft edit), so a report being sent can't change underneath the send.
+ */
+export async function setEmailVariant(reportId: string, variant: "regular" | "ga") {
+  const report = await prisma.rankingReport.findUniqueOrThrow({
+    where: { id: reportId },
+    include: { client: true, run: true, previousRun: true, previousBaseline: true },
+  });
+  const { periodStart, periodEnd } = computeReportPeriod(report);
+  const draft = buildEmailDraft(variant, { clientName: report.client.name, periodStart, periodEnd });
+  return guardedUpdate(
+    reportId,
+    [ReportStatus.PENDING_APPROVAL],
+    { emailVariant: variant, emailBody: draft.bodyText, emailBodyHtml: draft.bodyHtml ?? null },
+    "switch email template (report must be PENDING_APPROVAL)",
+  );
+}
+
 export async function regenerateEmailDraft(reportId: string): Promise<GenerateEmailDraftResult> {
   await regenerateEmailDraftFromApproval(reportId);
   return generateEmailDraft(reportId);

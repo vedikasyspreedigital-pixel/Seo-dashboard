@@ -8,6 +8,7 @@ import { compareReportsRouter } from "./routes/compareReports.js";
 import { createRunsRouter } from "./routes/runs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
 import { createDomainIntelRouter, type DomainIntelRouterDeps } from "./routes/domainIntel.js";
+import { storageRouter } from "./routes/storage.js";
 import { createMockCommentPoster } from "../domainIntel/clickupCommentPoster.js";
 import { createMockEmailSender } from "../reporting/mockEmailSender.js";
 import type { CallDataForSeoFn } from "../worker/processRun.js";
@@ -67,6 +68,7 @@ export function createApp(
   app.use("/api/runs", createRunsRouter(callDataForSeo));
   app.use("/api/reports", createReportsRouter(reportingDeps));
   app.use("/api/domain-intel", createDomainIntelRouter(domainIntelDeps));
+  app.use("/api/storage", storageRouter);
 
   // Reports the actual mode/endpoint this running process was constructed
   // with -- not a config file's intent, but what this process's

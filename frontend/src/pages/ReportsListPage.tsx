@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
 import { ReportStatusBadge } from '../components/report/ReportStatusBadge';
-import { EmptyState } from '../components/ui/EmptyState';
+import { EmptyState, LoadingRows } from '../components/ui/EmptyState';
 import { useActiveClient } from '../context/ClientContext';
+import { useClientScopedList } from '../hooks/useClientScopedList';
 import { getReports } from '../api/client';
 import { resumeRouteForStatus } from '../components/report/reportFlowRoute';
 import { formatDateTime } from '../utils/formatters';
@@ -13,28 +14,7 @@ import type { RankingReportListItem } from '../api/types';
 
 export function ReportsListPage() {
   const { activeClient } = useActiveClient();
-  const [reports, setReports] = useState<RankingReportListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!activeClient) {
-      setReports([]);
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    getReports(activeClient.id)
-      .then((data) => {
-        if (!cancelled) setReports(data);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeClient]);
+  const { items: reports, loading, error, reload } = useClientScopedList<RankingReportListItem>(activeClient?.id ?? null, getReports);
 
   return (
     <AppShell>
@@ -42,8 +22,17 @@ export function ReportsListPage() {
       <PageTitle title="Client Reports" subtitle={activeClient ? `${activeClient.name} · ${reports.length} report${reports.length === 1 ? '' : 's'}` : undefined} />
 
       <Card className="mt-6 overflow-hidden p-0">
-        {loading ? (
-          <EmptyState label="Loading..." />
+        {!activeClient ? (
+          <EmptyState label="Select a client in the top bar to see its reports." />
+        ) : error && reports.length === 0 ? (
+          <EmptyState
+            tone="error"
+            label="Couldn't load reports."
+            hint={`${error} -- your reports are safe; this is a loading problem, not lost data.`}
+            action={<Button variant="secondary" onClick={reload}>Retry</Button>}
+          />
+        ) : loading && reports.length === 0 ? (
+          <LoadingRows label="Loading reports" />
         ) : reports.length === 0 ? (
           <EmptyState label="No reports yet. Generate one from a completed run's detail page." />
         ) : (

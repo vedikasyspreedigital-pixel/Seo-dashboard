@@ -9,6 +9,7 @@ import { parseRankingExcel, COLUMN_HEADERS } from '../../excel/parser.js';
 import { startRun, cancelRun, rerunFailedRows } from '../../statemachine/runTransitions.js';
 import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
+import { deleteExtraAttachmentFiles } from '../../reporting/extraAttachments.js';
 import { processVerifiedExcelUpload, describeRegenerationBlock, describeReportGeneration } from '../../reporting/processVerifiedExcelUpload.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
 import { requireAuth } from '../../auth/requireAuth.js';
@@ -216,6 +217,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     for (const report of dependentReports) {
       if (report.clientPdfPath) await unlink(report.clientPdfPath).catch(() => undefined);
       if (report.customPdfPath) await unlink(report.customPdfPath).catch(() => undefined);
+      await deleteExtraAttachmentFiles(report.id, report.extraAttachments);
     }
     res.status(204).send();
   });
