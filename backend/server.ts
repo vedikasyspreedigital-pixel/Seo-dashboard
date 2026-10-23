@@ -7,6 +7,13 @@ import { createClickUpEmailSender, verifyChromiumLaunch } from './reporting/clic
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
 import { recoverStaleProcessingRows } from './worker/recoverStaleRuns.js';
 import { createClickUpCommentPoster, createMockCommentPoster } from './domainIntel/clickupCommentPoster.js';
+import { createFlikoverAhrefsFetcher, createMockAhrefsFetcher } from './domainIntel/fetchers/flikoverAhrefs.js';
+import { aiProviderName } from './domainIntel/classifyIntent.js';
+import { createGeminiAuditWriter } from './domainIntel/aiSeoAudit.js';
+import { loadSavedAudits } from './domainIntel/auditJob.js';
+import { createGeminiGapAdvisor } from './domainIntel/gapReport.js';
+import { agentStatus, createAgentFetcher } from './domainIntel/agentQueue.js';
+import { access } from 'node:fs/promises';
 
 if (typeof process.loadEnvFile === 'function') {
   try {
@@ -53,7 +60,7 @@ const useClickUp = process.env.CLICKUP_EMAIL_LIVE === 'true';
 // dedicated ClickUp account/login gets its own entry here (one env var
 // each, named CLICKUP_SESSION_PATH_<SLUG>), produced by running
 // setupSession.mjs a second time against that workspace's own ClickUp
-// login (see RAILWAY_DEPLOY.md). Any workspace NOT listed here -- "seo"
+// login (see the README's Deploy section). Any workspace NOT listed here -- "seo"
 // today -- keeps using the single shared CLICKUP_SESSION_PATH below,
 // completely unchanged. Purely additive: unset by default.
 const sessionStatePathByWorkspace: Record<string, string> = {};
@@ -95,10 +102,53 @@ console.log(
     ? 'Domain Intelligence: LIVE -- reports are posted as comments on each client\'s domain-report ClickUp task.'
     : 'Domain Intelligence: MOCK posting (default). Set CLICKUP_COMMENTS_LIVE=true to post to ClickUp for real.',
 );
+// Domain Intelligence fetching, by DOMAIN_INTEL_FETCH_MODE:
+//  - "agent": the office Chrome extension (extension/) does the export in a
+//    real, signed-in Chrome; needs DOMAIN_INTEL_AGENT_TOKEN (user's choice, 2026-10-21).
+//  - "playwright" (or legacy DOMAIN_INTEL_FETCH_LIVE=true): this server drives
+//    a VISIBLE browser with a saved Flikover login.
+//  - "mock" (default): no tool is contacted.
+const fetchMode =
+  process.env.DOMAIN_INTEL_FETCH_MODE === 'agent' || process.env.DOMAIN_INTEL_FETCH_MODE === 'playwright'
+    ? process.env.DOMAIN_INTEL_FETCH_MODE
+    : process.env.DOMAIN_INTEL_FETCH_LIVE === 'true'
+      ? 'playwright'
+      : 'mock';
+if (fetchMode === 'agent' && !process.env.DOMAIN_INTEL_AGENT_TOKEN) {
+  console.error('Domain Intelligence: DOMAIN_INTEL_FETCH_MODE=agent but DOMAIN_INTEL_AGENT_TOKEN is not set -- the extension cannot connect.');
+}
+const flikoverSessionPath = process.env.FLIKOVER_SESSION_PATH ?? path.resolve('spikes/domain-intel-fetch/session/flikover-storage-state.json');
+// Ahrefs can stay on the server's Playwright robot (Flikover) even in agent mode:
+// DOMAIN_INTEL_AHREFS_VIA=playwright. Semrush/Ubersuggest (seotooladda, behind
+// Cloudflare) only work through the agent's real Chrome.
+const ahrefsVia = fetchMode === 'agent' && process.env.DOMAIN_INTEL_AHREFS_VIA !== 'playwright' ? 'agent' : fetchMode;
+const domainIntelFetchers = {
+  ahrefs:
+    ahrefsVia === 'agent'
+      ? createAgentFetcher('ahrefs')
+      : ahrefsVia === 'playwright'
+        ? createFlikoverAhrefsFetcher({ sessionPath: flikoverSessionPath, debugDir: process.env.DOMAIN_INTEL_DEBUG_DIR })
+        : createMockAhrefsFetcher({ mockFilePath: process.env.DOMAIN_INTEL_MOCK_AHREFS_FILE }),
+  ...(fetchMode === 'agent' ? { semrush: createAgentFetcher('semrush'), ubersuggest: createAgentFetcher('ubersuggest') } : {}),
+};
+const domainIntelFetchInfo = async () => ({
+  live: fetchMode !== 'mock',
+  mode: fetchMode,
+  // "agent": the extension asked for work recently; "playwright": a login file is saved.
+  sessionSaved: fetchMode === 'agent' ? agentStatus().online : await access(flikoverSessionPath).then(() => true, () => false),
+  agent: fetchMode === 'agent' ? agentStatus() : null,
+});
 console.log(
-  process.env.ANTHROPIC_API_KEY
-    ? 'Domain Intelligence: keyword intent uses patterns, then Claude for unclear keywords.'
-    : 'Domain Intelligence: no ANTHROPIC_API_KEY -- keyword intent uses patterns only.',
+  fetchMode === 'agent'
+    ? 'Domain Intelligence: AGENT fetching -- the office Chrome extension exports from the tools.'
+    : fetchMode === 'playwright'
+      ? 'Domain Intelligence: LIVE fetching -- Ahrefs via Flikover with the saved login (Playwright).'
+      : 'Domain Intelligence: MOCK fetching (default). Set DOMAIN_INTEL_FETCH_MODE=agent (or playwright) to fetch for real.',
+);
+console.log(
+  aiProviderName()
+    ? `Domain Intelligence: keyword intent uses patterns, then ${aiProviderName()} for unclear keywords.`
+    : 'Domain Intelligence: no GEMINI_API_KEY / ANTHROPIC_API_KEY -- keyword intent uses patterns and the tools\' labels only.',
 );
 
 async function start() {
@@ -125,11 +175,21 @@ async function start() {
   // accepting requests; the actual resumed DataForSEO calls run in the
   // background and don't block startup.
   await recoverStaleProcessingRows(callDataForSeo);
+  await loadSavedAudits();
 
   const app = createApp(callDataForSeo, useLive ? 'live' : 'mock', useLive ? LIVE_ENDPOINT_URL : undefined, {
     sendEmail,
     generateExcelAttachment: generateExcelPdfAttachment,
-  }, { postComment });
+  }, {
+    postComment,
+    fetchers: domainIntelFetchers,
+    fetchInfo: domainIntelFetchInfo,
+    // Report PDFs only exist through the office Chrome agent.
+    auditFetchers: fetchMode === 'agent' ? { siteaudit: createAgentFetcher('siteaudit'), woorank: createAgentFetcher('woorank') } : {},
+    competitorFetcher: fetchMode === 'agent' ? createAgentFetcher('competitors') : undefined,
+    gapAdvisor: process.env.GEMINI_API_KEY ? createGeminiGapAdvisor(process.env.GEMINI_API_KEY) : null,
+    aiAuditWriter: process.env.GEMINI_API_KEY ? createGeminiAuditWriter(process.env.GEMINI_API_KEY) : null,
+  });
   app.listen(PORT, () => {
     console.log(`API listening on http://localhost:${PORT}`);
   });

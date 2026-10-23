@@ -22,6 +22,10 @@ export interface KeywordRow {
   position: number | null;
   /** The tool's own intent label(s) when its export has one (Semrush's "Keyword Intents"), e.g. "Informational, Transactional". */
   sourceIntent?: string | null;
+  /** Ranking page, estimated monthly traffic and keyword difficulty (0-100), when the export has them -- for the competitor sheet. */
+  url?: string | null;
+  traffic?: number | null;
+  difficulty?: number | null;
 }
 
 export interface KeywordExport {
@@ -38,6 +42,12 @@ const KEYWORD_HEADERS = ["keyword", "keywords", "search term", "query"];
 const POSITION_HEADERS = ["position", "current position", "current pos", "pos", "rank", "current rank", "ranking", "google position"];
 const VOLUME_HEADERS = ["search volume", "volume", "avg. monthly searches", "monthly volume", "sv", "global volume"];
 const INTENT_HEADERS = ["keyword intents", "keyword intent", "intents", "intent", "search intent"];
+// "traffic (%)" / "traffic cost" must never be taken for the traffic estimate.
+const URL_HEADERS = ["url", "current url", "ranking url", "landing page"];
+const TRAFFIC_HEADERS = ["traffic", "organic traffic", "est. visits", "estimated traffic"];
+const DIFFICULTY_HEADERS = ["keyword difficulty", "kd", "difficulty", "seo difficulty", "kd %"];
+// Ahrefs exports intent as one true/false column per intent instead of a single label column.
+const INTENT_FLAG_HEADERS = ["informational", "navigational", "commercial", "transactional"];
 const INTENT_LABELS: Record<string, string> = {
   informational: "Informational",
   navigational: "Navigational",
@@ -52,6 +62,12 @@ function toIntent(raw: unknown): string | null {
     .map((p) => INTENT_LABELS[p.trim().toLowerCase()])
     .filter((l): l is string => !!l);
   return labels.length > 0 ? [...new Set(labels)].join(", ") : null;
+}
+
+/** Ahrefs' true/false intent columns -> "Informational, Commercial"; none true -> null (gets a generated intent). */
+function flaggedIntent(cells: unknown[], flags: { label: string; col: number }[]): string | null {
+  const labels = flags.filter((f) => /^(true|1|yes)$/i.test(String(cells[f.col] ?? "").trim())).map((f) => f.label);
+  return labels.length > 0 ? labels.join(", ") : null;
 }
 
 const norm = (s: unknown) =>
@@ -69,7 +85,8 @@ export async function readKeywordExport(source: KeywordSource, buffer: Buffer, f
   const table = /\.xlsx$/i.test(fileName) ? await readXlsx(buffer) : readCsv(buffer);
 
   let headerIndex = -1;
-  let cols = { keyword: -1, position: -1, volume: -1, intent: -1 };
+  let cols = { keyword: -1, position: -1, volume: -1, intent: -1, url: -1, traffic: -1, difficulty: -1 };
+  let intentFlags: { label: string; col: number }[] = [];
   for (let i = 0; i < Math.min(table.length, 15); i++) {
     const cells = table[i].map(norm);
     const keyword = cells.findIndex((c) => KEYWORD_HEADERS.includes(c));
@@ -80,7 +97,13 @@ export async function readKeywordExport(source: KeywordSource, buffer: Buffer, f
       position: firstHeader(cells, POSITION_HEADERS),
       volume: firstHeader(cells, VOLUME_HEADERS),
       intent: firstHeader(cells, INTENT_HEADERS),
+      url: firstHeader(cells, URL_HEADERS),
+      traffic: firstHeader(cells, TRAFFIC_HEADERS),
+      difficulty: firstHeader(cells, DIFFICULTY_HEADERS),
     };
+    if (cols.intent < 0) {
+      intentFlags = INTENT_FLAG_HEADERS.map((h) => ({ label: INTENT_LABELS[h], col: cells.indexOf(h) })).filter((f) => f.col >= 0);
+    }
     break;
   }
   const label = SOURCE_LABELS[source];
@@ -96,7 +119,10 @@ export async function readKeywordExport(source: KeywordSource, buffer: Buffer, f
       keyword,
       position: toNumber(cells[cols.position]),
       volume: cols.volume >= 0 ? toNumber(cells[cols.volume]) : null,
-      sourceIntent: cols.intent >= 0 ? toIntent(cells[cols.intent]) : null,
+      sourceIntent: cols.intent >= 0 ? toIntent(cells[cols.intent]) : flaggedIntent(cells, intentFlags),
+      url: cols.url >= 0 ? String(cells[cols.url] ?? "").trim() || null : null,
+      traffic: cols.traffic >= 0 ? toNumber(cells[cols.traffic]) : null,
+      difficulty: cols.difficulty >= 0 ? toNumber(cells[cols.difficulty]) : null,
     };
     const key = keywordKey(keyword);
     const existing = byKey.get(key);

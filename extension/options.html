@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SERP Console Agent – Settings</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; max-width: 520px; margin: 32px auto; padding: 0 16px; color: #1f2937; }
+      h1 { font-size: 18px; }
+      label { display: block; margin-top: 16px; font-weight: 600; }
+      input[type="text"], input[type="password"] { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
+      .hint { color: #64748b; font-size: 12px; margin-top: 4px; }
+      button { margin-top: 20px; padding: 8px 16px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: inherit; cursor: pointer; }
+      #saved { margin-left: 10px; color: #16a34a; }
+    </style>
+  </head>
+  <body>
+    <h1>SERP Console Agent</h1>
+    <p class="hint">Runs Domain Intelligence exports in this Chrome, where the team is signed in to Flikover. Keep this Chrome open; jobs are picked up every 30 seconds.</p>
+    <label for="serverUrl">SERP Console server address</label>
+    <input id="serverUrl" type="text" placeholder="http://localhost:3001" />
+    <div class="hint">The backend address (not the dashboard page), e.g. http://localhost:3001 for local testing.</div>
+    <label for="token">Agent token</label>
+    <input id="token" type="password" autocomplete="off" />
+    <div class="hint">The DOMAIN_INTEL_AGENT_TOKEN value from the server's settings.</div>
+    <label><input id="enabled" type="checkbox" /> Take jobs from SERP Console</label>
+    <label><input id="watch" type="checkbox" /> Show me the job window (open it in front, to watch each step)</label>
+    <button id="save">Save</button><span id="saved"></span>
+    <script src="options.js"></script>
+  </body>
+</html>

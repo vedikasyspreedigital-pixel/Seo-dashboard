@@ -75,8 +75,8 @@ export interface ProcessRunOptions {
  * via recordAttemptAndApply, unchanged -- full attempt history is
  * preserved exactly as before, just with more rows in it per row.
  *
- * Reuses the exact same tested modules as scripts/run-real-batch.mjs --
- * no ranking/mapping/state-machine logic is duplicated or changed here.
+ * Reuses the same tested ranking/mapping/state-machine modules --
+ * no logic is duplicated or changed here.
  */
 export async function processRun(
   runId: string,

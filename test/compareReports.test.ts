@@ -189,7 +189,17 @@ test("POST /api/compare-reports: login required; preview + PDF work end to end; 
   const app = createApp(neverCalled, "mock");
   const older = await rankingsWorkbook(SEP15);
   const newer = await rankingsWorkbook(SEP30);
-  const countsBefore = await Promise.all([prisma.rankingBaseline.count(), prisma.rankingReport.count(), prisma.rankingRun.count(), prisma.client.count()]);
+  // Counted for THIS test's client only: test files run in parallel, and other files create and delete
+  // their own clients/runs meanwhile, so whole-table counts made this check fail at random.
+  const twinCrown = { OR: [{ name: { contains: "Twin Crown" } }, { domain: { contains: "twincrown" } }] };
+  const countTwinCrown = () =>
+    Promise.all([
+      prisma.client.count({ where: twinCrown }),
+      prisma.rankingBaseline.count({ where: { client: twinCrown } }),
+      prisma.rankingRun.count({ where: { client: twinCrown } }),
+      prisma.rankingReport.count({ where: { run: { client: twinCrown } } }),
+    ]);
+  const countsBefore = await countTwinCrown();
 
   const unauthed = await authedRequest(app, "").post("/api/compare-reports/preview").attach("file1", older, "old.xlsx").attach("file2", newer, "new.xlsx");
   assert.equal(unauthed.status, 401);
@@ -240,8 +250,7 @@ test("POST /api/compare-reports: login required; preview + PDF work end to end; 
   assert.match(pdf.headers["content-disposition"], /Twin Crown - Keyword Ranking Report - 15th September 2026 - 30th September 2026\.pdf/);
   assert.equal((pdf.body as Buffer).subarray(0, 5).toString(), "%PDF-");
 
-  const countsAfter = await Promise.all([prisma.rankingBaseline.count(), prisma.rankingReport.count(), prisma.rankingRun.count(), prisma.client.count()]);
-  assert.deepEqual(countsAfter, countsBefore, "no baseline, report, run or client was created");
+  assert.deepEqual(await countTwinCrown(), countsBefore, "no client, baseline, run or report was created");
 });
 
 test.after(async () => {

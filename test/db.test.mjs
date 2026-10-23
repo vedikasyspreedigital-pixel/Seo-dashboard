@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { prisma } from "../backend/db/client.js";
 import { ingestExcelRun } from "../backend/runs/ingestExcelRun.js";
-import { buildSampleWorkbook } from "../scripts/create-sample-excel.mjs";
+import { buildSampleWorkbook } from "./helpers/sampleWorkbook.mjs";
 
 // These tests hit the real local Postgres container (DATABASE_URL in .env,
 // expected to be localhost:5433 / serp-ranking-db). Each test creates its

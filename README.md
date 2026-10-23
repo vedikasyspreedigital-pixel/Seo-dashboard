@@ -1,182 +1,151 @@
-# serp-interpreter
+# SERP Console — SEO ranking & reporting dashboard
 
-A standalone replacement for the Make.com "Ranking Report Automation"
-scenario. No Make.com involved — this service reads the sheet, calls
-DataForSEO, has Claude match the target domain against the full result set,
-and writes the outcome back.
+SySpree Digital's internal dashboard for SEO client work:
 
-```
-Sheet (Pending / Error-Retry rows)
-        │
-        ▼
-DataForSEO — full unfiltered top-100 organic results
-        │                     │
-     API fails             API succeeds
-        │                     ▼
-        │              Claude matches target domain
-        │                against the 100 results
-        │                     │            │
-        │                 succeeds     fails after 3 tries
-        ▼                     ▼               ▼
-  Error - Retry          Completed       Needs Review
-  (rank/URL blank)   (rank + URL set)  (rank/URL blank)
-```
+- **Ranking runs** — upload a client's keyword Excel, the backend checks each keyword's Google position
+  through **DataForSEO**, and the results come back as an Excel.
+- **Client reports** — a branded ranking PDF + Excel per client, compared against a pinned **baseline**
+  (earlier report), with an editable email draft that is **sent through ClickUp** (Playwright drives the
+  ClickUp email composer on the client's task).
+- **Workspaces** — separate client lists for the *SEO* and *Advanced SEO* teams, each with its own ClickUp login.
+- **Domain Intelligence** — enter a client's website and get 5 reports (below), made from the team's own
+  SEO tools by a Chrome extension, and posted together as one ClickUp comment.
 
-`Needs Review` is intentionally never `Error - Retry` — a bad Claude response
-shouldn't cause the row to re-hit (and re-pay for) DataForSEO for a problem
-the API didn't cause.
+Frontend: React + Vite on **Vercel**. Backend: Node 22 + Express + Prisma/Postgres on **Railway**.
+
+## Domain Intelligence — the 5 reports
+
+The tools (Semrush, Ubersuggest and WooRank through seotooladda; Ahrefs through Flikover) have no API we can
+use, so an **office Chrome extension** (`extension/`) does the clicking in a Chrome where someone is signed in.
+It polls the backend for jobs, runs each in its own window, and uploads the file — it never types passwords
+and stops for a person if a "verify you are human" check appears.
+
+| # | Report | How it's made | File |
+|---|---|---|---|
+| 1 | **Keyword Analysis** | Organic keyword exports from Semrush, Ubersuggest and Ahrefs, one search intent per keyword (word patterns, then Gemini). With competitors: Semrush's top 3 organic competitors (auto, or typed by the team) are exported too, and a *Competitors* sheet puts the client and competitors side by side — position, landing page, traffic, difficulty, intent. | Excel |
+| 2 | **Semrush Site Audit** | New Site Audit project (1,000 pages, run once) → wait for the crawl → Full Report PDF. | PDF |
+| 3 | **WooRank Audit** | Create Review → Refresh → Download PDF (saved through Chrome's print engine). | PDF |
+| 4 | **Gap & Competitor Analysis** | From report 1's competitor data: *Missing* and *Weak* keywords; Gemini picks the opportunities worth pursuing and writes the action plan. | Excel |
+| 5 | **AI SEO Audit** | Gemini reads the WooRank and Semrush PDFs and fills the team's audit workbook: dashboard, checks per area, tech stack, action plan. | Excel |
+
+Code: `backend/domainIntel/` (reports, jobs, agent queue), `backend/api/routes/domainIntel.ts` and
+`agent.ts`, `frontend/src/pages/DomainIntelligencePage.tsx`, `extension/`.
 
 ## Project structure
 
-The repository has two application surfaces:
-
 ```
-frontend/               — React + Vite frontend
-  src/api/              — typed browser client and API models
-  src/components/       — reusable UI grouped by feature
-  src/hooks/            — client-side data fetching and polling
-  src/pages/            — page-level composition
-
-backend/                — Node + Express backend
-  api/                  — HTTP app and route handlers
-  dataforseo/           — provider clients and response mapping
-  db/                   — Prisma client
-  excel/                — workbook parsing and export
-  runs/                 — run ingestion and orchestration
-  statemachine/         — run and row transition rules
-  worker/               — background run processing
-
-prisma/                 — database schema and migrations
-test/                   — backend tests
-scripts/                — local data and batch utilities
-```
-
-The empty root `api/` and `lib/` directories are retained only as placeholders
-from the earlier serverless prototype; active backend code is under `backend/`.
-
-## Why this replaces `target`, not just `items[1]`
-
-DataForSEO's `target` parameter pre-filters the SERP to a domain pattern
-like `example.com*` before it's ever returned — it isn't a hint, it's a
-filter. The old scenario passed it the full target **URL** (sheet column C),
-which is not a supported pattern, so it silently returned an empty or wrong
-result set for any row whose page wasn't an exact string match. That's the
-actual bug behind the `accuracy_fix_v2…v6` history in your Make.com exports.
-
-This service doesn't pass `target` at all (see `lib/dataforseo.js`) — it
-pulls the full unfiltered top 100 and lets Claude do the matching, which is
-also what makes "why isn't this ranking" debuggable: you get the real SERP,
-not a pre-filtered guess.
-
-## One-time setup
-
-**1. DataForSEO** — grab your API login/password from the DataForSEO
-dashboard (same account the Make.com connector used).
-
-**2. Google service account** (so this service can read/write the sheet
-without a human's OAuth session):
-
-- Google Cloud Console → new project (or reuse one) → **APIs & Services →
-  Enable** the Google Sheets API.
-- **IAM & Admin → Service Accounts → Create** → create a JSON key.
-- Open the "Rank Sheet" spreadsheet → **Share** → add the service account's
-  `...@...iam.gserviceaccount.com` email as **Editor**.
-- From the downloaded JSON, take `client_email` → `GOOGLE_SERVICE_ACCOUNT_EMAIL`,
-  and `private_key` → `GOOGLE_PRIVATE_KEY` (keep the `\n` sequences literal).
-
-**3. Anthropic** — an API key from the Anthropic Console.
-
-**4.** Copy `.env.example` to `.env` and fill in all of the above, plus a
-random `SHARED_SECRET`.
-
-```bash
-cd serp-interpreter
-npm install
-cp .env.example .env   # then edit .env
+frontend/      React + Vite app (pages, components, typed API client)
+backend/       Express API
+  api/           routes (auth, clients, runs, reports, baselines, compare, domainIntel, agent, ...)
+  dataforseo/    DataForSEO client + response mapping
+  reporting/     report PDFs/Excel, email drafts, ClickUp email sender
+  baselines/     baseline Excel/PDF parsing (incl. OCR) and comparison
+  domainIntel/   Domain Intelligence (see above)
+  worker/        background run processing
+prisma/        database schema, migrations, seed (workspaces)
+extension/     "SERP Console Agent" Chrome extension (Domain Intelligence)
+spikes/clickup-feasibility/   ClickUp login helper (npm run setup-session) -- still used
+scripts/       one-off admin utilities (create-user, import-workspace-clients, diagnostics)
+test/          backend tests (node:test)
 ```
 
 ## Run it locally
 
+Needs **Node 22** (see `.nvmrc`) and **Postgres** (any local install or Docker; `.env.example` assumes port 5433).
+
 ```bash
 npm install
 npm --prefix frontend install
-
-# Terminal 1: backend at http://localhost:3001
-npm run backend:dev
-
-# Terminal 2: frontend at the Vite URL shown by the command
-npm run frontend
+cp .env.example .env          # then fill in DATABASE_URL etc.
+npx prisma migrate deploy
+npm run prisma:seed           # creates the "seo" and "advanced-seo" workspaces
+npx tsx scripts/create-user.mjs you@example.com "a-password" seo advanced-seo
+npm run backend               # API on http://localhost:3001
+npm run frontend              # app on http://localhost:5173 (proxies /api to the backend)
 ```
 
-Vite proxies `/api` requests to the backend, so the browser does not need a
-separate API URL or CORS configuration. The backend defaults to mock DataForSEO
-responses; set `DATAFORSEO_LIVE=true` only when real API calls are intended.
+Everything external is **mock by default** — no DataForSEO spend, no ClickUp sends, no tool fetching —
+until you set the matching switch in `.env` (`DATAFORSEO_LIVE`, `CLICKUP_EMAIL_LIVE`,
+`CLICKUP_COMMENTS_LIVE`, `DOMAIN_INTEL_FETCH_MODE`). All settings are described in `.env.example`.
 
-For a production frontend build, run `npm run frontend:build`. Backend tests
-run with `npm test`.
+Tests (need the local Postgres running): `npm test`
 
-## Deploy to Vercel (for the HTTP trigger + future dashboard)
+## The ClickUp login (email + comments)
+
+ClickUp is driven with a saved browser login (a Playwright "session file"), made by a person once:
 
 ```bash
-npm i -g vercel
-vercel login
-vercel
-vercel env add ANTHROPIC_API_KEY
-vercel env add CLAUDE_MODEL
-vercel env add DATAFORSEO_LOGIN
-vercel env add DATAFORSEO_PASSWORD
-vercel env add GOOGLE_SERVICE_ACCOUNT_EMAIL
-vercel env add GOOGLE_PRIVATE_KEY
-vercel env add SPREADSHEET_ID
-vercel env add SHEET_NAME
-vercel env add SHARED_SECRET
-vercel --prod
+cd spikes/clickup-feasibility && npm install
+npm run setup-session                 # default workspace -> session/clickup-storage-state.json
+npm run setup-session:advanced-seo    # Advanced SEO workspace's own login
 ```
 
-Trigger a run:
+A browser opens: log in to ClickUp (check it's the right account), then press Enter in the terminal.
+For production, upload the file to the Railway volume (see Deploy, step 4).
 
-```bash
-curl -X POST "https://<your-project>.vercel.app/api/process?limit=25" \
-  -H "x-api-secret: <your SHARED_SECRET>"
-```
+## The Chrome extension (Domain Intelligence)
 
-Response is a per-row summary (status written, rank, matched URL, or the
-error that caused an `Error - Retry` / `Needs Review`).
+On the office computer's Chrome:
 
-### Scheduling
+1. `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → pick the `extension/` folder.
+2. Extension **Settings**: server address (the Railway backend URL, or `http://localhost:3001` locally) and
+   the **agent token** (= `DOMAIN_INTEL_AGENT_TOKEN` on the server). Optional: "Show me the job window" to watch it work.
+3. In that Chrome: stay signed in to **seotooladda** (and **Flikover** for Ahrefs), and **allow pop-ups for
+   seotooladda.com** (WooRank opens its review in a new tab).
+4. Keep that Chrome open — it picks up jobs every 30 seconds. After changing extension code, click ↻ on its card.
 
-Either:
+The extension's popup also has a **Record** mode (pages + clicks + screenshots, never typed values) used to map new tool flows.
 
-- **Vercel Cron** — add a `crons` entry in `vercel.json` pointing at
-  `/api/process` (Vercel Cron sends a GET by default; if you keep the POST
-  guard, switch the handler to accept GET from Vercel's cron IP, or trigger
-  it from an external scheduler that can POST — e.g. cron-job.org, or your
-  own OS scheduler calling the curl command above).
-- **Your own scheduler** hitting the same endpoint on whatever interval fits
-  (e.g. every 15 minutes).
+## Deploy
 
-Note the batch `limit` — serverless functions have a max execution time, so
-this processes rows in bounded batches rather than assuming one call clears
-an unlimited backlog. Call it repeatedly, or raise `limit` together with
-`maxDuration` once you know real row volume and per-row latency.
+### Backend → Railway
 
-## Project layout
+`railway.json` sets the build/start/healthcheck; `nixpacks.toml` adds the Linux libraries Chromium needs
+(without it Playwright's browser can't start on Railway). The rest is set up once in Railway:
 
-```
-lib/dataforseo.js   — direct DataForSEO client (no target filter)
-lib/claude.js        — the matching call to Claude, with retry + fallback
-lib/sheets.js        — Google Sheets read/write (service account)
-lib/pipeline.js      — wires the three together, per pending row
-api/process.js       — HTTP trigger for the full pipeline (batch)
-api/interpret-serp.js— HTTP trigger for just the Claude step, for testing
-scripts/process-pending.js — local/cron entry point, no HTTP needed
-```
+1. **Project + Postgres** — new project from this repo; add the **Postgres** plugin.
+2. **Volume** — on the backend service add a Volume mounted at `/var/data` (uploads, reports and ClickUp
+   session files live there; without it they're lost on every redeploy).
+3. **Variables** (service → Variables; mark secrets as secret):
 
-## What's intentionally not here yet
+   | Variable | Value |
+   |---|---|
+   | `NODE_ENV` | `production` |
+   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` |
+   | `PORT` | leave unset (Railway sets it) |
+   | `UPLOADS_DIR` | `/var/data/uploads` |
+   | `REPORTS_DIR` | `/var/data/uploads/reports` |
+   | `CLICKUP_SESSION_PATH` | `/var/data/uploads/clickup-storage-state.json` |
+   | `CLICKUP_SESSION_PATH_ADVANCED_SEO` | `/var/data/uploads/clickup-storage-state-advanced-seo.json` |
+   | `CORS_ORIGINS` | the Vercel app URL (comma-separated if several) |
+   | `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` | DataForSEO credentials (secret) |
+   | `DATAFORSEO_LIVE`, `CLICKUP_EMAIL_LIVE`, `CLICKUP_COMMENTS_LIVE` | `false` until deliberately going live |
+   | `DOMAIN_INTEL_FETCH_MODE` | `agent` |
+   | `DOMAIN_INTEL_AGENT_TOKEN` | a long random string (secret) — same value in the extension's Settings |
+   | `GEMINI_API_KEY` | Google AI Studio key (secret) |
 
-- No pre-filter/exact-match shortcut before calling Claude — every row goes
-  through the model for now, to validate accuracy in isolation. Worth adding
-  once you're seeing real volume/cost (see the architecture doc).
-- No dashboard UI yet — `api/process.js` is what a "Run" button will call.
-- No report-generation / client-delivery pipeline — that's the next phase,
-  once ranking data is trustworthy.
+4. **ClickUp session files** — after `npm run setup-session` locally, copy them onto the volume:
+
+   ```bash
+   railway login && railway link
+   railway ssh keys add   # first time only
+   cat spikes/clickup-feasibility/session/clickup-storage-state.json | railway ssh --service <backend-service> "cat > /var/data/uploads/clickup-storage-state.json"
+   cat spikes/clickup-feasibility/session/clickup-storage-state-advanced-seo.json | railway ssh --service <backend-service> "cat > /var/data/uploads/clickup-storage-state-advanced-seo.json"
+   railway ssh --service <backend-service> "ls -la /var/data/uploads/"
+   ```
+
+   Log in to the right ClickUp account for each workspace — a wrong account makes every send fail with
+   "You need access to this task".
+
+Before deploying, check no ranking run is still processing (a deploy restarts the server).
+
+### Frontend → Vercel
+
+The Vercel project builds the `frontend/` folder (`frontend/vercel.json` sends every route to the app).
+Set **`VITE_API_BASE_URL`** to the Railway backend URL (`https://<something>.up.railway.app`) in the Vercel
+project's environment variables; it's baked in at build time, so redeploy after changing it.
+
+## Notes
+
+- Generated files (`reports/`, `uploads/`) and `.env` are git-ignored — never commit them; reports contain client data.
+- Pushing is done from GitHub Desktop; Railway and Vercel deploy from `main`.

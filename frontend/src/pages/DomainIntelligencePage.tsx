@@ -11,11 +11,20 @@ import { Spinner } from '../components/ui/Spinner';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { GlobeIcon, UploadDropIcon } from '../components/ui/icons';
 import { useActiveClient } from '../context/ClientContext';
+import { competitorProblems, fillFromPaste, toDomain } from '../utils/competitorDomains';
 import {
   createDomainReport,
   downloadDomainReportFile,
+  getDomainFetch,
+  getDomainFetchStatus,
+  getCompetitorSearch,
   getDomainReports,
   retryDomainReportPost,
+  startCompetitorSearch,
+  startDomainFetch,
+  type DomainCompetitorSearch,
+  type DomainFetchJob,
+  type DomainFetchStatus,
   type DomainReport,
   type DomainReportMode,
   type DomainReportStatus,
@@ -82,6 +91,208 @@ function ExportDrop({ file, onFile, disabled }: { file: File | null; onFile: (f:
   );
 }
 
+/**
+ * A tool the server can fetch by itself (Ahrefs via Flikover): "Fetch from …"
+ * runs in the background while the other files are uploaded; when it's done
+ * the fetched file shows here as attached. Uploading the file by hand stays
+ * possible at any time (and wins over a fetch).
+ */
+function FetchSlot({
+  label,
+  job,
+  file,
+  mock,
+  agentNote,
+  canStart,
+  disabled,
+  onStart,
+  onFile,
+}: {
+  label: string;
+  job: DomainFetchJob | null;
+  file: File | null;
+  mock: boolean;
+  /** "agent" mode: whether the office Chrome is ready to take the job. */
+  agentNote?: string;
+  canStart: boolean;
+  disabled: boolean;
+  onStart: () => void;
+  onFile: (f: File | null) => void;
+}) {
+  const [showUpload, setShowUpload] = useState(false);
+  const running = job?.state === 'queued' || job?.state === 'fetching';
+
+  if (file || showUpload) {
+    return (
+      <div className="flex flex-col gap-1">
+        <ExportDrop file={file} onFile={onFile} disabled={disabled} />
+        <button
+          type="button"
+          className="w-fit text-xs font-medium text-[var(--color-ink-faint)] underline-offset-2 hover:text-[var(--color-ink)] hover:underline"
+          onClick={() => {
+            onFile(null);
+            setShowUpload(false);
+          }}
+          disabled={disabled}
+        >
+          Fetch from {label} instead
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] px-4 py-3 text-sm">
+      {!job && (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="secondary" className="!py-1.5 text-xs" disabled={!canStart || disabled} onClick={onStart}>
+            Fetch from {label}
+          </Button>
+          <span className="text-xs text-[var(--color-ink-faint)]">
+            Runs in the background (about a minute) — upload the other files meanwhile.{mock && ' Mock mode on this server: no real Flikover.'}
+            {agentNote && ` ${agentNote}`}
+          </span>
+        </div>
+      )}
+      {running && (
+        <div className="flex items-center gap-2 text-brand-300">
+          <Spinner />
+          <span>
+            Fetching from {label}…{job?.step ? ` ${job.step}` : ''}
+          </span>
+        </div>
+      )}
+      {job?.state === 'done' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-emerald-300">✓ Attached</span>
+          <span className="truncate text-[var(--color-ink)]">{job.fileName}</span>
+          <span className="text-xs text-[var(--color-ink-muted)]">· {job.keywords} keywords · fetched {new Date(job.updatedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+          <button type="button" className="text-xs font-medium text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] hover:underline" onClick={onStart} disabled={disabled}>
+            Fetch again
+          </button>
+        </div>
+      )}
+      {job?.state === 'failed' && (
+        <>
+          <p className="text-amber-300">{job.error}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" className="!py-1 text-xs" disabled={!canStart || disabled} onClick={onStart}>
+              Try again
+            </Button>
+          </div>
+        </>
+      )}
+      {!running && (
+        <button
+          type="button"
+          className="w-fit text-xs font-medium text-[var(--color-ink-faint)] underline-offset-2 hover:text-[var(--color-ink)] hover:underline"
+          onClick={() => setShowUpload(true)}
+          disabled={disabled}
+        >
+          Upload the {label} file instead
+        </button>
+      )}
+    </div>
+  );
+}
+
+const COMPETITOR_COUNT = 3;
+
+/**
+ * Keyword Analysis competitors (team's decision, 2026-10-23): "Find competitors" reads Semrush's Main
+ * Organic Competitors (top 3 pre-filled, editable), then each one's Semrush keywords are fetched; the
+ * report gets a "Competitors" sheet with the client's and their keywords side by side.
+ */
+function CompetitorsSection({
+  search,
+  domains,
+  problems,
+  jobs,
+  canStart,
+  disabled,
+  onFind,
+  onDomain,
+  onPaste,
+  onFetch,
+}: {
+  search: DomainCompetitorSearch | null;
+  domains: string[];
+  /** Per box: why it can't be used (null = fine or empty). */
+  problems: (string | null)[];
+  jobs: (DomainFetchJob | null)[];
+  canStart: boolean;
+  disabled: boolean;
+  onFind: () => void;
+  onDomain: (i: number, value: string) => void;
+  /** A pasted list fills several boxes; returns false for a single entry (the box takes it as typed). */
+  onPaste: (i: number, text: string) => boolean;
+  onFetch: () => void;
+}) {
+  const searching = search?.state === 'queued' || search?.state === 'running';
+  const anyRunning = jobs.some((j) => j?.state === 'queued' || j?.state === 'fetching');
+  const filled = domains.filter((d) => d.trim()).length;
+  const blocked = problems.some(Boolean);
+  return (
+    <div>
+      <p className="mb-1 text-sm font-medium text-[var(--color-ink-muted)]">Competitors (optional)</p>
+      <p className="mb-3 text-xs text-[var(--color-ink-faint)]">
+        Adds a “Competitors” sheet to the Keyword Analysis: the client’s Semrush keywords and up to {COMPETITOR_COUNT} competitors’ side by side — position, landing page, traffic, difficulty and intent.
+        Find them in Semrush, or type or paste the competitors’ websites (a full URL or a list works too).
+      </p>
+      <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] px-4 py-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="secondary" className="!py-1.5 text-xs" disabled={!canStart || disabled || searching} onClick={onFind}>
+            {search?.state === 'done' ? 'Find competitors again' : 'Find competitors (Semrush)'}
+          </Button>
+          {searching && (
+            <span className="flex items-center gap-2 text-brand-300">
+              <Spinner /> {search?.step ?? 'Finding competitors…'}
+            </span>
+          )}
+          {search?.state === 'done' && <span className="text-xs text-[var(--color-ink-muted)]">Top {COMPETITOR_COUNT} from Semrush’s Main Organic Competitors — change any of them below.</span>}
+          {search?.state === 'failed' && <span className="text-amber-300">{search.error}</span>}
+        </div>
+        {domains.map((d, i) => {
+          const job = jobs[i];
+          const info = search?.competitors?.find((c) => c.domain === d.trim().toLowerCase());
+          return (
+            <div key={i} className="flex flex-wrap items-center gap-3">
+              <div className="w-72 max-w-full">
+                <TextInput
+                  value={d}
+                  placeholder={`competitor${i + 1}.com.au`}
+                  aria-label={`Competitor ${i + 1} website`}
+                  aria-invalid={!!problems[i]}
+                  onChange={(e) => onDomain(i, e.target.value)}
+                  onPaste={(e) => {
+                    if (onPaste(i, e.clipboardData.getData('text'))) e.preventDefault();
+                  }}
+                  onBlur={() => d.trim() && onDomain(i, toDomain(d))}
+                  disabled={disabled || anyRunning}
+                />
+              </div>
+              {problems[i] && <span className="text-xs text-amber-300">{problems[i]}</span>}
+              {!problems[i] && info?.commonKeywords != null && <span className="text-xs text-[var(--color-ink-faint)]">{info.commonKeywords} shared keywords</span>}
+              {(job?.state === 'queued' || job?.state === 'fetching') && (
+                <span className="flex items-center gap-2 text-xs text-brand-300">
+                  <Spinner /> {job.step ?? 'Fetching…'}
+                </span>
+              )}
+              {job?.state === 'done' && <span className="text-xs text-emerald-300">✓ {job.keywords} keywords</span>}
+              {job?.state === 'failed' && <span className="text-xs text-amber-300">{job.error}</span>}
+            </div>
+          );
+        })}
+        <div>
+          <Button variant="secondary" className="!py-1.5 text-xs" disabled={!canStart || disabled || anyRunning || filled === 0 || blocked} onClick={onFetch}>
+            Fetch competitors’ keywords
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 async function saveFile(reportId: string, index: number, name: string) {
   const blob = await downloadDomainReportFile(reportId, index);
   const url = URL.createObjectURL(blob);
@@ -100,24 +311,30 @@ function sourceSummary(report: DomainReport) {
 
 /**
  * "Domain Intelligence": a client's Semrush / Ubersuggest / Ahrefs keyword
- * exports -> one combined and/or per-tool Excel with search intent, posted
- * automatically as a comment on the client's domain-report ClickUp task.
+ * exports -> one combined and/or per-tool Excel with one search intent per
+ * keyword, posted as a comment on the client's domain-report ClickUp task.
+ * Ahrefs can be fetched automatically while the other two are uploaded;
+ * nothing is combined or posted until "Combine and post".
  */
 export function DomainIntelligencePage() {
   const { clients, activeClient } = useActiveClient();
   const [clientId, setClientId] = useState('');
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [location, setLocation] = useState('au');
-  // Backup path for when automatic fetching can't reach a tool: upload its export instead.
-  const [manual, setManual] = useState(false);
   const [enabled, setEnabled] = useState<Record<DomainSource, boolean>>({ semrush: true, ubersuggest: true, ahrefs: true });
   const [files, setFiles] = useState<Partial<Record<DomainSource, File>>>({});
+  const [jobs, setJobs] = useState<Partial<Record<DomainSource, DomainFetchJob>>>({});
   const [mode, setMode] = useState<DomainReportMode>('combined');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reports, setReports] = useState<DomainReport[]>([]);
+  const [fetchStatus, setFetchStatus] = useState<DomainFetchStatus | null>(null);
+  const [compSearch, setCompSearch] = useState<DomainCompetitorSearch | null>(null);
+  const [compDomains, setCompDomains] = useState<string[]>(() => Array(COMPETITOR_COUNT).fill(''));
+  const [compJobs, setCompJobs] = useState<(DomainFetchJob | null)[]>(() => Array(COMPETITOR_COUNT).fill(null));
 
-  const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
+  const client =useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
+  const isAuto = (s: DomainSource) => !!fetchStatus?.automatic.includes(s);
 
   // Follow the header's client by default; the page can still pick another.
   useEffect(() => {
@@ -129,6 +346,58 @@ export function DomainIntelligencePage() {
     setFiles({});
     setError(null);
   }, [client?.id, client?.domain]);
+
+  // A fetch is for one client + site + country -- changing any of them needs a new fetch.
+  useEffect(() => {
+    setJobs({});
+    setCompSearch(null);
+    setCompDomains(Array(COMPETITOR_COUNT).fill(''));
+    setCompJobs(Array(COMPETITOR_COUNT).fill(null));
+  }, [client?.id, websiteUrl, location]);
+
+  // Follow "Find competitors" until Semrush's list is back, then pre-fill the top 3.
+  const searchId = compSearch && (compSearch.state === 'queued' || compSearch.state === 'running') ? compSearch.id : null;
+  useEffect(() => {
+    if (!searchId) return;
+    const t = window.setInterval(async () => {
+      try {
+        const s = await getCompetitorSearch(searchId);
+        setCompSearch(s);
+        if (s.state === 'done' && s.competitors) {
+          setCompDomains(Array.from({ length: COMPETITOR_COUNT }, (_, i) => s.competitors![i]?.domain ?? ''));
+          setCompJobs(Array(COMPETITOR_COUNT).fill(null));
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, 2500);
+    return () => window.clearInterval(t);
+  }, [searchId]);
+
+  // Follow the competitors' Semrush fetches.
+  const compRunningKey = compJobs.map((j) => (j && (j.state === 'queued' || j.state === 'fetching') ? j.id : '')).join(',');
+  useEffect(() => {
+    if (!compRunningKey.replace(/,/g, '')) return;
+    const t = window.setInterval(async () => {
+      for (const id of compRunningKey.split(',').filter(Boolean)) {
+        try {
+          const job = await getDomainFetch(id);
+          setCompJobs((prev) => prev.map((j) => (j?.id === job.id ? job : j)));
+        } catch (err) {
+          setError((err as Error).message);
+        }
+      }
+    }, 2500);
+    return () => window.clearInterval(t);
+  }, [compRunningKey]);
+
+  const refreshFetchStatus = useCallback(() => {
+    getDomainFetchStatus().then(setFetchStatus, () => {});
+  }, []);
+
+  useEffect(() => {
+    refreshFetchStatus();
+  }, [refreshFetchStatus]);
 
   const loadReports = useCallback(async () => {
     if (!clientId) return setReports([]);
@@ -151,19 +420,81 @@ export function DomainIntelligencePage() {
     return () => window.clearInterval(t);
   }, [inFlight, loadReports]);
 
-  const chosen = SOURCES.filter((s) => enabled[s.value]);
-  const missing = chosen.filter((s) => !files[s.value]);
-  const ready = manual && !!client && websiteUrl.trim().length > 0 && chosen.length > 0 && missing.length === 0;
+  // Follow running fetches until they finish.
+  const runningJobs = Object.values(jobs).filter((j) => j && (j.state === 'queued' || j.state === 'fetching')) as DomainFetchJob[];
+  const runningKey = runningJobs.map((j) => j.id).join(',');
+  useEffect(() => {
+    if (!runningKey) return;
+    const t = window.setInterval(async () => {
+      for (const id of runningKey.split(',')) {
+        try {
+          const job = await getDomainFetch(id);
+          setJobs((prev) => (prev[job.source]?.id === job.id ? { ...prev, [job.source]: job } : prev));
+          if (job.state === 'done' || job.state === 'failed') refreshFetchStatus();
+        } catch (err) {
+          setError((err as Error).message);
+        }
+      }
+    }, 2500);
+    return () => window.clearInterval(t);
+  }, [runningKey, refreshFetchStatus]);
 
-  async function handleGenerate() {
+  const chosen = SOURCES.filter((s) => enabled[s.value]);
+  const hasData = (s: DomainSource) => !!files[s] || jobs[s]?.state === 'done';
+  const missing = chosen.filter((s) => !hasData(s.value));
+  const fetching = chosen.filter((s) => !files[s.value] && runningJobs.some((j) => j.source === s.value));
+  const formReady = !!client && websiteUrl.trim().length > 0;
+  const compFetching = compJobs.some((j) => j?.state === 'queued' || j?.state === 'fetching');
+  const compProblems = competitorProblems(compDomains, websiteUrl);
+  const ready = formReady && chosen.length > 0 && missing.length === 0 && !compFetching;
+
+  async function handleFindCompetitors() {
+    if (!client || !formReady) return;
+    setError(null);
+    try {
+      setCompSearch(await startCompetitorSearch({ clientId: client.id, websiteUrl: websiteUrl.trim(), location }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleFetchCompetitors() {
+    if (!client || !formReady || compProblems.some(Boolean)) return;
+    setError(null);
+    try {
+      const started = await Promise.all(
+        compDomains.map((d) => (toDomain(d) ? startDomainFetch({ source: 'semrush', clientId: client.id, websiteUrl: toDomain(d), location }) : Promise.resolve(null))),
+      );
+      setCompJobs(started);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleStartFetch(source: DomainSource) {
+    if (!client || !formReady) return;
+    setError(null);
+    try {
+      const job = await startDomainFetch({ source, clientId: client.id, websiteUrl: websiteUrl.trim(), location });
+      setJobs((prev) => ({ ...prev, [source]: job }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleCombine() {
     if (!ready || busy || !client) return;
     setBusy(true);
     setError(null);
     try {
-      const picked = Object.fromEntries(chosen.map((s) => [s.value, files[s.value]])) as Partial<Record<DomainSource, File>>;
-      const report = await createDomainReport({ clientId: client.id, websiteUrl: websiteUrl.trim(), location, reportMode: mode, files: picked });
+      const picked = Object.fromEntries(chosen.filter((s) => files[s.value]).map((s) => [s.value, files[s.value]])) as Partial<Record<DomainSource, File>>;
+      const fetched = Object.fromEntries(chosen.filter((s) => !files[s.value] && jobs[s.value]?.state === 'done').map((s) => [s.value, jobs[s.value]!.id]));
+      const competitorFetches = compJobs.filter((j): j is DomainFetchJob => j?.state === 'done').map((j) => j.id);
+      const report = await createDomainReport({ clientId: client.id, websiteUrl: websiteUrl.trim(), location, reportMode: mode, files: picked, fetched, competitorFetches });
       setReports((prev) => [report, ...prev.filter((r) => r.id !== report.id)]);
       setFiles({});
+      setJobs({});
+      setCompJobs(Array(COMPETITOR_COUNT).fill(null));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -193,6 +524,19 @@ export function DomainIntelligencePage() {
           </div>
           <span className="rounded-full bg-overlay/[0.08] px-3 py-1 text-xs font-semibold text-[var(--color-ink)]">New module</span>
         </div>
+
+        {fetchStatus && (fetchStatus.loginProblem || (fetchStatus.mode === 'playwright' && !fetchStatus.sessionSaved)) && (
+          <div className="mt-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+            <p className="font-semibold">Flikover login expired — sign in again</p>
+            <p className="mt-1 text-xs text-amber-200/80">
+              {fetchStatus.loginProblem?.error ?? 'No saved Flikover login yet.'}{' '}
+              {fetchStatus.mode === 'agent'
+                ? 'Sign in to Flikover again in Chrome on the office computer, then fetch again.'
+                : 'Ahrefs can’t be fetched automatically until someone signs in to Flikover once more (ask the dashboard admin).'}{' '}
+              Until then, use “Upload the Ahrefs file instead”.
+            </p>
+          </div>
+        )}
 
         <div className="mt-6 flex flex-col gap-5">
           <FormField label="Client">
@@ -228,23 +572,68 @@ export function DomainIntelligencePage() {
                     />
                     {s.label}
                   </label>
-                  {manual && enabled[s.value] && (
+                  {enabled[s.value] && (
                     <div className="pl-6.5">
-                      <ExportDrop file={files[s.value] ?? null} onFile={(f) => setFiles((prev) => ({ ...prev, [s.value]: f }))} disabled={busy} />
+                      {isAuto(s.value) ? (
+                        <FetchSlot
+                          label={s.label}
+                          job={jobs[s.value] ?? null}
+                          file={files[s.value] ?? null}
+                          mock={!!fetchStatus && !fetchStatus.live}
+                          agentNote={
+                            fetchStatus?.mode === 'agent'
+                              ? fetchStatus.agentOnline
+                                ? 'Done by the office Chrome (online).'
+                                : 'The office Chrome agent is OFFLINE — turn that computer and Chrome on, or upload the file instead.'
+                              : undefined
+                          }
+                          canStart={formReady}
+                          disabled={busy}
+                          onStart={() => void handleStartFetch(s.value)}
+                          onFile={(f) =>
+                            setFiles((prev) => {
+                              const next = { ...prev };
+                              if (f) next[s.value] = f;
+                              else delete next[s.value];
+                              return next;
+                            })
+                          }
+                        />
+                      ) : (
+                        <ExportDrop file={files[s.value] ?? null} onFile={(f) => setFiles((prev) => ({ ...prev, [s.value]: f }))} disabled={busy} />
+                      )}
                     </div>
                   )}
                 </div>
               ))}
             </div>
-            <button
-              type="button"
-              className="mt-2 text-xs font-medium text-[var(--color-ink-faint)] underline-offset-2 hover:text-[var(--color-ink)] hover:underline"
-              onClick={() => setManual((m) => !m)}
-              disabled={busy}
-            >
-              {manual ? 'Fetch automatically instead' : 'Upload exports manually instead'}
-            </button>
           </div>
+
+          {enabled.semrush && isAuto('semrush') && (
+            <CompetitorsSection
+              search={compSearch}
+              domains={compDomains}
+              problems={compProblems}
+              jobs={compJobs}
+              canStart={formReady}
+              disabled={busy}
+              onFind={() => void handleFindCompetitors()}
+              onDomain={(i, value) => {
+                if (value === compDomains[i]) return;
+                setCompDomains((prev) => prev.map((d, j) => (j === i ? value : d)));
+                setCompJobs((prev) => prev.map((job, j) => (j === i ? null : job)));
+              }}
+              onPaste={(i, text) => {
+                const filled = fillFromPaste(compDomains, i, text);
+                if (!filled) return false;
+                setCompDomains(filled);
+                // A box whose website changed needs fetching again.
+                setCompJobs((prev) => prev.map((job, j) => (filled[j] === compDomains[j] ? job : null)));
+                return true;
+              }}
+              onFetch={() => void handleFetchCompetitors()}
+            />
+          )}
 
           <div>
             <p className="mb-2 text-sm font-medium text-[var(--color-ink-muted)]">Reports to generate</p>
@@ -268,38 +657,34 @@ export function DomainIntelligencePage() {
           {client && (
             <p className={`text-xs ${client.domainReportTaskId ? 'text-[var(--color-ink-muted)]' : 'text-amber-300'}`}>
               {client.domainReportTaskId
-                ? `Reports are posted automatically as a comment on ClickUp task ${client.domainReportTaskId}.`
+                ? `Reports are posted as a comment on ClickUp task ${client.domainReportTaskId}.`
                 : 'No domain-report ClickUp task is set for this client, so reports will be generated for download only. Add the task ID in Client Management.'}
             </p>
           )}
 
           <InlineError message={error} />
 
-          {manual ? (
-            <>
-              <Button disabled={!ready || busy} onClick={() => void handleGenerate()}>
-                {busy ? (
-                  <>
-                    <Spinner /> Combining…
-                  </>
-                ) : client?.domainReportTaskId ? (
-                  'Combine and post to ClickUp'
-                ) : (
-                  'Combine reports'
-                )}
-              </Button>
-              {!busy && client && chosen.length > 0 && missing.length > 0 && (
-                <p className="-mt-3 text-center text-xs text-[var(--color-ink-faint)]">Upload the {missing.map((s) => s.label).join(', ')} export to continue.</p>
-              )}
-            </>
-          ) : (
-            <>
-              {/* Automatic fetching (seotooladda / Flikover) is Phase 2 -- shown so the flow is clear, not yet clickable. */}
-              <Button disabled>Fetch, combine and post to ClickUp</Button>
-              <p className="-mt-3 text-center text-xs text-[var(--color-ink-faint)]">
-                Automatic fetching from Semrush, Ubersuggest and Ahrefs is being connected. Until then, use “Upload exports manually instead”.
-              </p>
-            </>
+          <Button disabled={!ready || busy} onClick={() => void handleCombine()}>
+            {busy ? (
+              <>
+                <Spinner /> Combining…
+              </>
+            ) : client?.domainReportTaskId ? (
+              'Combine and post to ClickUp'
+            ) : (
+              'Combine reports'
+            )}
+          </Button>
+          {!busy && client && chosen.length > 0 && missing.length > 0 && (
+            <p className="-mt-3 text-center text-xs text-[var(--color-ink-faint)]">
+              {fetching.length > 0 && `Waiting for ${fetching.map((s) => s.label).join(', ')} to finish fetching. `}
+              {compFetching && 'Waiting for the competitors’ keywords. '}
+              {missing.filter((s) => !fetching.includes(s)).length > 0 &&
+                `Add the ${missing
+                  .filter((s) => !fetching.includes(s))
+                  .map((s) => s.label)
+                  .join(', ')} file to continue.`}
+            </p>
           )}
         </div>
       </Card>
@@ -321,6 +706,7 @@ export function DomainIntelligencePage() {
                       </p>
                       <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
                         {sourceSummary(r)} keywords
+                        {!!r.summary.competitors?.length && ` · vs ${r.summary.competitors.map((c) => c.domain).join(', ')}`}
                         {r.summary.intents &&
                           ` · ${Object.entries(r.summary.intents)
                             .filter(([, n]) => n > 0)

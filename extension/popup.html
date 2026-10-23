@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px/1.5 system-ui, sans-serif; width: 300px; margin: 0; padding: 14px; color: #1f2937; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      .row { margin: 4px 0; }
+      .muted { color: #64748b; }
+      .ok { color: #16a34a; } .warn { color: #d97706; } .bad { color: #dc2626; }
+      a { color: #2563eb; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h1>SERP Console Agent</h1>
+    <div id="state" class="row"></div>
+    <div id="job" class="row"></div>
+    <div id="last" class="row muted"></div>
+    <div class="row"><a id="poll">Check for jobs now</a> · <a id="settings">Settings</a></div>
+    <hr />
+    <div class="row"><strong>Record a flow</strong> <span class="muted">(to teach the agent a new export)</span></div>
+    <div class="row"><a id="record">● Start recording</a></div>
+    <div id="recInfo" class="row muted"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

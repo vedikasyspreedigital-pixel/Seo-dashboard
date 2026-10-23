@@ -73,7 +73,7 @@ export interface ClickUpEmailSenderOptions {
    * -- lets a workspace send through its OWN ClickUp account/session
    * instead of the shared default above. Each entry is produced the same
    * way the default is (a one-time human login via setupSession.mjs,
-   * pointed at a distinct output file -- see RAILWAY_DEPLOY.md). Omitted
+   * pointed at a distinct output file -- see the README's Deploy section). Omitted
    * or missing a given slug simply falls back to sessionStatePath.
    */
   sessionStatePathByWorkspace?: Record<string, string>;

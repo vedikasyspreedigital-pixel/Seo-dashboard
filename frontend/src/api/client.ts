@@ -19,7 +19,7 @@ import type {
 
 // Local dev: Vite proxies /api to the local backend (same origin), so this
 // stays relative. Once the frontend and backend are hosted separately (e.g.
-// Vercel + Render), VITE_API_BASE_URL points this at the real backend URL --
+// Vercel + Railway), VITE_API_BASE_URL points this at the real backend URL --
 // set at build time, baked into the deployed bundle.
 const BASE = `${import.meta.env?.VITE_API_BASE_URL ?? ''}/api`;
 
@@ -583,6 +583,37 @@ export type DomainSource = 'semrush' | 'ubersuggest' | 'ahrefs';
 export type DomainReportMode = 'combined' | 'individual' | 'both';
 export type DomainReportStatus = 'GENERATING' | 'GENERATED' | 'POSTING' | 'POSTED' | 'POST_FAILED' | 'NOT_POSTED';
 
+/** "Fetch from Ahrefs" -- runs in the background; when done its file is used like an upload. */
+export interface DomainFetchJob {
+  id: string;
+  source: DomainSource;
+  clientId: string;
+  websiteUrl: string;
+  location: string | null;
+  state: 'queued' | 'fetching' | 'done' | 'failed';
+  step?: string;
+  keywords?: number;
+  fileName?: string;
+  error?: string;
+  code?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DomainFetchStatus {
+  /** Tools the server can fetch by itself, e.g. ['ahrefs']. */
+  automatic: DomainSource[];
+  live: boolean;
+  /** "agent" = the office Chrome extension fetches; "playwright" = the server's own browser; "mock" = nothing real. */
+  mode: 'agent' | 'playwright' | 'mock';
+  sessionSaved: boolean;
+  /** "agent" mode only: the extension asked for work in the last ~90s. */
+  agentOnline: boolean | null;
+  agentLastSeenAt: number | null;
+  /** Set when the latest Ahrefs fetch needs a person to sign in to Flikover again. */
+  loginProblem: { code: string; error: string; at: string } | null;
+}
+
 export interface DomainReport {
   id: string;
   clientId: string;
@@ -597,6 +628,7 @@ export interface DomainReport {
     intentByPattern?: number;
     intentByAi?: number;
     intentUnresolved?: number;
+    competitors?: { domain: string; keywords: number }[];
   };
   files: { name: string }[];
   createdBy: string | null;
@@ -607,6 +639,25 @@ export interface DomainReport {
   createdAt: string;
 }
 
+export async function getDomainFetchStatus(): Promise<DomainFetchStatus> {
+  const res = await apiFetch('/domain-intel/fetch-status');
+  return handle<DomainFetchStatus>(res);
+}
+
+export async function startDomainFetch(input: { source: DomainSource; clientId: string; websiteUrl: string; location: string }): Promise<DomainFetchJob> {
+  const res = await apiFetch('/domain-intel/fetches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return handle<DomainFetchJob>(res);
+}
+
+export async function getDomainFetch(id: string): Promise<DomainFetchJob> {
+  const res = await apiFetch(`/domain-intel/fetches/${id}`);
+  return handle<DomainFetchJob>(res);
+}
+
 /** Upload the tool exports; the report is generated right away and posted to ClickUp in the background. */
 export async function createDomainReport(input: {
   clientId: string;
@@ -614,6 +665,10 @@ export async function createDomainReport(input: {
   location: string;
   reportMode: DomainReportMode;
   files: Partial<Record<DomainSource, File>>;
+  /** Finished "Fetch from …" jobs to use instead of an upload. */
+  fetched?: Partial<Record<DomainSource, string>>;
+  /** Finished Semrush fetches of up to 3 competitors -> the side-by-side Competitors sheet. */
+  competitorFetches?: string[];
 }): Promise<DomainReport> {
   const formData = new FormData();
   formData.append('clientId', input.clientId);
@@ -621,8 +676,35 @@ export async function createDomainReport(input: {
   formData.append('location', input.location);
   formData.append('reportMode', input.reportMode);
   for (const [source, file] of Object.entries(input.files)) if (file) formData.append(source, file);
+  for (const [source, id] of Object.entries(input.fetched ?? {})) if (id) formData.append(`fetched_${source}`, id);
+  if (input.competitorFetches?.length) formData.append('competitor_fetches', input.competitorFetches.join(','));
   const res = await apiFetch('/domain-intel/reports', { method: 'POST', body: formData });
   return handle<DomainReport>(res);
+}
+
+/** Semrush's "Main Organic Competitors" for the client's site, found by the office Chrome agent. */
+export interface DomainCompetitorSearch {
+  id: string;
+  clientId: string;
+  websiteUrl: string;
+  state: 'queued' | 'running' | 'done' | 'failed';
+  step?: string;
+  competitors?: { domain: string; commonKeywords: number | null; totalKeywords: number | null }[];
+  error?: string;
+}
+
+export async function startCompetitorSearch(input: { clientId: string; websiteUrl: string; location: string }): Promise<DomainCompetitorSearch> {
+  const res = await apiFetch('/domain-intel/competitors', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return handle<DomainCompetitorSearch>(res);
+}
+
+export async function getCompetitorSearch(id: string): Promise<DomainCompetitorSearch> {
+  const res = await apiFetch(`/domain-intel/competitors/${id}`);
+  return handle<DomainCompetitorSearch>(res);
 }
 
 export async function getDomainReports(clientId: string): Promise<DomainReport[]> {

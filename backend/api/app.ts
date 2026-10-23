@@ -9,6 +9,7 @@ import { createRunsRouter } from "./routes/runs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
 import { createDomainIntelRouter, type DomainIntelRouterDeps } from "./routes/domainIntel.js";
 import { storageRouter } from "./routes/storage.js";
+import { createAgentRouter } from "./routes/agent.js";
 import { createMockCommentPoster } from "../domainIntel/clickupCommentPoster.js";
 import { createMockEmailSender } from "../reporting/mockEmailSender.js";
 import type { CallDataForSeoFn } from "../worker/processRun.js";
@@ -69,6 +70,8 @@ export function createApp(
   app.use("/api/reports", createReportsRouter(reportingDeps));
   app.use("/api/domain-intel", createDomainIntelRouter(domainIntelDeps));
   app.use("/api/storage", storageRouter);
+  // The office Chrome agent (Domain Intelligence fetching) -- token-protected, off unless DOMAIN_INTEL_AGENT_TOKEN is set.
+  app.use("/api/agent", createAgentRouter());
 
   // Reports the actual mode/endpoint this running process was constructed
   // with -- not a config file's intent, but what this process's

@@ -1,0 +1,103 @@
+// Small helpers for driving a tab of THIS Chrome (the one the team is signed in
+// to). Nothing here types passwords, logs in/out, or touches a "verify you
+// are human" check: waitForHuman() only waits for a person to tick it.
+
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** A short, human-paced pause between steps. */
+export const pause = (min = 1200, max = 2800) => sleep(min + Math.random() * (max - min));
+
+export class AgentError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
+/** Runs func(...args) inside the tab and returns its (JSON-serialisable) result. world: "ISOLATED" | "MAIN". */
+export async function run(tabId, func, args = [], world = "ISOLATED") {
+  const [res] = await chrome.scripting.executeScript({ target: { tabId }, func, args, world });
+  return res?.result;
+}
+
+export async function tabUrl(tabId) {
+  return (await chrome.tabs.get(tabId)).url ?? "";
+}
+
+/** Resolves once the tab has finished loading (or after timeoutMs, without error -- the caller checks the page). */
+export function waitForLoad(tabId, timeoutMs = 60_000) {
+  return new Promise((resolve) => {
+    const done = () => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timer);
+      resolve();
+    };
+    const listener = (id, info) => {
+      if (id === tabId && info.status === "complete") done();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId).then((t) => t.status === "complete" && done(), done);
+  });
+}
+
+export async function navigate(tabId, url) {
+  await chrome.tabs.update(tabId, { url });
+  await sleep(300);
+  await waitForLoad(tabId);
+}
+
+/** Polls predicate(...args) in the tab until it returns a truthy value; returns it, or null after timeoutMs. */
+export async function waitFor(tabId, predicate, args = [], timeoutMs = 30_000, intervalMs = 750, world = "ISOLATED") {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    try {
+      const value = await run(tabId, predicate, args, world);
+      if (value) return value;
+    } catch {
+      // page mid-navigation -- try again
+    }
+    await sleep(intervalMs);
+  }
+  return null;
+}
+
+/** In-page: is a Cloudflare / "verify you are human" check showing? */
+export function pageHasHumanCheck() {
+  const title = document.title || "";
+  return (
+    /just a moment|attention required|verify you are human/i.test(title) ||
+    !!document.querySelector('iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"], #challenge-form') ||
+    /verify you are human/i.test(document.body?.innerText?.slice(0, 2000) ?? "")
+  );
+}
+
+/**
+ * If a "verify you are human" check is showing, brings the window to the front,
+ * shows a notification and WAITS (up to 15 min) for a person to tick it. Never
+ * clicks it itself.
+ */
+export async function waitForHuman(tabId, ctx, where) {
+  if (!(await run(tabId, pageHasHumanCheck).catch(() => false))) return;
+  await ctx.progress(where, true);
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.windows.update(tab.windowId, { focused: true, state: "normal" }).catch(() => {});
+  await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  chrome.notifications.create(`human-${Date.now()}`, {
+    type: "basic",
+    iconUrl: "icon.png",
+    title: "SERP Console needs you",
+    message: `Please tick "verify you are human" in the window that just opened (${where}). The export continues by itself afterwards.`,
+    priority: 2,
+  });
+  const end = Date.now() + 15 * 60 * 1000;
+  while (Date.now() < end) {
+    await sleep(3000);
+    const still = await run(tabId, pageHasHumanCheck).catch(() => true);
+    if (!still) {
+      await ctx.progress(`${where} -- verified, continuing`);
+      await pause();
+      return;
+    }
+  }
+  throw new AgentError("BOT_CHECK", 'Nobody ticked "verify you are human" on this computer within 15 minutes.');
+}

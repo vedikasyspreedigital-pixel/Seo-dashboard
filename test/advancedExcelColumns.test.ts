@@ -116,7 +116,7 @@ test("Advanced SEO Download Excel: Previous (date) | Ranks | Change, from the ba
 
     // The verified upload reads this file exactly as before (columns found by header name).
     const parsed = await parseRankingExcel(buf, { clientId: client.id });
-    assert.deepEqual(parsed.rows.map((x: { keyword: string; rankDisplay: string | null }) => [x.keyword, x.rankDisplay]), [[KEYWORDS[0], "5"], [KEYWORDS[1], "Not in 100"], [KEYWORDS[2], "12"]]);
+    assert.deepEqual((parsed.rows as { keyword: string; rankDisplay: string | null }[]).map((x) => [x.keyword, x.rankDisplay]), [[KEYWORDS[0], "5"], [KEYWORDS[1], "Not in 100"], [KEYWORDS[2], "12"]]);
 
     // Downloading a file that already has the columns refreshes them -- never duplicates.
     const run = await prisma.rankingRun.findUniqueOrThrow({ where: { id: runId } });

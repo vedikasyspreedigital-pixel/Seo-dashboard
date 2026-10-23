@@ -5,7 +5,9 @@ import { prisma } from "../db/client.js";
 import { formatOrdinalDate } from "../reporting/formatOrdinalDate.js";
 import { KeywordExportError, SOURCE_LABELS, keywordKey, readKeywordExport, type KeywordExport, type KeywordSource } from "./readKeywordExport.js";
 import { classifyIntents, INTENTS, type ClassifyWithAiFn, type Intent } from "./classifyIntent.js";
-import { buildDomainReportExcel, type ReportBlock } from "./buildDomainReportExcel.js";
+import { buildDomainReportExcel, competitorSheetRows, type CompetitorSheet, type ReportBlock, type SiteKeywords } from "./buildDomainReportExcel.js";
+import { bareDomain } from "./fetchers/flikoverAhrefs.js";
+import { buildGapWorkbook, findGaps, siteOverview, type GapAdvice, type GapAdvisor } from "./gapReport.js";
 import type { PostCommentFn } from "./clickupCommentPoster.js";
 
 // Domain Intelligence pipeline: uploaded tool exports -> intent -> Excel
@@ -15,6 +17,9 @@ import type { PostCommentFn } from "./clickupCommentPoster.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, "../../reports");
+
+/** Where a domain report's files (and, for automatic fetches, its input exports) live. */
+export const domainReportDir = (reportId: string) => path.join(REPORTS_DIR, "domain-intel", reportId);
 
 export type ReportMode = "combined" | "individual" | "both";
 export const REPORT_MODES: ReportMode[] = ["combined", "individual", "both"];
@@ -29,6 +34,8 @@ export interface CreateDomainReportInput {
   location: string | null;
   reportMode: ReportMode;
   uploads: Partial<Record<KeywordSource, { buffer: Buffer; name: string }>>;
+  /** Up to 3 competitors' Semrush Positions exports -> the side-by-side "Competitors" sheet. */
+  competitors?: { domain: string; buffer: Buffer; name: string }[];
   createdBy: string | null;
   domainReportTaskId: string | null;
 }
@@ -38,7 +45,7 @@ export interface ReportFile {
   path: string;
 }
 
-export async function createDomainReport(input: CreateDomainReportInput, classifyWithAi?: ClassifyWithAiFn | null) {
+export async function createDomainReport(input: CreateDomainReportInput, classifyWithAi?: ClassifyWithAiFn | null, gapAdvisor?: GapAdvisor | null) {
   const exports: KeywordExport[] = [];
   const problems: string[] = [];
   for (const source of SOURCES) {
@@ -51,24 +58,48 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
       else throw err;
     }
   }
+  const competitors: SiteKeywords[] = [];
+  for (const c of input.competitors ?? []) {
+    try {
+      competitors.push({ domain: c.domain, rows: (await readKeywordExport("semrush", c.buffer, c.name)).rows });
+    } catch (err) {
+      if (err instanceof KeywordExportError) problems.push(`${c.domain}: ${err.message}`);
+      else throw err;
+    }
+  }
   if (problems.length > 0) throw new KeywordExportError(problems.join(" "));
   if (exports.length === 0) throw new KeywordExportError("Upload at least one export (Semrush, Ubersuggest or Ahrefs).");
+  const clientSemrush = exports.find((e) => e.source === "semrush");
+  if (competitors.length > 0 && !clientSemrush) {
+    throw new KeywordExportError("Fetch or upload the client's Semrush export too -- the competitor sheet compares Semrush data with Semrush data.");
+  }
+  const sheetBase: CompetitorSheet | null =
+    clientSemrush && competitors.length > 0 ? { client: { domain: bareDomain(input.websiteUrl), rows: clientSemrush.rows }, competitors, intentOf: () => "" } : null;
+  // Only the competitors' keywords that make it onto the sheet need an intent.
+  const competitorKeywords = sheetBase ? competitorSheetRows(sheetBase).map((r) => r.keyword) : [];
+  const competitorRows = new Map(competitors.flatMap((c) => c.rows).map((r) => [keywordKey(r.keyword), r]));
 
-  // A tool's own intent (Semrush's "Keyword Intents") is kept as-is; only rows
-  // without one (Ubersuggest, Ahrefs) get a generated intent.
-  const needIntent = exports.flatMap((e) => e.rows.filter((r) => !r.sourceIntent).map((r) => r.keyword));
-  const intent = await classifyIntents(needIntent, { clientName: input.client.name, websiteUrl: input.websiteUrl }, classifyWithAi);
+  // ONE intent per keyword, the same in every tool's block. The tools' own
+  // labels (Semrush's "Keyword Intents", Ahrefs' intent columns -- often
+  // several at once) are only hints for it (classifyIntent.ts).
+  const toolLabels = new Map<string, string[]>();
+  const addLabel = (r: { keyword: string; sourceIntent?: string | null }) => {
+    if (r.sourceIntent) toolLabels.set(keywordKey(r.keyword), [...(toolLabels.get(keywordKey(r.keyword)) ?? []), r.sourceIntent]);
+  };
+  for (const e of exports) e.rows.forEach(addLabel);
+  for (const k of competitorKeywords) {
+    const r = competitorRows.get(keywordKey(k));
+    if (r && !toolLabels.has(keywordKey(k))) addLabel(r);
+  }
+  const allKeywords = [...exports.flatMap((e) => e.rows.map((r) => r.keyword)), ...competitorKeywords];
+  const intent = await classifyIntents(allKeywords, { clientName: input.client.name, websiteUrl: input.websiteUrl }, classifyWithAi, toolLabels);
   const blocks: ReportBlock[] = exports.map((e) => ({
     source: e.source,
-    rows: e.rows.map((r) => ({ ...r, intent: r.sourceIntent || intent.intents.get(keywordKey(r.keyword)) || "Informational" })),
+    rows: e.rows.map((r) => ({ ...r, intent: intent.intents.get(keywordKey(r.keyword)) ?? "Informational" })),
   }));
 
-  // A mixed intent ("Informational, Transactional") counts towards each of its labels.
   const intentCounts = Object.fromEntries(INTENTS.map((i) => [i, 0])) as Record<Intent, number>;
-  for (const block of blocks)
-    for (const row of block.rows)
-      for (const label of row.intent.split(", ")) if (label in intentCounts) intentCounts[label as Intent]++;
-  const intentFromSource = exports.reduce((n, e) => n + e.rows.filter((r) => r.sourceIntent).length, 0);
+  for (const block of blocks) for (const row of block.rows) if (row.intent in intentCounts) intentCounts[row.intent as Intent]++;
 
   const created = await prisma.domainReport.create({
     data: {
@@ -85,19 +116,51 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
     },
   });
 
-  const dir = path.join(REPORTS_DIR, "domain-intel", created.id);
+  const dir = domainReportDir(created.id);
   await mkdir(dir, { recursive: true });
   const date = formatOrdinalDate(new Date());
   const clientLabel = input.client.name.replace(/[\\/:*?"<>|]/g, "").trim() || "Client";
   const files: ReportFile[] = [];
-  const save = async (name: string, reportBlocks: ReportBlock[]) => {
+  const sheet: CompetitorSheet | null = sheetBase ? { ...sheetBase, intentOf: (k) => intent.intents.get(keywordKey(k)) ?? "Informational" } : null;
+  const save = async (name: string, reportBlocks: ReportBlock[], withCompetitors: boolean) => {
     const filePath = path.join(dir, name);
-    await writeFile(filePath, await buildDomainReportExcel(reportBlocks));
+    await writeFile(filePath, await buildDomainReportExcel(reportBlocks, withCompetitors ? sheet : null));
     files.push({ name, path: filePath });
   };
-  if (input.reportMode !== "individual") await save(`${clientLabel} - Domain Keyword Report - ${date}.xlsx`, blocks);
+  // The competitor sheet goes in the combined report -- or, with individual files only, in the Semrush one.
+  if (input.reportMode !== "individual") await save(`${clientLabel} - Domain Keyword Report - ${date}.xlsx`, blocks, true);
   if (input.reportMode !== "combined") {
-    for (const block of blocks) await save(`${clientLabel} - ${SOURCE_LABELS[block.source]} Keywords - ${date}.xlsx`, [block]);
+    for (const block of blocks)
+      await save(`${clientLabel} - ${SOURCE_LABELS[block.source]} Keywords - ${date}.xlsx`, [block], input.reportMode === "individual" && block.source === "semrush");
+  }
+
+  // Report 4, Gap & Competitor Analysis -- from the same competitor data. Gemini's part is optional:
+  // without it (no key, or busy) the workbook still has the Summary and Keyword Gaps.
+  let gapSummary: { missing: number; weak: number; opportunities: number | null } | null = null;
+  if (sheet) {
+    const overview = [sheet.client, ...sheet.competitors].map(siteOverview);
+    const gaps = findGaps(sheet.client, sheet.competitors, sheet.intentOf);
+    let advice: GapAdvice | null = null;
+    let adviceNote: string | undefined;
+    if (gapAdvisor) {
+      try {
+        advice = await gapAdvisor({
+          clientName: input.client.name,
+          websiteUrl: input.websiteUrl,
+          overview,
+          gaps,
+          clientPages: [...new Set(sheet.client.rows.map((r) => r.url).filter((u): u is string => !!u))],
+        });
+      } catch (err) {
+        console.error(`[domainIntel] gap analysis advice failed:`, (err as Error).message);
+        adviceNote = `Recommendations couldn't be written this time (${(err as Error).message}) -- the gap data below is complete.`;
+      }
+    } else adviceNote = "Recommendations need Gemini (GEMINI_API_KEY isn't set on this server) -- the gap data below is complete.";
+    const name = `${clientLabel} - Gap & Competitor Analysis - ${date}.xlsx`;
+    const filePath = path.join(dir, name);
+    await writeFile(filePath, await buildGapWorkbook({ clientName: input.client.name, websiteUrl: input.websiteUrl, dateLabel: date, overview, gaps, advice, adviceNote }));
+    files.push({ name, path: filePath });
+    gapSummary = { missing: gaps.filter((g) => g.type === "Missing").length, weak: gaps.filter((g) => g.type === "Weak").length, opportunities: advice?.opportunities.length ?? null };
   }
 
   return prisma.domainReport.update({
@@ -106,8 +169,11 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
       files: files.map((f) => ({ name: f.name, path: f.path })),
       summary: {
         sources: Object.fromEntries(exports.map((e) => [e.source, { keywords: e.rows.length, duplicatesRemoved: e.duplicatesRemoved }])),
+        competitors: competitors.map((c) => ({ domain: c.domain, keywords: c.rows.length })),
+        gaps: gapSummary,
         intents: intentCounts,
-        intentFromSource,
+        // Unique keywords decided by each step (a keyword in several tools counts once).
+        intentFromSource: intent.byToolLabels,
         intentByPattern: intent.byPattern,
         intentByAi: intent.byAi,
         intentUnresolved: intent.unresolved,

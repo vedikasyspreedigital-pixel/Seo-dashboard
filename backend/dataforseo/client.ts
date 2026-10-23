@@ -1,4 +1,4 @@
-// Real DataForSEO HTTP call, extracted verbatim from scripts/run-real-batch.mjs
+// Real DataForSEO HTTP call (first proven in the early live batch-test scripts)
 // -- no mapping/business logic here, just the network call. Only used when
 // DATAFORSEO_LIVE=true (see backend/server.ts); dev/test default to the mock client.
 

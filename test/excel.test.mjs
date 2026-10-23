@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { buildSampleWorkbook } from "../scripts/create-sample-excel.mjs";
+import { buildSampleWorkbook } from "./helpers/sampleWorkbook.mjs";
 import { parseRankingExcel } from "../backend/excel/parser.js";
 import { exportRankingExcel } from "../backend/excel/exporter.js";
 import { computeRowUid } from "../backend/excel/rowUid.js";
