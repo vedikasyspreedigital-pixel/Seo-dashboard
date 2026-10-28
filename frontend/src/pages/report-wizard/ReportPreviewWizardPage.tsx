@@ -5,6 +5,7 @@ import { PageHeader, PageTitle } from '../../components/layout/PageHeader';
 import { Button } from '../../components/ui/Button';
 import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
+import { ReportLoadFailed } from '../../components/report/ReportLoadFailed';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { ReportPdfPreview } from '../../components/report/ReportPdfPreview';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
@@ -20,6 +21,8 @@ export function ReportPreviewWizardPage() {
   const [report, setReport] = useState<RankingReport | null>(null);
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     if (!reportId) return;
@@ -27,14 +30,16 @@ export function ReportPreviewWizardPage() {
     // update from this page's own actions) -- if Build Report was never
     // run yet, there's no PDF to show; send the user back to where they
     // can build one instead of rendering a broken preview.
-    getReport(reportId).then((r) => {
-      if (!r.clientPdfPath) {
-        navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
-        return;
-      }
-      setReport(r);
-    });
-  }, [reportId]);
+    getReport(reportId)
+      .then((r) => {
+        if (!r.clientPdfPath) {
+          navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
+          return;
+        }
+        setReport(r);
+      })
+      .catch((err: Error) => setLoadError(err.message || 'Something went wrong.'));
+  }, [reportId, loadAttempt]);
 
   async function handleContinueToEmail() {
     if (!reportId || drafting || !report) return; // guard against double-clicks/duplicate requests
@@ -66,7 +71,7 @@ export function ReportPreviewWizardPage() {
   if (!report || !reportId) {
     return (
       <AppShell>
-        <ReportWorkingCard label="Loading..." />
+        {loadError ? <ReportLoadFailed message={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} /> : <ReportWorkingCard label="Loading..." />}
       </AppShell>
     );
   }

@@ -160,6 +160,23 @@ test("report period consistency: createReportForRun refuses to create a second r
   }
 });
 
+// Audit 2026-10-27 (#15a): the check above ran BEFORE the (slow) comparison, so two uploads at the same
+// moment both passed it and both created a report. Now a lock on the run makes the second wait and find the first.
+test("one report per run even when two are created at the same moment", async () => {
+  const { createReportForRun } = await import("../backend/reporting/createReport.js");
+  const client = await makeClient(`Period Consistency Test - concurrent ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id, new Date("2026-08-31T00:00:00Z"));
+    const results = await Promise.all([createReportForRun(run.id), createReportForRun(run.id), createReportForRun(run.id)]);
+    assert.deepEqual(results.map((r) => r.outcome).sort(), ["DUPLICATE_REPORT", "DUPLICATE_REPORT", "SUCCESS"]);
+    assert.equal(await prisma.rankingReport.count({ where: { runId: run.id } }), 1);
+    const winner = results.find((r) => r.outcome === "SUCCESS");
+    for (const r of results) if (r.outcome === "DUPLICATE_REPORT" && winner?.outcome === "SUCCESS") assert.equal(r.existingReportId, winner.report.id);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test.after(async () => {
   await prisma.$disconnect();
 });

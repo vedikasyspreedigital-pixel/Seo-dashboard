@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
+import { ReportLoadFailed } from '../../components/report/ReportLoadFailed';
 import { ReportStatusBadge } from '../../components/report/ReportStatusBadge';
 import { ReportPdfPreview } from '../../components/report/ReportPdfPreview';
 import { InlineError } from '../../components/ui/InlineError';
@@ -16,7 +17,10 @@ import { approveAndSendReport, getReport } from '../../api/client';
 import { useSession } from '../../context/SessionContext';
 import type { RankingReport } from '../../api/types';
 
-const SEND_PAGE_STATUSES: RankingReport['status'][] = ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SENT'];
+// SENDING too: a report being sent was bounced to this same page, which never re-loaded -- an endless
+// "Loading..." (audit 2026-10-27). It now shows "Sending..." and checks again until it's done.
+const SEND_PAGE_STATUSES: RankingReport['status'][] = ['PENDING_APPROVAL', 'APPROVED', 'SENDING', 'REJECTED', 'SENT'];
+const SENDING_CHECK_MS = 10_000;
 
 // The Google Analytics template's placeholders (backend emailDraft.ts buildGaEmailDraft).
 const GA_PLACEHOLDER = /\[(organic search users|event count|month)\]/i;
@@ -30,6 +34,19 @@ export function SendConfirmationPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
+  // While the report is being sent (here or by someone else), check again until it's sent or failed.
+  useEffect(() => {
+    if (!reportId || report?.status !== 'SENDING') return;
+    const timer = setTimeout(() => {
+      getReport(reportId)
+        .then(setReport)
+        .catch(() => setReport((r) => (r ? { ...r } : r))); // a failed check just tries again
+    }, SENDING_CHECK_MS);
+    return () => clearTimeout(timer);
+  }, [reportId, report]);
 
   useEffect(() => {
     if (!reportId) return;
@@ -46,14 +63,16 @@ export function SendConfirmationPage() {
     setSending(false);
     // Guarded on the initial fetch only -- an email draft must have been
     // submitted for approval before this page has anything to show.
-    getReport(reportId).then((r) => {
-      if (!SEND_PAGE_STATUSES.includes(r.status)) {
-        navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
-        return;
-      }
-      setReport(r);
-    });
-  }, [reportId]);
+    getReport(reportId)
+      .then((r) => {
+        if (!SEND_PAGE_STATUSES.includes(r.status)) {
+          navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
+          return;
+        }
+        setReport(r);
+      })
+      .catch((err: Error) => setLoadError(err.message || 'Something went wrong.'));
+  }, [reportId, loadAttempt]);
 
   async function handleApproveAndSend() {
     if (!reportId || sending) return; // guard against double-clicks/duplicate requests
@@ -79,7 +98,25 @@ export function SendConfirmationPage() {
   if (!report) {
     return (
       <AppShell>
-        <ReportWorkingCard label="Loading..." />
+        {loadError ? <ReportLoadFailed message={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} /> : <ReportWorkingCard label="Loading..." />}
+      </AppShell>
+    );
+  }
+
+  if (report.status === 'SENDING') {
+    return (
+      <AppShell>
+        <PageHeader breadcrumbs={[{ label: 'Reports', to: '/reports' }, { label: 'Sending' }]} />
+        <Card className="mt-6 p-6">
+          <div className="flex items-center gap-3">
+            <Spinner />
+            <p className="text-sm text-[var(--color-ink)]">This report is being sent through ClickUp right now.</p>
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-ink-muted)]">
+            This usually takes under a minute. The page checks again every {SENDING_CHECK_MS / 1000} seconds and shows the result here.
+          </p>
+          <BackLink to="/reports" label="Back to Reports" />
+        </Card>
       </AppShell>
     );
   }
@@ -232,6 +269,13 @@ export function SendConfirmationPage() {
         <AlertPanel tone="warning" className="mt-5 flex items-start gap-2.5">
           <p className="text-sm text-amber-300">This report will be emailed and marked Sent. This cannot be undone.</p>
         </AlertPanel>
+
+        {/* Why the last send didn't finish (e.g. the server restarted mid-send) -- it was stored but never shown. */}
+        {!error && report.status === 'APPROVED' && report.lastErrorMessage && (
+          <AlertPanel tone="warning" className="mt-4">
+            <p className="text-sm text-amber-300">Last send attempt: {report.lastErrorMessage}</p>
+          </AlertPanel>
+        )}
 
         <InlineError message={error} className="mt-4" />
 

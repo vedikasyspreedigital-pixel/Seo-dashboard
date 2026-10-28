@@ -9,6 +9,9 @@ import { useCallback, useEffect, useState } from 'react';
  */
 export function useClientScopedList<T>(clientId: string | null, load: (clientId: string) => Promise<T[]>) {
   const [items, setItems] = useState<T[]>([]);
+  // Which client `items` belong to: after switching client, the previous client's list was shown under the
+  // new name until the load finished -- or for good, with no error, if it failed (audit 2026-10-27).
+  const [itemsFor, setItemsFor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -25,7 +28,9 @@ export function useClientScopedList<T>(clientId: string | null, load: (clientId:
     setError(null);
     load(clientId)
       .then((data) => {
-        if (!cancelled) setItems(data);
+        if (cancelled) return;
+        setItems(data);
+        setItemsFor(clientId);
       })
       .catch((err: Error) => {
         // Keep whatever was already shown -- never replace real data with an empty list.
@@ -42,5 +47,6 @@ export function useClientScopedList<T>(clientId: string | null, load: (clientId:
   }, [clientId, attempt]);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
-  return { items, setItems, loading, error, reload };
+  // A retry for the SAME client keeps its list on screen; another client's list is never shown.
+  return { items: itemsFor === clientId ? items : ([] as T[]), setItems, loading, error, reload };
 }

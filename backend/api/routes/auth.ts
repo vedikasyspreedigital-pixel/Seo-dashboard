@@ -1,10 +1,14 @@
 import { Router } from "express";
 import { prisma } from "../../db/client.js";
-import { verifyPassword } from "../../auth/password.js";
+import { hashPassword, verifyPassword } from "../../auth/password.js";
+import { randomUUID } from "node:crypto";
 import { createSession, deleteSession, getSessionIdFromRequest, getUserForSession, setSessionCookie, clearSessionCookie } from "../../auth/session.js";
 import { loginRateLimit } from "../rateLimit.js";
 
 export const authRouter = Router();
+
+/** Checked against when the email is unknown, so every login attempt costs the same time. Matches no password. */
+const UNKNOWN_USER_HASH = hashPassword(randomUUID());
 
 authRouter.post("/login", loginRateLimit, async (req, res) => {
   const { email, password } = req.body ?? {};
@@ -19,8 +23,11 @@ authRouter.post("/login", loginRateLimit, async (req, res) => {
   });
 
   // Same generic error whether the email doesn't exist or the password is
-  // wrong -- never reveal which one it was.
-  if (!user || !user.isActive || !verifyPassword(password, user.passwordHash)) {
+  // wrong -- never reveal which one it was. The password check runs either
+  // way: skipping it for an unknown email made that answer noticeably faster,
+  // which gave away which emails have an account (audit 2026-10-27).
+  const passwordOk = verifyPassword(password, user?.passwordHash ?? UNKNOWN_USER_HASH);
+  if (!user || !user.isActive || !passwordOk) {
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }

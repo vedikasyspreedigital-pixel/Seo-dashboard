@@ -371,3 +371,40 @@ test("GET /api/clients?includeInactive=true: latestBaseline is null with no uplo
 test.after(async () => {
   await prisma.$disconnect();
 });
+
+test("POST/PATCH /api/clients: a ClickUp task link that isn't app.clickup.com is refused (audit 2026-10-27)", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  const created = await request(app)
+    .post("/api/clients")
+    .set("Cookie", auth.cookieHeader)
+    .send({ workspaceId: auth.workspace.id, name: `Bad link ${randomUUID()}`, clickupTaskUrl: "http://10.0.0.5/admin" });
+  assert.equal(created.status, 400);
+  const client = await prisma.client.create({ data: { name: `Link client ${randomUUID()}`, workspaceId: auth.workspace.id } });
+  try {
+    const bad = await request(app).patch(`/api/clients/${client.id}`).set("Cookie", auth.cookieHeader).send({ clickupTaskUrl: "https://evil.example/t/1" });
+    assert.equal(bad.status, 400);
+    const good = await request(app).patch(`/api/clients/${client.id}`).set("Cookie", auth.cookieHeader).send({ clickupTaskUrl: "https://app.clickup.com/t/abc123" });
+    assert.equal(good.status, 200, JSON.stringify(good.body));
+  } finally {
+    await prisma.clientReportConfig.deleteMany({ where: { clientId: client.id } });
+    await cleanupClient(client.id);
+    await auth.cleanup();
+  }
+});
+// Audit 2026-10-27: two saves of the same client at the same moment could create two "active" settings records.
+test("PATCH /api/clients/:id: saves at the same moment leave exactly one active settings record", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  const client = await prisma.client.create({ data: { name: `Concurrent settings ${randomUUID()}`, workspaceId: auth.workspace.id } });
+  try {
+    const save = (n: number) => request(app).patch(`/api/clients/${client.id}`).set("Cookie", auth.cookieHeader).send({ recipients: [`r${n}@example.com`] });
+    const results = await Promise.all([save(1), save(2), save(3), save(4)]);
+    for (const r of results) assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(await prisma.clientReportConfig.count({ where: { clientId: client.id, isActive: true } }), 1);
+  } finally {
+    await prisma.clientReportConfig.deleteMany({ where: { clientId: client.id } });
+    await cleanupClient(client.id);
+    await auth.cleanup();
+  }
+});

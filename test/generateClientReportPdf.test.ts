@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildRowsAndSummary, describeOverallRankingChange, formatSearchEngineLabel, groupRowsByLocation, buildClientReportHtml } from "../backend/reporting/generateClientReportPdf.js";
-import type { RunAnalytics } from "../backend/reporting/computeRunAnalytics.js";
+import { computeMovements, type RankRow, type RunAnalytics } from "../backend/reporting/computeRunAnalytics.js";
 
 // Pure logic, no DB/Playwright -- mirrors how computeRunAnalytics.test.mjs-
 // style files test the math in isolation from I/O.
@@ -342,6 +342,16 @@ test("PDF HTML: a single-location report has no section rows", () => {
   assert.ok(html.includes(">Google.ae<"));
 });
 
+test("PDF HTML: the logo background is transparent", () => {
+  const html = buildClientReportHtml({
+    clientName: "Twin Crown",
+    currentRunDate: new Date("2026-09-15T00:00:00Z"),
+    previousRunDate: new Date("2026-08-31T00:00:00Z"),
+    analytics: twinCrownAnalytics(),
+  });
+  assert.match(html, /\.brand-logo-chip \{ background: transparent;/);
+});
+
 // Regression: the orange header rows were printed again at the top of every
 // page (Chromium repeats a table-header-group); the agency's reference
 // reports show them once, on page 1 only.
@@ -397,4 +407,47 @@ test("buildRowsAndSummary: with sourceOrder, lost keywords lead the Not-in-100 t
     "mid lost keyword",
     "zebra lost keyword",
   ]);
+});
+
+// Audit 2026-10-27: a keyword with NO rank data (its check failed, or a blank/unreadable baseline cell) was
+// treated as "Not in 100" -- so the client saw "↓ Lost" when the check had only failed, and "↑ New" (green,
+// counted as entering the top 100) for a blank previous cell or an unranked new keyword.
+test("missing rank data: never '↓ Lost' / '↑ New' -- shown as 'No data' and counted nowhere", () => {
+  const row = (rowUid: string, rankValue: number | null, rankDisplay: string | null): RankRow => ({ keyword: rowUid, rowUid, rankValue, rankDisplay });
+  const previous = [row("failed-now", 12, "12"), row("blank-before", null, null), row("really-lost", 30, "30"), row("really-entered", null, "Not in 100")];
+  const current = [
+    row("failed-now", null, null), // the check failed this time
+    row("blank-before", 8, "8"), // the baseline cell was blank
+    row("really-lost", null, "Not in 100"),
+    row("really-entered", 40, "40"),
+    row("new-unranked", null, "Not in 100"), // newly tracked, not ranked
+    row("new-ranked", 5, "5"),
+    row("new-failed", null, null), // newly tracked, check failed
+  ];
+  const movements = computeMovements(current, previous);
+  const { rows, summary } = buildRowsAndSummary(analytics(movements));
+  const by = Object.fromEntries(rows.map((r) => [r.keyword, r]));
+
+  assert.deepEqual([by["failed-now"].previousRankLabel, by["failed-now"].currentRankLabel, by["failed-now"].movementLabel], ["12", "No data", "No data"]);
+  assert.deepEqual([by["blank-before"].previousRankLabel, by["blank-before"].currentRankLabel, by["blank-before"].movementLabel], ["No data", "8", "No data"]);
+  assert.equal(by["really-lost"].movementLabel, "↓ Lost", "a confirmed Not in 100 is still a real loss");
+  assert.equal(by["really-entered"].movementLabel, "↑ New", "a confirmed entry is still a real entry");
+  assert.equal(by["new-unranked"].movementLabel, "New");
+  assert.equal(by["new-unranked"].kind, "unchanged", "grey, not green");
+  assert.equal(by["new-ranked"].movementLabel, "↑ New");
+  assert.deepEqual([by["new-failed"].currentRankLabel, by["new-failed"].movementLabel], ["No data", "No data"]);
+
+  assert.equal(summary.droppedOutOfTop100, 1, "only the real loss");
+  assert.equal(summary.enteredTop100, 2, "only keywords that really rank now (really-entered, new-ranked)");
+  assert.equal(summary.improved + summary.dropped, 0);
+  assert.deepEqual(rows.slice(-2).map((r) => r.keyword).sort(), ["failed-now", "new-failed"], "no-data rows come last, after the Not in 100 tail");
+});
+
+test("missing rank data on a first-ever report (no comparison): 'No data', not 'Not in 100'", () => {
+  const { rows } = buildRowsAndSummary(noComparisonAnalytics([
+    { keyword: "ok", rowUid: "ok", currentRank: 3 },
+    { keyword: "not ranked", rowUid: "nr", currentRank: null },
+    { keyword: "failed", rowUid: "f", currentRank: null, noData: true },
+  ]));
+  assert.deepEqual(rows.map((r) => [r.keyword, r.currentRankLabel]), [["ok", "3"], ["not ranked", "Not in 100"], ["failed", "No data"]]);
 });

@@ -92,6 +92,11 @@ test("extra PDFs: upload several, names kept and made unique, sent TOGETHER WITH
   }
 });
 
+/** Where the extra PDFs are really stored (API responses leave the path out since 2026-10-27). */
+async function storedAttachments(reportId: string) {
+  return (await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId } })).extraAttachments as unknown as { id: string; path: string }[];
+}
+
 test("extra PDFs: non-PDFs and too many files are refused; remove deletes the file", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const { client, report } = await setup();
@@ -107,7 +112,8 @@ test("extra PDFs: non-PDFs and too many files are refused; remove deletes the fi
     assert.match(tooMany.body.error, /at most 5/i);
 
     const up = await authedApp(app).post(`/api/reports/${report.id}/extra-attachments`).attach("files", PDF("a"), "a.pdf").attach("files", PDF("b"), "b.pdf");
-    const [first, second] = up.body.extraAttachments as { id: string; path: string }[];
+    assert.equal(up.body.extraAttachments[0].path, undefined, "where the file is stored never reaches the browser");
+    const [first, second] = await storedAttachments(report.id);
     const del = await authedApp(app).delete(`/api/reports/${report.id}/extra-attachments/${first.id}`);
     assert.equal(del.status, 200);
     assert.deepEqual(del.body.extraAttachments.map((a: { id: string }) => a.id), [second.id]);
@@ -125,7 +131,8 @@ test("extra PDFs: a file missing at send time fails the send instead of sending 
   const { client, report } = await setup();
   try {
     const up = await authedApp(app).post(`/api/reports/${report.id}/extra-attachments`).attach("files", PDF("ga"), "GA.pdf");
-    await unlink(up.body.extraAttachments[0].path);
+    assert.equal(up.status, 200);
+    await unlink((await storedAttachments(report.id))[0].path);
     const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
     assert.equal(res.body.outcome, "SEND_FAILED");
     assert.match(res.body.errorMessage, /"GA\.pdf" is missing/);
@@ -153,7 +160,8 @@ test("deleting a run (Runs page) also deletes its report's extra PDFs from disk"
   const { client, run, report } = await setup();
   try {
     const up = await authedApp(app).post(`/api/reports/${report.id}/extra-attachments`).attach("files", PDF("ga"), "GA.pdf");
-    const stored = up.body.extraAttachments[0].path as string;
+    assert.equal(up.status, 200);
+    const stored = (await storedAttachments(report.id))[0].path;
     await access(stored);
     assert.equal((await authedApp(app).delete(`/api/runs/${run.id}`)).status, 204);
     await assert.rejects(access(stored), "extra PDF deleted with the run");

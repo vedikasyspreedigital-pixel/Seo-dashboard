@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import { prisma } from "../backend/db/client.js";
 import { ingestExcelRun } from "../backend/runs/ingestExcelRun.js";
-import { processVerifiedExcelUpload, regenerateReport } from "../backend/reporting/processVerifiedExcelUpload.js";
+import { processVerifiedExcelUpload, promoteMissingBaselines, regenerateReport } from "../backend/reporting/processVerifiedExcelUpload.js";
 import { formatOrdinalDate } from "../backend/reporting/formatOrdinalDate.js";
 import { buildRowsAndSummary, groupRowsByLocation } from "../backend/reporting/generateClientReportPdf.js";
 import { loadRowLocations } from "../backend/reporting/buildReport.js";
@@ -256,6 +256,60 @@ test("processVerifiedExcelUpload: rejects a verified Excel that doesn't match th
   }
 });
 
+// Audit 2026-10-27: unreadable rows (a mistyped Status, an empty required cell) were skipped without a word
+// -- that keyword silently kept its old rank -- and ranks like 0 or 150 were saved (0 counted as top 3).
+test("processVerifiedExcelUpload: rows that can't be used are refused with row numbers, and nothing is written", async () => {
+  const client = await makeClient();
+  try {
+    const rows: RowSpec[] = [
+      { keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" },
+      { keyword: "car removal perth", targetUrl: "/perth", rank: "20" },
+      { keyword: "scrap cars", targetUrl: "/scrap", rank: "30" },
+      { keyword: "cash for cars", targetUrl: "/cash", rank: "40" },
+    ];
+    const run = await makeCompletedRun(client.id, rows);
+    const bad = await buildWorkbookBuffer([
+      { ...rows[0], rank: "0" },
+      { ...rows[1], status: "Complete" }, // typo in Status
+      { ...rows[2], rank: "150" },
+      { ...rows[3], rank: "4" },
+      { ...rows[3], rank: "5" }, // same keyword twice
+    ]);
+
+    const result = await processVerifiedExcelUpload(run.id, bad, "verified.xlsx", null);
+    assert.equal(result.outcome, "INVALID_ROWS");
+    if (result.outcome !== "INVALID_ROWS") return;
+    assert.equal(result.problems.length, 4, result.problems.join("\n"));
+    assert.match(result.problems.join("\n"), /Row 3: Unrecognized Status value: "Complete"/);
+    assert.match(result.problems.join("\n"), /Row 2 \("car wreckers mandurah"\): rank 0/);
+    assert.match(result.problems.join("\n"), /Row 4 \("scrap cars"\): rank 150/);
+    assert.match(result.problems.join("\n"), /Row 6 \("cash for cars"\): this keyword is already on row 5/);
+
+    const stored = await prisma.rankingRow.findMany({ where: { runId: run.id }, orderBy: { keyword: "asc" } });
+    assert.deepEqual(stored.map((r) => r.rankValue).sort(), [12, 20, 30, 40].sort(), "the run's ranks are untouched");
+    assert.equal(await prisma.rankingReport.count({ where: { runId: run.id } }), 0, "no report built");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("processVerifiedExcelUpload: 'Not in 100', an empty rank and 1-100 are all accepted", async () => {
+  const client = await makeClient();
+  try {
+    const rows: RowSpec[] = [
+      { keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "1" },
+      { keyword: "car removal perth", targetUrl: "/perth", rank: "100" },
+      { keyword: "scrap cars", targetUrl: "/scrap", rank: "Not in 100" },
+      { keyword: "cash for cars", targetUrl: "/cash", status: "Error - Retry" },
+    ];
+    const run = await makeCompletedRun(client.id, rows);
+    const result = await processVerifiedExcelUpload(run.id, await buildWorkbookBuffer(rows), "verified.xlsx", null);
+    assert.equal(result.outcome, "SUCCESS", JSON.stringify(result));
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
 // -- Repeatable report generation ------------------------------------------
 // Upload -> review -> fix -> upload again (or Regenerate) -> ... until sent.
 
@@ -498,6 +552,65 @@ test("approveAndSend: a verified report becomes the client's baseline only after
     assert.equal(baselines.length, 1);
     assert.equal(baselines[0].sourceFilename, "verified-v2.xlsx");
     assert.equal(baselines[0].rows[0].rankDisplay, "10", "the baseline holds exactly the ranks that were sent");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+// Audit 2026-10-27 (M5): an upload racing a send could change the ranks after the old PDF went out, so the
+// baseline saved after the send no longer matched what the client got. Whatever the timing: if the email
+// went out, the upload changed nothing; if the upload went through, nothing was sent.
+test("verified upload vs Approve & Send at the same moment: never 'sent the old PDF but saved the new ranks'", async () => {
+  for (let i = 0; i < 4; i++) {
+    const client = await makeClient();
+    try {
+      const run = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+      const first = await processVerifiedExcelUpload(run.id, await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]), "v1.xlsx", null);
+      assert.equal(first.outcome, "SUCCESS");
+      if (first.outcome !== "SUCCESS") return;
+      await prisma.rankingReport.update({ where: { id: first.report.id }, data: { resolvedRecipients: ["client@example.com"] } });
+
+      const [upload, send] = await Promise.all([
+        processVerifiedExcelUpload(run.id, await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "3" }]), "v2.xlsx", null),
+        approveAndSendReport(first.report.id, { approvedBy: "qa@example.com", sendEmail: createMockEmailSender() }),
+      ]);
+      const rank = (await prisma.rankingRow.findFirstOrThrow({ where: { runId: run.id } })).rankDisplay;
+      if (send.outcome === "SENT") {
+        assert.notEqual(upload.outcome, "SUCCESS", `round ${i}: sent, so the upload must have been refused`);
+        assert.equal(rank, "12", `round ${i}: the ranks are the ones that were sent`);
+        const baseline = await prisma.rankingBaseline.findFirst({ where: { sourceRunId: run.id }, include: { rows: true } });
+        assert.equal(baseline?.rows[0].rankDisplay, "12", `round ${i}: the baseline matches the email`);
+      } else {
+        assert.equal(upload.outcome, "SUCCESS", `round ${i}: not sent, so the upload went through`);
+        assert.equal(rank, "3");
+      }
+    } finally {
+      await cleanup(client.id);
+    }
+  }
+});
+
+// Audit 2026-10-27 (M4): a failed baseline save after a send was only logged -- the next report quietly
+// compared against an older baseline. promoteMissingBaselines (server start + hourly) puts it right.
+test("promoteMissingBaselines: a sent report without its baseline gets it -- once, with the ranks that were sent", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+    const result = await processVerifiedExcelUpload(run.id, await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "9" }]), "verified.xlsx", null);
+    assert.equal(result.outcome, "SUCCESS");
+    if (result.outcome !== "SUCCESS") return;
+    assert.equal((await sendReport(result.report.id)).outcome, "SENT");
+    // As if saving the baseline had failed right after the send:
+    const own = await prisma.rankingBaseline.findMany({ where: { clientId: client.id } });
+    for (const b of own) await prisma.rankingBaselineRow.deleteMany({ where: { baselineId: b.id } });
+    await prisma.rankingBaseline.deleteMany({ where: { clientId: client.id } });
+
+    await promoteMissingBaselines();
+    await promoteMissingBaselines(); // again: no second baseline
+    const baselines = await prisma.rankingBaseline.findMany({ where: { clientId: client.id }, include: { rows: true } });
+    assert.equal(baselines.length, 1);
+    assert.equal(baselines[0].sourceRunId, run.id);
+    assert.equal(baselines[0].rows[0].rankDisplay, "9");
   } finally {
     await cleanup(client.id);
   }

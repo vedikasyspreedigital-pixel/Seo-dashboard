@@ -190,3 +190,19 @@ test("a plain (non-hyperlinked) rich-text cell is also read as its real text", a
   assert.equal(rowErrors.length, 0);
   assert.equal(rows[0].languageName, "English");
 });
+
+// Audit 2026-10-27: an Excel error value (#N/A from a broken formula) became the keyword "[object Object]"
+// and was sent to -- and billed by -- DataForSEO. It's an empty cell now, so the row is reported instead.
+test("an error cell (#N/A, also as a formula result) is empty, never the keyword \"[object Object]\"", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Sheet1");
+  sheet.addRow(Object.values(COLUMN_HEADERS));
+  const base = ["https://example.com/", "*example.*", "x", "Australia", "google.com.au", "English", "Pending", "", ""];
+  sheet.addRow(["good keyword", ...base]);
+  sheet.addRow([{ error: "#N/A" }, ...base]);
+  sheet.addRow([{ formula: "VLOOKUP(A1,B:B,1,0)", result: { error: "#N/A" } }, ...base]);
+  const { rows, rowErrors } = await parseRankingExcel(await workbook.xlsx.writeBuffer(), { clientId: CLIENT_ID });
+  assert.deepEqual(rows.map((r) => r.keyword), ["good keyword"]);
+  assert.equal(rowErrors.length, 2);
+  for (const e of rowErrors) assert.match(e.reason, /Missing required value\(s\): Keyword/);
+});

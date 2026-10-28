@@ -52,7 +52,7 @@
 //      components with two different class names.
 
 import { chromium, type Browser, type Page, type Locator } from "playwright";
-import { writeFile, rm, readdir, stat } from "node:fs/promises";
+import { writeFile, rm, readdir, stat, mkdtemp } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -140,6 +140,20 @@ function readContainerResourceLimits(): string {
 }
 
 /**
+ * Only https://app.clickup.com/... links. The send opens this URL in a browser signed in to ClickUp and
+ * types the client's recipients and attaches its files there; any other address (an internal one, or a
+ * look-alike page) was accepted before the 2026-10-27 audit.
+ */
+export function isClickUpTaskUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" && url.hostname === "app.clickup.com" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Pure and independently testable: which session file a send for
  * `workspaceSlug` should use. A workspace with its own entry in
  * `sessionStatePathByWorkspace` gets its own ClickUp login; anything else
@@ -169,6 +183,11 @@ export function createClickUpEmailSender({
       throw new Error(
         "No ClickUp task resolved for this report -- set clickupTaskUrl on the client's ClientReportConfig (or fill in the ClickUp Task field on the draft) before approving.",
       );
+    }
+    // The server's browser (signed in to ClickUp) opens this URL and types the recipients and attaches the
+    // client's files there -- so only ever ClickUp itself, never an internal address or a look-alike page.
+    if (!isClickUpTaskUrl(params.clickupTaskUrl)) {
+      throw new Error(`The ClickUp task link must be an https://app.clickup.com/... address (got "${params.clickupTaskUrl.slice(0, 120)}").`);
     }
     if (params.to.length === 0) {
       throw new Error("No recipients to send to.");
@@ -219,6 +238,14 @@ export function createClickUpEmailSender({
       // exact same "Target crashed" noise instead of new information.
       let pageCrashedThisAttempt = false;
       const tempAttachmentPaths: string[] = [];
+      // One private folder per attempt: two reports sent at the same time can share a file name
+      // (e.g. the same GA export name), and the shared temp folder let one send attach -- or delete --
+      // the other client's file (audit 2026-10-27).
+      let tempDir: string | undefined;
+      const tempPath = async (name: string) => {
+        tempDir ??= await mkdtemp(path.join(os.tmpdir(), "clickup-send-"));
+        return path.join(tempDir, path.basename(name));
+      };
 
       try {
         // --disable-dev-shm-usage: Docker containers (Railway included) default
@@ -413,15 +440,14 @@ export function createClickUpEmailSender({
         // included in the thrown error so a human has an exact, unambiguous
         // reference to go check in ClickUp, even though the automated check
         // itself doesn't need to resolve identity perfectly to do its job.
-        const existingSubjectMatch = page.getByText(params.subject, { exact: true }).first();
-        const alreadySent = await existingSubjectMatch.isVisible().catch(() => false);
-        if (alreadySent) {
-          const existingCommentId = await existingSubjectMatch
-            .evaluate((el) => el.closest("[data-comment-id]")?.getAttribute("data-comment-id") ?? null)
-            .catch(() => null);
+        //
+        // Only POSTED history entries count (postedEntryIdsWithSubject) -- a draft
+        // ClickUp kept in the composer with this subject is not "already sent".
+        const existingCommentIds = await page.evaluate(postedEntryIdsWithSubject, { subject: params.subject, exact: true }).catch(() => [] as string[]);
+        if (existingCommentIds.length > 0) {
           throw new Error(
             `An email with this exact subject ("${params.subject}") already appears in this task's history` +
-              (existingCommentId ? ` (ClickUp comment id ${existingCommentId})` : "") +
+              ` (ClickUp comment id ${existingCommentIds[0]})` +
               ` -- refusing to send again automatically. Verify in ClickUp whether this report was already delivered before retrying.`,
           );
         }
@@ -500,19 +526,19 @@ export function createClickUpEmailSender({
         if (!bodyFilled) throw new Error('Could not find/fill the body field (.ql-editor[contenteditable="true"] inside composerRoot).');
 
         if (params.attachmentHtml) {
-          const htmlPath = path.join(os.tmpdir(), params.attachmentFilename ?? `report-${Date.now()}.html`);
+          const htmlPath = await tempPath(params.attachmentFilename ?? `report-${Date.now()}.html`);
           await writeFile(htmlPath, params.attachmentHtml, "utf8");
           tempAttachmentPaths.push(htmlPath);
         }
         if (params.excelPdfBuffer) {
-          const pdfPath = path.join(os.tmpdir(), params.excelPdfFilename ?? `ranking-export-${Date.now()}.pdf`);
+          const pdfPath = await tempPath(params.excelPdfFilename ?? `ranking-export-${Date.now()}.pdf`);
           await writeFile(pdfPath, params.excelPdfBuffer);
           tempAttachmentPaths.push(pdfPath);
         }
         // Extra PDFs (e.g. Google Analytics reports), each under its own
         // name -- the upload check below matches files by name.
         for (const extra of params.extraAttachments ?? []) {
-          const extraPath = path.join(os.tmpdir(), extra.filename);
+          const extraPath = await tempPath(extra.filename);
           await writeFile(extraPath, extra.buffer);
           tempAttachmentPaths.push(extraPath);
         }
@@ -595,20 +621,35 @@ export function createClickUpEmailSender({
         // died, so treating it as "maybe sent" (no automatic retry) is the
         // only safe assumption. A human retry is still safe either way, via
         // the subject-based duplicate guard above.
+        // Which history entries exist BEFORE Send: success is a NEW one, so an
+        // older email whose subject contains this one ("... (Updated 2)") never
+        // confirms this send.
+        const entriesBeforeSend = new Set(await page.evaluate(allPostedEntryIds).catch(() => [] as string[]));
         sendClicked = true;
         await sendButton.click();
         await page.waitForTimeout(3000);
 
         // Clicking Send is never treated as success on its own -- verify the
-        // email actually landed in the task's activity/history first.
-        const verified = await page
-          .getByText(params.subject, { exact: false })
-          .first()
-          .waitFor({ state: "visible", timeout: 45000 })
-          .then(() => true)
-          .catch(() => false);
+        // email actually landed in the task's activity/history first: a NEW
+        // posted entry with the subject, never the composer still holding it.
+        let verified = false;
+        for (const end = Date.now() + 45000; !verified && Date.now() < end; ) {
+          const ids = await page.evaluate(postedEntryIdsWithSubject, { subject: params.subject, exact: false }).catch(() => [] as string[]);
+          verified = ids.some((id) => !entriesBeforeSend.has(id));
+          if (!verified) await page.waitForTimeout(1500);
+        }
         if (!verified) {
-          throw new Error("Send was clicked but the email could not be confirmed in the task's activity/history -- treating this as a failed send.");
+          const stillInComposer = await composerRoot
+            .locator('[data-test="email-communicators__subject"]')
+            .first()
+            .inputValue()
+            .then((v) => v.trim() === params.subject.trim())
+            .catch(() => false);
+          throw new Error(
+            stillInComposer
+              ? "Send was clicked but ClickUp didn't send the email (it's still in the composer) -- nothing was sent."
+              : "Send was clicked but the email could not be confirmed in the task's history -- it MAY have been sent. Check the ClickUp task before retrying (a retry refuses to send if it's there).",
+          );
         }
 
         // No follow-up "Report emailed to ... at ..." audit comment is
@@ -653,6 +694,7 @@ export function createClickUpEmailSender({
         }
       } finally {
         await Promise.all(tempAttachmentPaths.map((p) => rm(p, { force: true }).catch(() => {})));
+        if (tempDir) await rm(tempDir, { recursive: true, force: true }).catch(() => {});
         // Logged explicitly (not just swallowed) so a hang or failure IN
         // close() itself -- e.g. the browser process wedged after its
         // renderer crashed -- is visible rather than silently absorbed,
@@ -846,6 +888,47 @@ export async function getComposerBarRoot(page: Page, timeoutMs = 8000): Promise<
   }, marker);
   if (!found) return null;
   return page.locator(`[${marker}]`).first();
+}
+
+/**
+ * Runs IN the page: the data-comment-ids of POSTED task-history entries whose text has `subject` --
+ * `exact` = some element's whole text is the subject (the duplicate guard), else the entry's text
+ * contains it. Text in the composer, any editable box or any input never counts: the old check matched
+ * the subject anywhere on the page, so an email that never went out could be reported as sent
+ * (audit 2026-10-27; the same bug the comment poster had on 2026-10-26).
+ * Self-contained on purpose (no helpers, no named inner functions) -- it is shipped into the browser.
+ */
+export function postedEntryIdsWithSubject(args: { subject: string; exact: boolean }): string[] {
+  const doc = (globalThis as any).document;
+  const want = args.subject.replace(/\s+/g, " ").trim();
+  const ids: string[] = [];
+  if (!want) return ids;
+  for (const entry of doc.querySelectorAll("[data-comment-id]")) {
+    if (entry.closest("[data-clickup-agent-composer-root]")) continue;
+    if (entry.querySelector('[data-clickup-agent-composer-root], [data-test="comment-bar__send-btn"]')) continue;
+    const clone = entry.cloneNode(true);
+    for (const editable of clone.querySelectorAll('[contenteditable="true"], input, textarea')) editable.remove();
+    let hit = false;
+    if (args.exact) {
+      for (const el of [clone, ...clone.querySelectorAll("*")]) {
+        if ((el.textContent || "").replace(/\s+/g, " ").trim() === want) {
+          hit = true;
+          break;
+        }
+      }
+    } else {
+      hit = (clone.textContent || "").replace(/\s+/g, " ").includes(want);
+    }
+    const id = entry.getAttribute("data-comment-id");
+    if (hit && id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/** Runs IN the page: every data-comment-id in the task history right now (the "before Send" snapshot). */
+export function allPostedEntryIds(): string[] {
+  const doc = (globalThis as any).document;
+  return [...doc.querySelectorAll("[data-comment-id]")].map((e: any) => e.getAttribute("data-comment-id")).filter(Boolean);
 }
 
 async function getComposerRoot(page: Page, timeoutMs = 8000): Promise<Locator | null> {

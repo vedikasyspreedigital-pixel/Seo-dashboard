@@ -135,5 +135,14 @@ export async function setEmailVariant(reportId: string, variant: "regular" | "ga
 
 export async function regenerateEmailDraft(reportId: string): Promise<GenerateEmailDraftResult> {
   await regenerateEmailDraftFromApproval(reportId);
-  return generateEmailDraft(reportId);
+  // Recipients go back to the client's settings (this is "reset"), but a corrected report keeps its
+  // "(Updated)": without it the subject matched the email already sent, and ClickUp's same-subject check
+  // refused the send (audit 2026-10-27).
+  return generateEmailDraft(reportId, { subjectSuffix: await resendSubjectSuffix(reportId) });
+}
+
+/** " (Updated)", " (Updated 2)", ... for a report that already went out; nothing for a first send. */
+export async function resendSubjectSuffix(reportId: string): Promise<string | undefined> {
+  const previousSends = await prisma.reportSend.count({ where: { reportId } });
+  return previousSends === 0 ? undefined : previousSends === 1 ? " (Updated)" : ` (Updated ${previousSends})`;
 }

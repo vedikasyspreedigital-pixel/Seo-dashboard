@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { getMe, login as apiLogin, logout as apiLogout } from '../api/client';
+import { getMe, login as apiLogin, logout as apiLogout, SESSION_EXPIRED_EVENT } from '../api/client';
 import { readStoredWorkspaceId, writeStoredWorkspaceId, clearStoredWorkspaceId, resolveActiveWorkspaceId } from '../utils/workspaceSelection';
 import type { UserRecord, WorkspaceRecord } from '../api/types';
 
@@ -70,6 +70,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
+  }, []);
+
+  // The login ran out while the app was open (a request answered 401): forget it, so RequireAuth sends
+  // the user to the sign-in page instead of every page failing with "Not authenticated".
+  useEffect(() => {
+    const expired = () => {
+      setUser(null);
+      setWorkspaces([]);
+      setActiveWorkspaceIdState(null);
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, expired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expired);
   }, []);
 
   async function login(email: string, password: string) {

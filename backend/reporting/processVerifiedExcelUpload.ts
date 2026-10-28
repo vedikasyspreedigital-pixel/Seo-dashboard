@@ -4,17 +4,19 @@ import { prisma } from "../db/client.js";
 import { parseRankingExcel } from "../excel/parser.js";
 import { REPORTABLE_RUN_STATUSES, createReportForRun } from "./createReport.js";
 import { buildReport } from "./buildReport.js";
-import { generateEmailDraft } from "./generateEmailDraft.js";
+import { generateEmailDraft, resendSubjectSuffix } from "./generateEmailDraft.js";
 import { computeRunAnalytics } from "./computeRunAnalytics.js";
 import { compareRunToBaseline } from "../baselines/compareRunToBaseline.js";
 import { upsertRunBaseline } from "../baselines/createBaselineFromRows.js";
 import { selectPreviousBaseline } from "../baselines/selectPreviousBaseline.js";
 import { REGENERABLE_REPORT_STATUSES, resetReportForRegeneration } from "./reportTransitions.js";
+import { InvalidReportTransitionError } from "./errors.js";
 
 // parser.js is untyped JS (its JSDoc return type is a bare `object[]`) --
 // this is the actual row shape it produces (see parseRankingExcel), used
 // here to get real property access instead of `object`.
 interface ParsedRankingRow {
+  sourceRowNumber: number;
   rowUid: string;
   keyword: string;
   status: string;
@@ -53,7 +55,27 @@ export type ProcessVerifiedExcelUploadResult =
   | { outcome: "RUN_NOT_COMPLETED" }
   | { outcome: "DUPLICATE_REPORT"; existingReportId: string }
   | { outcome: "NO_ROWS_PARSED" }
-  | { outcome: "UNMATCHED_ROWS"; unmatchedKeywords: string[] };
+  | { outcome: "UNMATCHED_ROWS"; unmatchedKeywords: string[] }
+  | { outcome: "INVALID_ROWS"; problems: string[] };
+
+/**
+ * Why rows of a verified Excel can't be used, one line each (row number, keyword, reason): rows the parser
+ * couldn't read (a wrong Status, an empty required cell), ranks that aren't a position 1-100 (a 0 even
+ * counted as top 3), and the same keyword twice (whichever saved last won).
+ */
+export function verifiedRowProblems(rows: ParsedRankingRow[], rowErrors: { sourceRowNumber: number; reason: string }[]): string[] {
+  const problems = rowErrors.map((e) => `Row ${e.sourceRowNumber}: ${e.reason}`);
+  const firstRowOf = new Map<string, number>();
+  for (const row of rows) {
+    if (row.rankValue !== null && !(row.rankValue >= 1 && row.rankValue <= 100)) {
+      problems.push(`Row ${row.sourceRowNumber} ("${row.keyword}"): rank ${row.rankValue} -- must be 1 to 100, "Not in 100", or empty`);
+    }
+    const first = firstRowOf.get(row.rowUid);
+    if (first !== undefined) problems.push(`Row ${row.sourceRowNumber} ("${row.keyword}"): this keyword is already on row ${first}`);
+    else firstRowOf.set(row.rowUid, row.sourceRowNumber);
+  }
+  return problems;
+}
 
 export type RegenerateReportResult =
   | ReportGenerationSuccess
@@ -107,8 +129,12 @@ export async function processVerifiedExcelUpload(
     if (block) return block;
   }
 
-  const { rows: parsedRowsRaw } = await parseRankingExcel(fileBuffer, { clientId: run.clientId });
+  const { rows: parsedRowsRaw, rowErrors } = await parseRankingExcel(fileBuffer, { clientId: run.clientId });
   const parsedRows = parsedRowsRaw as unknown as ParsedRankingRow[];
+  // Rows that can't be used are refused, not skipped: a skipped row silently kept its old rank in the
+  // client's report (audit 2026-10-27). Nothing is written when any row has a problem.
+  const problems = verifiedRowProblems(parsedRows, rowErrors as { sourceRowNumber: number; reason: string }[]);
+  if (problems.length > 0) return { outcome: "INVALID_ROWS", problems };
   if (parsedRows.length === 0) return { outcome: "NO_ROWS_PARSED" };
 
   const existingRows = await prisma.rankingRow.findMany({
@@ -135,19 +161,31 @@ export async function processVerifiedExcelUpload(
     );
   }).length;
 
-  await Promise.all(
-    parsedRows.map((row) =>
-      prisma.rankingRow.updateMany({
-        where: { runId, rowUid: row.rowUid },
-        data: {
-          status: row.status as RowStatus,
-          rankValue: row.rankValue,
-          rankDisplay: row.rankDisplay,
-          rankingUrl: row.rankingUrl,
-        },
-      }),
-    ),
+  // All rows or none (a failure halfway used to leave the run partly updated) -- and the report is claimed
+  // in the SAME step: taken out of "Approved" before any rank changes, so a send can't start in between.
+  // A send that slipped in after the check above used to send the OLD PDF while the client's new baseline
+  // was then saved from the NEW ranks (audit 2026-10-27). If it's already being sent, nothing is written.
+  const claimable = options.confirmResend ? [...REGENERABLE_REPORT_STATUSES, ReportStatus.SENT] : REGENERABLE_REPORT_STATUSES;
+  const claimed = await prisma.$transaction(
+    async (tx) => {
+      if (existingReport) {
+        const { count } = await tx.rankingReport.updateMany({
+          where: { id: existingReport.id, status: { in: claimable } },
+          data: { status: ReportStatus.PENDING_ANALYSIS, approvedBy: null, approvedAt: null },
+        });
+        if (count === 0) return false;
+      }
+      for (const row of parsedRows) {
+        await tx.rankingRow.updateMany({
+          where: { runId, rowUid: row.rowUid },
+          data: { status: row.status as RowStatus, rankValue: row.rankValue, rankDisplay: row.rankDisplay, rankingUrl: row.rankingUrl },
+        });
+      }
+      return true;
+    },
+    { timeout: 60_000 },
   );
+  if (!claimed) return { outcome: "REPORT_LOCKED", reason: "SENDING", existingReportId: existingReport!.id };
 
   return generateReportForRun(run, existingReport, { verifiedFilename: sourceFilename, rowsChanged });
 }
@@ -206,6 +244,29 @@ export async function promoteSentReportToBaseline(reportId: string, createdBy: s
   });
 }
 
+/**
+ * A sent verified report whose baseline save failed (approveAndSend only logs that) was never noticed --
+ * the next report silently compared against an older baseline (audit 2026-10-27). This finds every such
+ * report and saves its baseline now; safe to repeat (promoteSentReportToBaseline replaces, never adds).
+ * Run at server start and every hour.
+ */
+export async function promoteMissingBaselines(): Promise<number> {
+  const missing = await prisma.rankingReport.findMany({
+    where: { status: ReportStatus.SENT, verifiedFilename: { not: null }, run: { producedBaselines: { none: {} } } },
+    select: { id: true, approvedBy: true },
+  });
+  let saved = 0;
+  for (const r of missing) {
+    const ok = await promoteSentReportToBaseline(r.id, r.approvedBy).then(
+      (b) => !!b,
+      (err) => (console.error(`[reports] saving the baseline of sent report ${r.id} failed again:`, err), false),
+    );
+    if (ok) saved++;
+  }
+  if (saved > 0) console.warn(`[reports] saved the missing baseline of ${saved} sent report(s)`);
+  return saved;
+}
+
 async function findRegenerationBlock(report: FullReport, runId: string, confirmResend: boolean): Promise<RegenerationBlock | null> {
   if (report.status === ReportStatus.SENDING) return { outcome: "REPORT_LOCKED", reason: "SENDING", existingReportId: report.id };
   if (report.status !== ReportStatus.SENT && !REGENERABLE_REPORT_STATUSES.includes(report.status)) {
@@ -236,7 +297,13 @@ async function generateReportForRun(
   run: RankingRun,
   existingReport: FullReport | null,
   { verifiedFilename, rowsChanged }: { verifiedFilename: string | null; rowsChanged: number | null },
-): Promise<ReportGenerationSuccess | { outcome: "DUPLICATE_REPORT"; existingReportId: string } | { outcome: "RUN_NOT_FOUND" } | { outcome: "RUN_NOT_COMPLETED" }> {
+): Promise<
+  | ReportGenerationSuccess
+  | { outcome: "DUPLICATE_REPORT"; existingReportId: string }
+  | { outcome: "RUN_NOT_FOUND" }
+  | { outcome: "RUN_NOT_COMPLETED" }
+  | Extract<RegenerationBlock, { outcome: "REPORT_LOCKED" }>
+> {
   // The comparison source is chosen ONCE, on the run's first upload, and then
   // pinned on the report: every later re-upload/regenerate compares against
   // exactly the same baseline (or the same prior run, for an old wizard
@@ -254,11 +321,17 @@ async function generateReportForRun(
     const analytics = previousBaselineId
       ? await compareRunToBaseline(run.id, previousBaselineId)
       : await computeRunAnalytics(run.id, existingReport.previousRunId ?? undefined);
-    await resetReportForRegeneration(existingReport.id, {
-      analyticsJson: analytics as unknown as Prisma.InputJsonValue,
-      previousBaselineId,
-      previousRunId: existingReport.previousRunId,
-    });
+    try {
+      await resetReportForRegeneration(existingReport.id, {
+        analyticsJson: analytics as unknown as Prisma.InputJsonValue,
+        previousBaselineId,
+        previousRunId: existingReport.previousRunId,
+      });
+    } catch (err) {
+      // The report started sending after the check above: the same "locked" answer, not a 500 (audit 2026-10-27).
+      if (err instanceof InvalidReportTransitionError) return { outcome: "REPORT_LOCKED", reason: "SENDING", existingReportId: existingReport.id };
+      throw err;
+    }
     reportId = existingReport.id;
   }
   if (verifiedFilename) {
@@ -269,7 +342,6 @@ async function generateReportForRun(
   // A report that has already gone out gets "(Updated)" -- "(Updated 2)" on
   // the next correction, and so on -- so the client sees it's a correction,
   // and ClickUp's same-subject duplicate guard still protects every send.
-  const previousSends = await prisma.reportSend.count({ where: { reportId } });
   await generateEmailDraft(reportId, {
     ...(existingReport && Array.isArray(existingReport.resolvedRecipients)
       ? {
@@ -280,7 +352,7 @@ async function generateReportForRun(
           },
         }
       : {}),
-    subjectSuffix: previousSends === 0 ? undefined : previousSends === 1 ? " (Updated)" : ` (Updated ${previousSends})`,
+    subjectSuffix: await resendSubjectSuffix(reportId),
   });
 
   // No baseline is created here -- see promoteSentReportToBaseline.

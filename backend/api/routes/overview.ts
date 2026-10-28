@@ -57,7 +57,16 @@ overviewRouter.get("/", async (req, res) => {
   // client when clientId is given.
   const clientScope = { workspaceId, isTestData: false, ...(typeof clientId === "string" ? { id: clientId } : {}) } as const;
 
-  const [totalClients, totalRuns, totalSuccessfulRuns, recentRunsRaw, allReports] = await Promise.all([
+  // The movement counts are worked out IN the database: every report's whole analysis (all keywords) used
+  // to be loaded on each visit just to count its arrows, so the page got slower with every report ever
+  // made (audit 2026-10-27). Same numbers, same chart -- only the counts come back.
+  const clientFilter = typeof clientId === "string" ? Prisma.sql`AND c.id = ${clientId}` : Prisma.empty;
+  const moved = (kind: string) =>
+    Prisma.sql`COALESCE(CASE WHEN jsonb_typeof(r.analytics_json->'movements'->${kind}) = 'array' THEN jsonb_array_length(r.analytics_json->'movements'->${kind}) END, 0)`;
+  const reportScope = Prisma.sql`FROM ranking_reports r JOIN clients c ON c.id = r.client_id
+    WHERE r.analytics_json IS NOT NULL AND c.workspace_id = ${workspaceId} AND c.is_test_data = false ${clientFilter}`;
+
+  const [totalClients, totalRuns, totalSuccessfulRuns, recentRunsRaw, latestReports, dailyRows] = await Promise.all([
     prisma.client.count({ where: { isActive: true, workspaceId, isTestData: false } }), // deliberately always workspace-wide -- "how many clients total" doesn't mean anything scoped to one client
     prisma.rankingRun.count({ where: { client: clientScope } }),
     prisma.rankingRun.count({ where: { status: RunStatus.COMPLETED, client: clientScope } }),
@@ -67,18 +76,19 @@ overviewRouter.get("/", async (req, res) => {
       take: 8,
       include: { client: { select: { name: true } } },
     }),
-    prisma.rankingReport.findMany({
-      where: { analyticsJson: { not: Prisma.DbNull }, client: clientScope },
-      select: { clientId: true, createdAt: true, analyticsJson: true },
-      orderBy: { createdAt: "desc" },
-    }),
+    // Latest report per client, for the "current state" KPI totals: its totals + movement counts only.
+    prisma.$queryRaw<{ totals: unknown; improved: number; declined: number; unchanged: number }[]>`
+      SELECT DISTINCT ON (r.client_id) r.analytics_json->'totals' AS totals,
+        ${moved("improved")}::int AS improved, ${moved("declined")}::int AS declined, ${moved("unchanged")}::int AS unchanged
+      ${reportScope}
+      ORDER BY r.client_id, r.created_at DESC`,
+    // Daily trend: every report (not deduped), bucketed by the (UTC) day it was generated.
+    prisma.$queryRaw<{ date: string; improved: number; declined: number; unchanged: number }[]>`
+      SELECT to_char(r.created_at, 'YYYY-MM-DD') AS date,
+        SUM(${moved("improved")})::int AS improved, SUM(${moved("declined")})::int AS declined, SUM(${moved("unchanged")})::int AS unchanged
+      ${reportScope}
+      GROUP BY 1 ORDER BY 1`,
   ]);
-
-  // Latest report per client, for the "current state" KPI totals.
-  const latestPerClient = new Map<string, (typeof allReports)[number]>();
-  for (const report of allReports) {
-    if (!latestPerClient.has(report.clientId)) latestPerClient.set(report.clientId, report);
-  }
 
   let improved = 0;
   let declined = 0;
@@ -88,41 +98,20 @@ overviewRouter.get("/", async (req, res) => {
   let top10Count = 0;
   let notIn100Count = 0;
   const averageRanks: number[] = [];
-  for (const report of latestPerClient.values()) {
-    const analytics = report.analyticsJson as unknown as {
-      totals?: { totalKeywords?: number; top3Count?: number; top10Count?: number; notIn100Count?: number; averageRank?: number | null };
-      movements?: { improved?: unknown[]; declined?: unknown[]; unchanged?: unknown[] };
-    } | null;
-    if (!analytics) continue;
-    improved += analytics.movements?.improved?.length ?? 0;
-    declined += analytics.movements?.declined?.length ?? 0;
-    unchanged += analytics.movements?.unchanged?.length ?? 0;
-    totalKeywordsTracked += analytics.totals?.totalKeywords ?? 0;
-    top3Count += analytics.totals?.top3Count ?? 0;
-    top10Count += analytics.totals?.top10Count ?? 0;
-    notIn100Count += analytics.totals?.notIn100Count ?? 0;
-    if (typeof analytics.totals?.averageRank === "number") averageRanks.push(analytics.totals.averageRank);
+  for (const report of latestReports) {
+    const totals = report.totals as { totalKeywords?: number; top3Count?: number; top10Count?: number; notIn100Count?: number; averageRank?: number | null } | null;
+    improved += report.improved;
+    declined += report.declined;
+    unchanged += report.unchanged;
+    totalKeywordsTracked += totals?.totalKeywords ?? 0;
+    top3Count += totals?.top3Count ?? 0;
+    top10Count += totals?.top10Count ?? 0;
+    notIn100Count += totals?.notIn100Count ?? 0;
+    if (typeof totals?.averageRank === "number") averageRanks.push(totals.averageRank);
   }
   const averageRank = averageRanks.length > 0 ? Math.round((averageRanks.reduce((a, b) => a + b, 0) / averageRanks.length) * 10) / 10 : null;
 
-  // Daily trend: every report (not deduped), bucketed by the day it was
-  // generated -- shows real report-generation activity over time.
-  const byDay = new Map<string, { improved: number; declined: number; unchanged: number }>();
-  for (const report of allReports) {
-    const day = report.createdAt.toISOString().slice(0, 10);
-    const analytics = report.analyticsJson as unknown as {
-      movements?: { improved?: unknown[]; declined?: unknown[]; unchanged?: unknown[] };
-    } | null;
-    if (!analytics) continue;
-    const bucket = byDay.get(day) ?? { improved: 0, declined: 0, unchanged: 0 };
-    bucket.improved += analytics.movements?.improved?.length ?? 0;
-    bucket.declined += analytics.movements?.declined?.length ?? 0;
-    bucket.unchanged += analytics.movements?.unchanged?.length ?? 0;
-    byDay.set(day, bucket);
-  }
-  const dailyMovements = Array.from(byDay.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, counts]) => ({ date, ...counts }));
+  const dailyMovements = dailyRows.map(({ date, improved, declined, unchanged }) => ({ date, improved, declined, unchanged }));
 
   const recentRuns = recentRunsRaw.map((run) => ({
     id: run.id,

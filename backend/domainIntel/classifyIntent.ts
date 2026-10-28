@@ -65,9 +65,12 @@ export function brandTerms(clientName: string, websiteUrl: string): string[] {
 export function matchesBrand(keyword: string, brands: string[]): boolean {
   const k = keywordKey(keyword);
   const squashed = k.replace(/\s+/g, "");
-  if (brands.some((b) => k.includes(b) || squashed.includes(b.replace(/\s+/g, "")))) return true;
-  // Its words in another order: "bayside yoga" for yogabayside.com.au (2-3 word keywords).
   const words = k.split(" ");
+  // Whole words of the keyword spell the brand: "eagle law firm" / "eaglelaw" for eaglelaw.com.au. It used to
+  // be any part of the text, so "eagle lawyer sydney" and "true italian pizza" (trueit) counted as brand
+  // searches -- and a brand search skips the AI and is left out of the Gap report (audit 2026-10-27).
+  if (brands.some((b) => spellsBrand(words, b.replace(/\s+/g, "")))) return true;
+  // Its words in another order: "bayside yoga" for yogabayside.com.au (2-3 word keywords).
   if (words.length >= 2 && words.length <= 3 && squashed.length >= 6) {
     const orders = words.length === 2 ? [[1, 0]] : [[0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
     if (orders.some((o) => brands.some((b) => b.replace(/\s+/g, "") === o.map((i) => words[i]).join("")))) return true;
@@ -75,6 +78,18 @@ export function matchesBrand(keyword: string, brands: string[]): boolean {
   // The brand name without the domain's extra words: "yoga peace" for yogapeaceaustralia.com.
   // Two+ words and 6+ letters, so a generic single word ("yoga") never counts as the brand.
   return k.includes(" ") && squashed.length >= 6 && brands.some((b) => b.replace(/\s+/g, "").startsWith(squashed));
+}
+
+/** Do some consecutive whole words, run together, equal the brand ("yoga peace" -> "yogapeace")? */
+function spellsBrand(words: string[], brand: string): boolean {
+  for (let start = 0; start < words.length; start++) {
+    let joined = "";
+    for (let end = start; end < words.length && joined.length < brand.length; end++) {
+      joined += words[end];
+      if (joined === brand) return true;
+    }
+  }
+  return false;
 }
 
 export function classifyByPattern(keyword: string, brands: string[]): Intent | null {

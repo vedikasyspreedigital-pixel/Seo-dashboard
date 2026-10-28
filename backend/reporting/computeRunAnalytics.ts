@@ -26,6 +26,14 @@ export interface NewlyTrackedKeyword {
   keyword: string;
   rowUid: string;
   currentRank: number | null;
+  /** True when there is no current rank at all (the check failed / never finished) -- not "Not in 100". */
+  noData?: boolean;
+}
+
+/** A matched keyword where either side has NO rank data (see hasRankData) -- neither a rise nor a drop. */
+export interface NoDataKeyword extends KeywordMovement {
+  previousKnown: boolean;
+  currentKnown: boolean;
 }
 
 export interface RunAnalytics {
@@ -50,6 +58,8 @@ export interface RunAnalytics {
     declined: KeywordMovement[];
     unchanged: KeywordMovement[];
     newlyTracked: NewlyTrackedKeyword[];
+    /** Optional: reports built before 2026-10-27 don't have it. */
+    noData?: NoDataKeyword[];
   };
 }
 
@@ -127,7 +137,17 @@ export function computeMatchedPreviousTotals(currentRows: RankRow[], previousRow
  * exactly "are any of those three buckets non-empty".
  */
 export function hasAnyMatch(movements: ReturnType<typeof computeMovements>): boolean {
-  return movements.improved.length > 0 || movements.declined.length > 0 || movements.unchanged.length > 0;
+  return movements.improved.length > 0 || movements.declined.length > 0 || movements.unchanged.length > 0 || movements.noData.length > 0;
+}
+
+/**
+ * A rank is KNOWN when it's a position, or a confirmed "Not in 100". A null rank WITHOUT that label is
+ * missing data -- a keyword whose check failed or never finished, or a blank/unreadable baseline cell.
+ * Treating those as "Not in 100" told clients a keyword was "↓ Lost" when the check had only failed, and
+ * turned a blank previous cell into "↑ New" (audit 2026-10-27).
+ */
+export function hasRankData(row: Pick<RankRow, "rankValue" | "rankDisplay">): boolean {
+  return row.rankValue !== null || (row.rankDisplay ?? "").trim().toLowerCase() === NOT_IN_100.toLowerCase();
 }
 
 export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]) {
@@ -137,6 +157,7 @@ export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]
   const declined: KeywordMovement[] = [];
   const unchanged: KeywordMovement[] = [];
   const newlyTracked: NewlyTrackedKeyword[] = [];
+  const noData: NoDataKeyword[] = [];
 
   for (const current of currentRows) {
     const previous = previousByUid.get(current.rowUid);
@@ -146,6 +167,7 @@ export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]
         keyword: current.keyword,
         rowUid: current.rowUid,
         currentRank: current.rankValue,
+        ...(hasRankData(current) ? {} : { noData: true }),
       });
       continue;
     }
@@ -154,6 +176,14 @@ export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]
     const currentRank = current.rankValue;
     const delta = previousRank !== null && currentRank !== null ? previousRank - currentRank : null;
     const entry: KeywordMovement = { keyword: current.keyword, rowUid: current.rowUid, previousRank, currentRank, delta };
+
+    // Missing data on either side: no movement can be claimed.
+    const previousKnown = hasRankData(previous);
+    const currentKnown = hasRankData(current);
+    if (!previousKnown || !currentKnown) {
+      noData.push({ ...entry, previousKnown, currentKnown });
+      continue;
+    }
 
     // Lower rank number is better. A transition to/from "Not in 100" (null)
     // counts as improved/declined, not unchanged -- only both-null or
@@ -173,7 +203,7 @@ export function computeMovements(currentRows: RankRow[], previousRows: RankRow[]
     }
   }
 
-  return { improved, declined, unchanged, newlyTracked };
+  return { improved, declined, unchanged, newlyTracked, noData };
 }
 
 export async function computeRunAnalytics(runId: string, previousRunId?: string): Promise<RunAnalytics> {

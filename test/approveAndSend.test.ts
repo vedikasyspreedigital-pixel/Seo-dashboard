@@ -627,3 +627,31 @@ test("approvedBy (the SERP Console user) never reaches sendEmail() in any form -
 test.after(async () => {
   await prisma.$disconnect();
 });
+
+// Audit 2026-10-27: once sendEmail has resolved, the email is out. A failure while RECORDING it used to
+// revert the report to APPROVED and answer SEND_FAILED -- inviting a retry that emailed the client twice.
+test("approval: a failure after the email went out never reverts to APPROVED or allows a second send", async () => {
+  const client = await makeClient(`Approve Send Test - post-send failure ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+    let sends = 0;
+    // A value the database rejects makes markSent itself fail -- standing in for a DB blip right after the send.
+    const sendEmail = async () => {
+      sends++;
+      return { messageId: "msg-1", auditCommentPosted: "not-a-boolean" as unknown as boolean };
+    };
+
+    const first = await approveAndSendReport(report.id, { approvedBy: "om@syspreedigital.com", sendEmail });
+    assert.equal(first.outcome, "SENT", "the email did go out -- never reported as a failed send");
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.notEqual(persisted.status, ReportStatus.APPROVED, "not reverted to a resendable state");
+
+    const retry = await approveAndSendReport(report.id, { approvedBy: "om@syspreedigital.com", sendEmail });
+    assert.equal(retry.outcome, "ALREADY_PROCESSED");
+    assert.equal(sends, 1, "the client gets exactly one email");
+  } finally {
+    await prisma.reportSend.deleteMany({ where: { report: { clientId: client.id } } });
+    await cleanupClient(client.id);
+  }
+});

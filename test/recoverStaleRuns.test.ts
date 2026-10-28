@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../backend/db/client.js";
 import { recoverStaleProcessingRows } from "../backend/worker/recoverStaleRuns.js";
+import { processRun } from "../backend/worker/processRun.js";
+import { cancelRun } from "../backend/statemachine/runTransitions.js";
 import type { DataForSeoCallResult, DataForSeoRequestPayload } from "../backend/dataforseo/client.js";
 
 // Covers the startup recovery sweep added after a real stuck run was found
@@ -62,7 +64,7 @@ test("recoverStaleProcessingRows: a row orphaned mid-first-attempt (retryCount 0
     const row = await makeRow(run.id, { status: "PROCESSING", retryCount: 0 });
 
     const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => ({ httpStatus: 200, body: okBody(7) });
-    await recoverStaleProcessingRows(callDataForSeo);
+    await recoverStaleProcessingRows(callDataForSeo, { onlyClientId: client.id });
     // processRun for the affected run is fire-and-forget -- give it a moment to actually run in this test process.
     await new Promise((resolve) => setTimeout(resolve, 300));
 
@@ -82,7 +84,7 @@ test("recoverStaleProcessingRows: a row orphaned after a real prior attempt (ret
     const row = await makeRow(run.id, { status: "PROCESSING", retryCount: 1 });
 
     const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => ({ httpStatus: 200, body: okBody(3) });
-    await recoverStaleProcessingRows(callDataForSeo);
+    await recoverStaleProcessingRows(callDataForSeo, { onlyClientId: client.id });
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const finalRow = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
@@ -104,7 +106,7 @@ test("recoverStaleProcessingRows: a row stuck PROCESSING under a CANCELLED run i
       called = true;
       return { httpStatus: 200, body: okBody(1) };
     };
-    await recoverStaleProcessingRows(callDataForSeo);
+    await recoverStaleProcessingRows(callDataForSeo, { onlyClientId: client.id });
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     assert.equal(called, false, "a cancelled run's stale row must never trigger a real DataForSEO call");
@@ -129,9 +131,97 @@ test("recoverStaleProcessingRows: no-op when there is nothing stale (does not to
       called = true;
       return { httpStatus: 200, body: okBody(1) };
     };
-    await recoverStaleProcessingRows(callDataForSeo);
+    await recoverStaleProcessingRows(callDataForSeo, { onlyClientId: client.id });
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(called, false);
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+// Audit 2026-10-27: a run whose process died during a retry backoff (row ERROR_RETRY) or between rows
+// (rows PENDING) had NO row in PROCESSING, so the old row-based sweep never found it -- stuck forever.
+test("recoverStaleProcessingRows: a PROCESSING run with only PENDING/ERROR_RETRY rows (died during backoff) is resumed and finished", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    const waiting = await makeRow(run.id, { status: "PENDING" });
+    const backingOff = await prisma.rankingRow.update({ where: { id: (await makeRow(run.id, { status: "PENDING", retryCount: 1 })).id }, data: { status: "ERROR_RETRY" } });
+
+    const callDataForSeo = async (): Promise<DataForSeoCallResult> => ({ httpStatus: 200, body: okBody(5) });
+    await recoverStaleProcessingRows(callDataForSeo, { onlyClientId: client.id });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    for (const id of [waiting.id, backingOff.id]) {
+      assert.equal((await prisma.rankingRow.findUniqueOrThrow({ where: { id } })).status, "COMPLETED");
+    }
+    assert.equal((await prisma.rankingRun.findUniqueOrThrow({ where: { id: run.id } })).status, "COMPLETED");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("recoverStaleProcessingRows: a PROCESSING run whose rows all finished (died before marking it complete) is completed without any DataForSEO call", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    const row = await makeRow(run.id);
+    await prisma.rankingRow.update({ where: { id: row.id }, data: { status: "COMPLETED", rankValue: 4 } });
+
+    let called = false;
+    const callDataForSeo = async (): Promise<DataForSeoCallResult> => {
+      called = true;
+      return { httpStatus: 200, body: okBody(1) };
+    };
+    await recoverStaleProcessingRows(callDataForSeo, { onlyClientId: client.id });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    assert.equal(called, false, "finished rows are never re-charged");
+    assert.equal((await prisma.rankingRun.findUniqueOrThrow({ where: { id: run.id } })).status, "COMPLETED");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("processRun: cancelling a run stops it before the next DataForSEO call", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    await makeRow(run.id, { status: "PENDING" });
+    await makeRow(run.id, { status: "PENDING" });
+    await makeRow(run.id, { status: "PENDING" });
+
+    let calls = 0;
+    const callDataForSeo = async (): Promise<DataForSeoCallResult> => {
+      calls++;
+      if (calls === 1) await cancelRun(run.id); // the user clicks Cancel while the first keyword is being checked
+      return { httpStatus: 200, body: okBody(2) };
+    };
+    await processRun(run.id, callDataForSeo, { sleep: async () => {} });
+
+    assert.equal(calls, 1, "no further (billed) calls after the cancel");
+    assert.equal((await prisma.rankingRun.findUniqueOrThrow({ where: { id: run.id } })).status, "CANCELLED");
+    assert.equal(await prisma.rankingRow.count({ where: { runId: run.id, status: "PENDING" } }), 2, "remaining rows left untouched");
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("processRun: a second worker on the same run skips rows the first already claimed instead of crashing", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    await makeRow(run.id, { status: "PENDING" });
+    await makeRow(run.id, { status: "PENDING" });
+    const callDataForSeo = async (): Promise<DataForSeoCallResult> => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { httpStatus: 200, body: okBody(6) };
+    };
+    await Promise.all([processRun(run.id, callDataForSeo), processRun(run.id, callDataForSeo)]);
+
+    assert.equal(await prisma.rankingRow.count({ where: { runId: run.id, status: "COMPLETED" } }), 2);
+    assert.equal(await prisma.rankingRowAttempt.count({ where: { rankingRow: { runId: run.id } } }), 2, "each keyword checked exactly once");
+    assert.equal((await prisma.rankingRun.findUniqueOrThrow({ where: { id: run.id } })).status, "COMPLETED");
   } finally {
     await cleanup(client.id);
   }

@@ -58,6 +58,40 @@ async function cleanupClient(clientId: string) {
   await prisma.client.delete({ where: { id: clientId } });
 }
 
+// Audit 2026-10-27 (#15c): the counting moved into the database (the page loaded every report's full
+// analysis on each visit). Same numbers: the daily chart counts EVERY report by its day; the KPI totals use
+// each client's latest report only.
+test("GET /api/overview: daily chart over every report, KPI totals from each client's latest", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const auth = await createAuthenticatedSession();
+  const a = await makeClient(`Overview Chart A - ${randomUUID()}`, auth.workspace.id);
+  const b = await makeClient(`Overview Chart B - ${randomUUID()}`, auth.workspace.id);
+  try {
+    const day1 = new Date("2026-10-01T09:00:00Z");
+    const day2 = new Date("2026-10-02T23:30:00Z");
+    const oldA = await makeReportWithAnalytics(a.id, (await makeRun(a.id)).id, 5, 5, 5, 10);
+    await prisma.rankingReport.update({ where: { id: oldA.id }, data: { createdAt: day1 } });
+    const newA = await makeReportWithAnalytics(a.id, (await makeRun(a.id)).id, 2, 1, 0, 3);
+    await prisma.rankingReport.update({ where: { id: newA.id }, data: { createdAt: day2 } });
+    const onlyB = await makeReportWithAnalytics(b.id, (await makeRun(b.id)).id, 1, 0, 4, 7);
+    await prisma.rankingReport.update({ where: { id: onlyB.id }, data: { createdAt: day2 } });
+
+    const res = await request(app).get(`/api/overview?workspaceId=${auth.workspace.id}`).set("Cookie", auth.cookieHeader);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.dailyMovements, [
+      { date: "2026-10-01", improved: 5, declined: 5, unchanged: 5 },
+      { date: "2026-10-02", improved: 3, declined: 1, unchanged: 4 },
+    ]);
+    assert.deepEqual(res.body.rankingMovements, { improved: 3, declined: 1, unchanged: 4 }, "latest per client: A's 2/1/0 + B's 1/0/4");
+    assert.equal(res.body.totalKeywordsTracked, 10, "3 + 7, not A's older 10");
+    assert.equal(res.body.averageRank, 5);
+  } finally {
+    await cleanupClient(a.id);
+    await cleanupClient(b.id);
+    await auth.cleanup();
+  }
+});
+
 test("GET /api/overview: totals are real counts, and KPI movements use only the latest report per client", async () => {
   const app = createApp(unusedDataForSeoMock, "mock");
   const auth = await createAuthenticatedSession();

@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { prisma } from '../../db/client.js';
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond } from '../../auth/ownership.js';
+import { isClickUpTaskUrl } from '../../reporting/clickupEmailSender.js';
 
 export const clientsRouter = Router();
 
@@ -139,6 +140,11 @@ clientsRouter.post('/', async (req, res) => {
     ccEmails = parsed.emails;
   }
 
+  if (typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim() && !isClickUpTaskUrl(clickupTaskUrl)) {
+    res.status(400).json({ error: 'The ClickUp task link must be an https://app.clickup.com/... address.' });
+    return;
+  }
+
   const hasClickup = (typeof clickupTaskId === 'string' && clickupTaskId.trim().length > 0) || (typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim().length > 0);
   const hasEmailFields = recipientEmails.length > 0 || ccEmails.length > 0;
 
@@ -195,31 +201,40 @@ clientsRouter.patch('/:id', async (req, res) => {
     }
     ccEmails = parsed.emails;
   }
-
-  await prisma.client.update({
-    where: { id: client.id },
-    data: {
-      ...(name !== undefined ? { name: (name as string).trim() } : {}),
-      ...(notes !== undefined ? { notes: typeof notes === 'string' && notes.trim().length > 0 ? notes.trim() : null } : {}),
-      ...(domain !== undefined ? { domain: typeof domain === 'string' && domain.trim().length > 0 ? domain.trim() : null } : {}),
-      ...(domainReportTaskId !== undefined ? { domainReportTaskId: optionalText(domainReportTaskId) } : {}),
-    },
-  });
-
-  if (clickupTaskId !== undefined || clickupTaskUrl !== undefined || recipientEmails !== undefined || ccEmails !== undefined) {
-    const currentConfig = await prisma.clientReportConfig.findFirst({ where: { clientId: client.id, isActive: true } });
-    const configData = {
-      ...(clickupTaskId !== undefined ? { clickupTaskId: typeof clickupTaskId === 'string' && clickupTaskId.trim().length > 0 ? clickupTaskId.trim() : null } : {}),
-      ...(clickupTaskUrl !== undefined ? { clickupTaskUrl: typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim().length > 0 ? clickupTaskUrl.trim() : null } : {}),
-      ...(recipientEmails !== undefined ? { recipients: recipientEmails } : {}),
-      ...(ccEmails !== undefined ? { cc: ccEmails } : {}),
-    };
-    if (currentConfig) {
-      await prisma.clientReportConfig.update({ where: { id: currentConfig.id }, data: configData });
-    } else {
-      await prisma.clientReportConfig.create({ data: { clientId: client.id, ...DEFAULT_REPORT_CONFIG, ...configData } });
-    }
+  if (typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim() && !isClickUpTaskUrl(clickupTaskUrl)) {
+    res.status(400).json({ error: 'The ClickUp task link must be an https://app.clickup.com/... address.' });
+    return;
   }
+
+  // One save at a time per client, all or nothing: two saves at the same moment could both find no settings
+  // record and create two "active" ones (audit 2026-10-27).
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'client-settings:' + client.id}))`;
+    await tx.client.update({
+      where: { id: client.id },
+      data: {
+        ...(name !== undefined ? { name: (name as string).trim() } : {}),
+        ...(notes !== undefined ? { notes: typeof notes === 'string' && notes.trim().length > 0 ? notes.trim() : null } : {}),
+        ...(domain !== undefined ? { domain: typeof domain === 'string' && domain.trim().length > 0 ? domain.trim() : null } : {}),
+        ...(domainReportTaskId !== undefined ? { domainReportTaskId: optionalText(domainReportTaskId) } : {}),
+      },
+    });
+
+    if (clickupTaskId !== undefined || clickupTaskUrl !== undefined || recipientEmails !== undefined || ccEmails !== undefined) {
+      const currentConfig = await tx.clientReportConfig.findFirst({ where: { clientId: client.id, isActive: true } });
+      const configData = {
+        ...(clickupTaskId !== undefined ? { clickupTaskId: typeof clickupTaskId === 'string' && clickupTaskId.trim().length > 0 ? clickupTaskId.trim() : null } : {}),
+        ...(clickupTaskUrl !== undefined ? { clickupTaskUrl: typeof clickupTaskUrl === 'string' && clickupTaskUrl.trim().length > 0 ? clickupTaskUrl.trim() : null } : {}),
+        ...(recipientEmails !== undefined ? { recipients: recipientEmails } : {}),
+        ...(ccEmails !== undefined ? { cc: ccEmails } : {}),
+      };
+      if (currentConfig) {
+        await tx.clientReportConfig.update({ where: { id: currentConfig.id }, data: configData });
+      } else {
+        await tx.clientReportConfig.create({ data: { clientId: client.id, ...DEFAULT_REPORT_CONFIG, ...configData } });
+      }
+    }
+  });
 
   const updated = await prisma.client.findUniqueOrThrow({
     where: { id: client.id },

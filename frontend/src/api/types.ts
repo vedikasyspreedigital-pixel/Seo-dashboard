@@ -122,6 +122,8 @@ export interface RunRow {
 
 export interface ValidateRunFileResult {
   insertedRowCount: number;
+  /** Rows whose Status is already "Completed" (with a rank) -- they are NOT checked again. */
+  alreadyRankedCount?: number;
   rowErrorCount: number;
   rowErrors: RowError[];
   detectedColumns: string[];
@@ -184,6 +186,8 @@ export interface NewlyTrackedKeyword {
   keyword: string;
   rowUid: string;
   currentRank: number | null;
+  /** No current rank at all (the check failed / never finished) -- not "Not in 100". */
+  noData?: boolean;
 }
 
 export interface RunAnalytics {
@@ -195,6 +199,8 @@ export interface RunAnalytics {
     declined: KeywordMovement[];
     unchanged: KeywordMovement[];
     newlyTracked: NewlyTrackedKeyword[];
+    /** Keywords with no rank data on one side -- no movement claimed. Missing on reports built before 2026-10-27. */
+    noData?: KeywordMovement[];
   };
 }
 

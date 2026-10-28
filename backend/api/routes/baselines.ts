@@ -75,6 +75,17 @@ baselinesRouter.post("/:id/baselines", async (req, res) => {
       res.status(400).json({ error: "Every row must have a non-empty keyword" });
       return;
     }
+    // A rank is a position 1-100 or empty ("Not in 100") -- anything else would be stored and skew every
+    // later comparison (a 0 even counted as top 3). Audit 2026-10-27.
+    const rank = row.rankValue;
+    if (rank !== null && rank !== undefined && !(Number.isInteger(rank) && rank >= 1 && rank <= 100)) {
+      res.status(400).json({ error: `"${row.keyword}": rank must be a whole number from 1 to 100, or empty for Not in 100` });
+      return;
+    }
+    if (row.rankDisplay !== null && row.rankDisplay !== undefined && typeof row.rankDisplay !== "string") {
+      res.status(400).json({ error: `"${row.keyword}": rankDisplay must be text` });
+      return;
+    }
   }
 
   const baseline = await createBaselineFromRows(client.id, {

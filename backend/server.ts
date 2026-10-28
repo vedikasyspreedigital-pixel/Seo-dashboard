@@ -1,16 +1,22 @@
 import path from 'node:path';
 import { createApp } from './api/app.js';
-import { callDataForSeoLive, LIVE_ENDPOINT_URL } from './dataforseo/client.js';
+import { callDataForSeoLive, hasDataForSeoCredentials, LIVE_ENDPOINT_URL, MISSING_CREDENTIALS_MESSAGE } from './dataforseo/client.js';
 import { createMockDataForSeoClient } from './dataforseo/mockClient.js';
 import { createMockEmailSender } from './reporting/mockEmailSender.js';
 import { createClickUpEmailSender, verifyChromiumLaunch } from './reporting/clickupEmailSender.js';
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
 import { recoverStaleProcessingRows } from './worker/recoverStaleRuns.js';
+import { recoverInterruptedDeliveries } from './worker/recoverInterruptedDeliveries.js';
 import { createClickUpCommentPoster, createMockCommentPoster } from './domainIntel/clickupCommentPoster.js';
 import { createFlikoverAhrefsFetcher, createMockAhrefsFetcher } from './domainIntel/fetchers/flikoverAhrefs.js';
 import { aiProviderName } from './domainIntel/classifyIntent.js';
 import { createGeminiAuditWriter } from './domainIntel/aiSeoAudit.js';
 import { loadSavedAudits } from './domainIntel/auditJob.js';
+import { removeExpiredReportFiles } from './domainIntel/createDomainReport.js';
+import { loadSavedBundles } from './domainIntel/bundleJob.js';
+import { removeOldFetchFiles } from './domainIntel/fetchJob.js';
+import { pruneOldRawResponses } from './dataforseo/pruneRawResponses.js';
+import { promoteMissingBaselines } from './reporting/processVerifiedExcelUpload.js';
 import { createGeminiGapAdvisor } from './domainIntel/gapReport.js';
 import { agentStatus, createAgentFetcher } from './domainIntel/agentQueue.js';
 import { access } from 'node:fs/promises';
@@ -45,6 +51,7 @@ const callDataForSeo = useLive ? callDataForSeoLive : createMockDataForSeoClient
 
 if (useLive) {
   console.log('DataForSEO: LIVE mode -- real API calls will be made and billed.');
+  if (!hasDataForSeoCredentials()) console.error(`WARNING: ${MISSING_CREDENTIALS_MESSAGE} Runs will be refused until they're set.`);
 } else {
   console.log('DataForSEO: MOCK mode (default). Set DATAFORSEO_LIVE=true to enable real calls.');
 }
@@ -151,6 +158,13 @@ console.log(
     : 'Domain Intelligence: no GEMINI_API_KEY / ANTHROPIC_API_KEY -- keyword intent uses patterns and the tools\' labels only.',
 );
 
+// Production with a delivery gate left off is almost always a missing variable, and a mock "send" looks
+// exactly like a real one (marked SENT, saved as the baseline). Said loudly; the page shows a banner too.
+if (process.env.NODE_ENV === 'production') {
+  const mocked = [!useLive && 'DATAFORSEO_LIVE', !useClickUp && 'CLICKUP_EMAIL_LIVE', !useClickUpComments && 'CLICKUP_COMMENTS_LIVE'].filter(Boolean);
+  if (mocked.length > 0) console.error(`WARNING: production is running in TEST MODE for ${mocked.join(', ')} -- nothing is really fetched/sent for those. Set them to "true" if that's not intended.`);
+}
+
 async function start() {
   // Deploy-time environment check, not part of the send flow -- proves
   // Chromium can actually launch in THIS environment before any real user
@@ -174,8 +188,26 @@ async function start() {
   // awaited here so the DB is already consistent before the server starts
   // accepting requests; the actual resumed DataForSEO calls run in the
   // background and don't block startup.
-  await recoverStaleProcessingRows(callDataForSeo);
+  // Not without DataForSEO's login in live mode: resuming would hang on the first keyword. Runs wait until it's set.
+  if (!useLive || hasDataForSeoCredentials()) await recoverStaleProcessingRows(callDataForSeo);
+  // Report emails / Domain Intelligence comments cut off mid-send: retryable, with "check ClickUp first".
+  await recoverInterruptedDeliveries();
   await loadSavedAudits();
+  await loadSavedBundles();
+  // Keyword exports fetched before this restart can't be used any more -- removed after a day, as always.
+  await removeOldFetchFiles().catch((err) => console.error('[domainIntel] removing old fetched exports failed:', err));
+  // Domain Intelligence report files go 10 days after posting (they're in the ClickUp comment).
+  const removeExpired = () => removeExpiredReportFiles().catch((err) => console.error('[domainIntel] removing expired report files failed:', err));
+  void removeExpired();
+  setInterval(removeExpired, 6 * 60 * 60 * 1000).unref();
+  // A sent report whose baseline save failed gets it now, and again every hour until it works.
+  const promoteMissing = () => promoteMissingBaselines().catch((err) => console.error('[reports] checking for missing baselines failed:', err));
+  void promoteMissing();
+  setInterval(promoteMissing, 60 * 60 * 1000).unref();
+  // DataForSEO's raw answers are kept 40 days (the ranks stay) -- checked at start and once a day.
+  const pruneRaw = () => pruneOldRawResponses().catch((err) => console.error('[dataforseo] emptying old raw answers failed:', err));
+  void pruneRaw();
+  setInterval(pruneRaw, 24 * 60 * 60 * 1000).unref();
 
   const app = createApp(callDataForSeo, useLive ? 'live' : 'mock', useLive ? LIVE_ENDPOINT_URL : undefined, {
     sendEmail,

@@ -9,9 +9,13 @@ import { computeRowUid } from './rowUid.js';
 //   hyperlink, plain text:  { text: '...', hyperlink: '...' }
 //   hyperlink, rich text:   { text: { richText: [...] }, hyperlink: '...' }
 //   formula:                { formula: '...', result: '...' }
+//   error value (#N/A ...): { error: '#N/A' } -- also as a formula's result
 function extractCellText(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'object') {
+    // An error is no value: it used to become the keyword "[object Object]", sent to (and billed by)
+    // DataForSEO (audit 2026-10-27). Empty instead, so the row is reported as missing its keyword.
+    if ('error' in value) return '';
     if (Array.isArray(value.richText)) return value.richText.map((part) => part.text ?? '').join('');
     if ('text' in value) return extractCellText(value.text); // hyperlink wrapper
     if ('result' in value) return extractCellText(value.result); // formula

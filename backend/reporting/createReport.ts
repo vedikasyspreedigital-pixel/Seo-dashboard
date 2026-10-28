@@ -103,15 +103,28 @@ export async function createReportForRun(
     ? await compareRunToBaseline(runId, resolvedPreviousBaselineId)
     : await computeRunAnalytics(runId, resolvedPreviousRunId ?? undefined);
 
-  const created = await prisma.rankingReport.create({
-    data: {
-      runId: run.id,
-      clientId: run.clientId,
-      previousRunId: resolvedPreviousRunId,
-      previousBaselineId: resolvedPreviousBaselineId,
-      analyticsJson: analytics as unknown as Prisma.InputJsonValue,
-    },
+  // One report per run, even for two uploads at the same moment: both passed the check above (the
+  // comparison in between takes a while) and both created a report -- two reports, two emails (audit
+  // 2026-10-27). A lock on this run makes the second one wait, look again and find the first. A lock, not a
+  // unique index: no migration to run against the live database.
+  type Report = NonNullable<Awaited<ReturnType<typeof prisma.rankingReport.findUnique>>>;
+  type Created = { duplicateOf: string; report?: never } | { duplicateOf?: never; report: Report };
+  const result = await prisma.$transaction(async (tx): Promise<Created> => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"ranking-report:" + run.id}))`;
+    const again = await tx.rankingReport.findFirst({ where: { runId }, select: { id: true } });
+    if (again) return { duplicateOf: again.id };
+    const report = await tx.rankingReport.create({
+      data: {
+        runId: run.id,
+        clientId: run.clientId,
+        previousRunId: resolvedPreviousRunId,
+        previousBaselineId: resolvedPreviousBaselineId,
+        analyticsJson: analytics as unknown as Prisma.InputJsonValue,
+      },
+    });
+    return { report };
   });
+  if (result.duplicateOf) return { outcome: "DUPLICATE_REPORT", existingReportId: result.duplicateOf };
 
-  return { outcome: "SUCCESS", report: created };
+  return { outcome: "SUCCESS", report: result.report! };
 }

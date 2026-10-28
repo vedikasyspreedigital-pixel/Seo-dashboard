@@ -195,8 +195,17 @@ export function createGeminiGapAdvisor(apiKey: string, model = process.env.GEMIN
     };
     const parsed = Advice.safeParse(await geminiJson(apiKey, model, GAP_PROMPT, [{ text: JSON.stringify(data) }], ADVICE_SCHEMA, "the Gap & Competitor Analysis"));
     if (!parsed.success) throw new Error("Gemini's answer wasn't a complete gap analysis.");
-    return parsed.data;
+    return keepRealOpportunities(parsed.data, gaps);
   };
+}
+
+/**
+ * "Missed Opportunities" lists real gaps only: a keyword Gemini came up with that isn't in the gap list was
+ * written anyway, with blank numbers (audit 2026-10-27). Matched like everywhere else (keywordKey).
+ */
+export function keepRealOpportunities(advice: GapAdvice, gaps: GapRow[]): GapAdvice {
+  const real = new Set(gaps.map((g) => keywordKey(g.keyword)));
+  return { ...advice, opportunities: advice.opportunities.filter((o) => real.has(keywordKey(o.keyword))) };
 }
 
 // ---- the workbook ----

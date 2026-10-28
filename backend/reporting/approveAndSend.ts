@@ -90,6 +90,7 @@ export async function approveAndSendReport(
     throw err;
   }
 
+  let sendResult: Awaited<ReturnType<SendEmailFn>>;
   try {
     // The client-facing PDF (Report Summary + one Keyword Ranking Table,
     // built straight from the report's own deterministic analyticsJson),
@@ -118,7 +119,7 @@ export async function approveAndSendReport(
         excelPdfBuffer = await readFile(current.customPdfPath);
       } catch (err) {
         throw new Error(
-          `Report ${reportId}'s custom PDF is missing on disk (${current.customPdfPath}) -- refusing to fall back to the generated PDF. Re-upload the custom PDF or switch back to "Use generated report PDF" before sending. (${(err as Error).message})`,
+          `Report ${reportId}'s custom PDF is missing on disk (${current.customPdfFilename ?? path.basename(current.customPdfPath)}) -- refusing to fall back to the generated PDF. Re-upload the custom PDF or switch back to "Use generated report PDF" before sending. (${(err as Error).message})`,
         );
       }
       excelPdfFilename = current.customPdfFilename ?? path.basename(current.customPdfPath);
@@ -132,7 +133,7 @@ export async function approveAndSendReport(
     // without it.
     const extraAttachments = await loadExtraAttachmentFiles(current.extraAttachments);
 
-    const sendResult = await sendEmail({
+    sendResult = await sendEmail({
       to: recipients,
       cc: cc.length > 0 ? cc : undefined,
       subject: current.emailSubject ?? "",
@@ -147,19 +148,6 @@ export async function approveAndSendReport(
       // Only present when there are extras -- a send without them is unchanged.
       ...(extraAttachments.length > 0 ? { extraAttachments } : {}),
     });
-    await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
-    // Send history -- a corrected report can go out more than once.
-    await prisma.reportSend
-      .create({ data: { reportId, sentBy: approvedBy, subject: current.emailSubject } })
-      .catch((err) => console.error(`[approveAndSend] report ${reportId} was SENT but recording it in the send history failed:`, err));
-    // Only now -- the email has actually gone out -- do this report's ranks
-    // become the client's new baseline. Never allowed to turn a real, completed
-    // send into a reported failure: logged loudly instead.
-    await promoteSentReportToBaseline(reportId, approvedBy).catch((err) => {
-      console.error(`[approveAndSend] report ${reportId} was SENT but saving it as the client's new baseline failed:`, err);
-    });
-    await notifyReportSent(current);
-    return { outcome: "SENT", messageId: sendResult.messageId };
   } catch (err) {
     // Logged server-side (with stack -- the message alone doesn't say WHICH
     // of several similar-looking calls, e.g. multiple waitForTimeout sites
@@ -176,4 +164,27 @@ export async function approveAndSendReport(
     await notifyReportSendFailed(current, (err as Error).message).catch(() => {});
     return { outcome: "SEND_FAILED", errorMessage: (err as Error).message };
   }
+
+  // The email HAS gone out from here on. Nothing below may revert the report
+  // to APPROVED or report SEND_FAILED -- that invited a retry that emailed the
+  // client a second time (audit 2026-10-27: a DB blip in markSent, or a
+  // failing notification, did exactly that). If even recording SENT fails,
+  // the report stays in SENDING, which blocks any further send.
+  try {
+    await markSent(reportId, { auditCommentPosted: sendResult.auditCommentPosted });
+  } catch (err) {
+    console.error(`[approveAndSend] report ${reportId} WAS SENT, but marking it SENT failed (left in SENDING, which blocks a resend):`, err);
+  }
+  // Send history -- a corrected report can go out more than once.
+  await prisma.reportSend
+    .create({ data: { reportId, sentBy: approvedBy, subject: current.emailSubject } })
+    .catch((err) => console.error(`[approveAndSend] report ${reportId} was SENT but recording it in the send history failed:`, err));
+  // Only now -- the email has actually gone out -- do this report's ranks
+  // become the client's new baseline. Never allowed to turn a real, completed
+  // send into a reported failure: logged loudly instead.
+  await promoteSentReportToBaseline(reportId, approvedBy).catch((err) => {
+    console.error(`[approveAndSend] report ${reportId} was SENT but saving it as the client's new baseline failed:`, err);
+  });
+  await notifyReportSent(current).catch((err) => console.error(`[approveAndSend] report ${reportId} was SENT but the "sent" notification failed:`, err));
+  return { outcome: "SENT", messageId: sendResult.messageId };
 }

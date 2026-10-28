@@ -46,8 +46,10 @@ export function LoginPage() {
 
         <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Username</label>
+            <label htmlFor="login-username" className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Username</label>
             <TextInput
+              id="login-username"
+              autoComplete="username"
               type="text"
               required
               autoFocus
@@ -59,8 +61,8 @@ export function LoginPage() {
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Password</label>
-            <TextInput type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+            <label htmlFor="login-password" className="mb-1.5 block text-sm font-medium text-[var(--color-ink-muted)]">Password</label>
+            <TextInput id="login-password" autoComplete="current-password" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
 
           <InlineError message={error} />

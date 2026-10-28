@@ -50,6 +50,10 @@ async function setStatus(patch) {
 
 async function api(path, init = {}) {
   const { serverUrl, token } = await settings();
+  // The token travels with every request: never over plain http, except to this computer (audit 2026-10-27).
+  if (!/^https:\/\//i.test(serverUrl) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(serverUrl)) {
+    throw new Error("The server address must start with https:// (plain http:// only for localhost) -- fix it in the extension's Settings.");
+  }
   const res = await fetch(`${serverUrl}/api/agent${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers || {}) } });
   if (res.status === 401) throw new Error("The server rejected the agent token -- check it in the extension's Settings.");
   if (res.status === 404) throw new Error("The server has the agent switched off (DOMAIN_INTEL_AGENT_TOKEN not set) or the address is wrong.");
@@ -147,7 +151,10 @@ chrome.downloads.onCreated.addListener((item) => {
   // PDF from another address): fetch it ourselves (same cookies); if we can't, the flow fetches it in the page.
   const waiter = downloadWaiter;
   const isPdf = item.mime === "application/pdf" || /\.pdf($|\?)/i.test(item.filename || url);
-  if (activeTool && waiter && Date.now() < waiter.until && (url.startsWith(`https://${waiter.host}`) || isPdf)) {
+  // ...but not a PDF someone downloads from ANOTHER website meanwhile (an invoice from Gmail would have been
+  // posted as the client's audit -- audit 2026-10-27): only from the tools' own pages, or with no referring page.
+  const fromToolPage = !item.referrer || /^https:\/\/([^/]+\.)?(seotooladda|woorank|flikover|semrush)\.com(\/|$)/i.test(item.referrer);
+  if (activeTool && waiter && Date.now() < waiter.until && (url.startsWith(`https://${waiter.host}`) || (isPdf && fromToolPage))) {
     chrome.downloads.cancel(item.id).then(() => chrome.downloads.erase({ id: item.id })).catch(() => {});
     waiter.url = url;
     if (/^(https?|data):/.test(url))

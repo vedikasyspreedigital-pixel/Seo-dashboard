@@ -2,6 +2,7 @@ import { prisma } from '../db/client.js';
 import { buildDataForSeoRequest } from '../dataforseo/buildRequest.js';
 import { recordAttemptAndApply } from '../dataforseo/recordAttemptAndApply.js';
 import { dequeueRow } from '../statemachine/rowTransitions.js';
+import { InvalidRowTransitionError } from '../statemachine/errors.js';
 import { recomputeRunCompletion } from '../statemachine/runTransitions.js';
 import { notifyRunCompletion } from '../notifications/createNotification.js';
 import type { DataForSeoCallResult, DataForSeoRequestPayload } from '../dataforseo/client.js';
@@ -93,7 +94,15 @@ export async function processRun(
     // either PENDING or ERROR_RETRY, so re-entering it after a retryable
     // failure (the row is now ERROR_RETRY) works unchanged.
     for (;;) {
-      await dequeueRow(row.id);
+      // A cancelled run stops here -- before the next (billed) DataForSEO call, including retries.
+      const run = await prisma.rankingRun.findUnique({ where: { id: runId }, select: { status: true } });
+      if (run?.status !== 'PROCESSING') return;
+      try {
+        await dequeueRow(row.id);
+      } catch (err) {
+        if (err instanceof InvalidRowTransitionError) break; // another worker already has this row
+        throw err;
+      }
       const requestPayload = buildDataForSeoRequest(row);
       const { httpStatus, body, transportError } = await callDataForSeo(requestPayload);
 

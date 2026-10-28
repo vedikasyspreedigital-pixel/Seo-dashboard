@@ -103,6 +103,23 @@ test("classifyByPattern: the spec's examples, brand first, questions before serv
   assert.equal(classifyByPattern("photo studio", brands), null);
 });
 
+// Audit 2026-10-27: the brand used to match ANY part of the text, so ordinary searches became "brand searches"
+// (skipped by the AI, left out of the Gap report). Now whole words must spell the brand.
+test("classifyByPattern: a brand counts only as whole words, never inside another word", () => {
+  const eagle = brandTerms("Eagle Law and Integrity", "https://eaglelaw.com.au");
+  assert.equal(classifyByPattern("eagle law firm", eagle), "Navigational");
+  assert.equal(classifyByPattern("eaglelaw reviews", eagle), "Navigational");
+  assert.notEqual(classifyByPattern("eagle lawyer sydney", eagle), "Navigational");
+  const trueit = brandTerms("TrueIT", "https://trueit.com.au");
+  assert.equal(classifyByPattern("trueit support", trueit), "Navigational");
+  assert.equal(classifyByPattern("true it support", trueit), "Navigational");
+  assert.notEqual(classifyByPattern("true italian pizza", trueit), "Navigational");
+  const yoga = brandTerms("Yoga Peace", "https://www.yogapeaceaustralia.com");
+  assert.equal(classifyByPattern("yogapeaceaustralia com", yoga), "Navigational");
+  assert.equal(classifyByPattern("yoga peace parramatta", yoga), "Navigational");
+  assert.notEqual(classifyByPattern("peaceful yoga music", yoga), "Navigational");
+});
+
 test("classifyIntents: only undecided keywords go to the AI step, once each; without AI they fall back to Informational", async () => {
   const seen: string[][] = [];
   const ai = async (keywords: string[]) => {
@@ -295,4 +312,23 @@ test("POST /api/domain-intel/reports: no domain task id -> generated but NOT_POS
     await auth.cleanup();
     await other.cleanup();
   }
+});
+
+// Audit 2026-10-27 (the user's choice): a file in another tool's slot is refused -- only when it clearly IS
+// that other tool's export. Header rows copied from real exports (27-28 Oct), no client data.
+test("readKeywordExport: a file in the wrong tool's slot is refused; an unknown layout still goes through", async () => {
+  const csv = (header: string, row: string) => Buffer.from(`${header}\n${row}`);
+  const files = {
+    semrush: csv("Keyword,Position,Previous position,Search Volume,Keyword Difficulty,CPC,URL,Traffic,Keyword Intents", "yoga,3,4,500,30,1.2,https://a/,40,commercial"),
+    ubersuggest: csv("No,Keywords,Volume,Position,Est. Visits,Seo Difficulty,CPC,Ranking Url", "1,yoga,500,3,40,30,1.2,https://a/"),
+    ahrefs: csv('"Keyword","Country","Volume","KD","Organic traffic","Current position","Current URL"', '"yoga","AU","500","30","40","3","https://a/"'),
+  };
+  for (const [tool, buf] of Object.entries(files)) {
+    for (const slot of ["semrush", "ubersuggest", "ahrefs"] as const) {
+      if (slot === tool) assert.equal((await readKeywordExport(slot, buf, `${tool}.csv`)).rows.length, 1, `${tool} in its own slot`);
+      else await assert.rejects(readKeywordExport(slot, buf, `${tool}.csv`), /looks like a .* export, not/, `${tool} in the ${slot} slot`);
+    }
+  }
+  // A layout no tool is known for (e.g. a tool changed its export) is not refused.
+  assert.equal((await readKeywordExport("ahrefs", csv("Keyword,Position,Volume", "yoga,3,500"), "plain.csv")).rows.length, 1);
 });

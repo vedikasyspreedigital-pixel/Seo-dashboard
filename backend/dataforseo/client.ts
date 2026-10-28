@@ -47,6 +47,10 @@ export const LIVE_ENDPOINT_URL = "https://api.dataforseo.com/v3/serp/google/orga
 // the transportError path below: retried, never a rank or "Not in 100".
 export const DATAFORSEO_REQUEST_TIMEOUT_MS = 130_000;
 
+/** Live calls need these; without them a started run hung forever on its first keyword (audit 2026-10-27). */
+export const hasDataForSeoCredentials = () => !!process.env.DATAFORSEO_LOGIN && !!process.env.DATAFORSEO_PASSWORD;
+export const MISSING_CREDENTIALS_MESSAGE = "DataForSEO's login details (DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD) aren't set on the server, so rankings can't be checked. Nothing was started.";
+
 export async function callDataForSeoLive(
   requestPayload: DataForSeoRequestPayload,
   // Injectable for tests only -- production always uses the real fetch and the timeout above.

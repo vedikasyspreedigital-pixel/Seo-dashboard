@@ -73,6 +73,26 @@ test("regenerate: clears the stale draft (including cc), produces a fresh one fr
   }
 });
 
+// Audit 2026-10-27: a corrected report (already sent once) lost its "(Updated)" on Regenerate -- its subject
+// then matched the email already sent, and ClickUp's same-subject check refused to send it.
+test("regenerate: a report that was already sent keeps '(Updated)' in the subject", async () => {
+  const client = await makeClient(`Regenerate Test - updated ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+    await prisma.reportSend.create({ data: { reportId: report.id, sentBy: "om@syspreedigital.com", subject: "First send" } });
+
+    const result = await regenerateEmailDraft(report.id);
+    assert.equal(result.outcome, "SUCCESS");
+    assert.match(result.subject, / \(Updated\)$/);
+
+    await prisma.reportSend.create({ data: { reportId: report.id, sentBy: "om@syspreedigital.com", subject: "Second send" } });
+    assert.match((await regenerateEmailDraft(report.id)).subject, / \(Updated 2\)$/);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
 test("regenerate: refused when the report is not PENDING_APPROVAL", async () => {
   const client = await makeClient(`Regenerate Test - refused ${randomUUID()}`);
   try {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveSessionStatePath } from "../backend/reporting/clickupEmailSender.js";
+import { createClickUpEmailSender, isClickUpTaskUrl, resolveSessionStatePath } from "../backend/reporting/clickupEmailSender.js";
 
 // Pure-function coverage for per-workspace ClickUp session selection --
 // no DB, no Playwright. See approveAndSend.test.ts for the integration
@@ -56,4 +56,29 @@ test("pruneDebugArtifacts: keeps only the newest debug-* files and never touches
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+// Audit 2026-10-27 (SSRF): the send opens the task link in a browser signed in to ClickUp and attaches the
+// client's files there -- any string used to be accepted.
+test("isClickUpTaskUrl: only https://app.clickup.com links", () => {
+  for (const ok of ["https://app.clickup.com/t/86d45e14k", " https://app.clickup.com/9016/v/li/123 "]) assert.equal(isClickUpTaskUrl(ok), true, ok);
+  for (const bad of [
+    "http://app.clickup.com/t/1",
+    "https://app.clickup.com.evil.example/t/1",
+    "https://evil.example/app.clickup.com/t/1",
+    "https://user:pw@app.clickup.com/t/1",
+    "http://169.254.169.254/latest/meta-data",
+    "file:///etc/passwd",
+    "86d45e14k",
+    "",
+  ])
+    assert.equal(isClickUpTaskUrl(bad), false, bad);
+});
+
+test("the ClickUp sender refuses a non-ClickUp task link before opening any browser", async () => {
+  const send = createClickUpEmailSender({ sessionStatePath: "does-not-exist.json" });
+  await assert.rejects(
+    () => send({ to: ["a@example.com"], subject: "s", bodyText: "b", clickupTaskUrl: "http://169.254.169.254/", workspaceSlug: null }),
+    /must be an https:\/\/app\.clickup\.com/,
+  );
 });

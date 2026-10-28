@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { buildGapWorkbook, findGaps, siteOverview, type GapAdvice } from "../backend/domainIntel/gapReport.js";
+import { buildGapWorkbook, findGaps, keepRealOpportunities, siteOverview, type GapAdvice } from "../backend/domainIntel/gapReport.js";
 
 // Gap & Competitor Analysis (team's decision, 2026-10-23): gaps, missed opportunities and actions.
 
@@ -74,4 +74,19 @@ test("buildGapWorkbook: Summary + Keyword Gaps always; Missed Opportunities + Ac
   assert.deepEqual(advised.worksheets.map((w) => w.name), ["Summary", "Keyword Gaps", "Missed Opportunities", "Action Plan"]);
   const opps = advised.getWorksheet("Missed Opportunities")!;
   assert.deepEqual((opps.getRow(4).values as unknown[]).slice(1, 6), ["High", "yoga for beginners", 1200, 28, "Missing"], "High first, numbers from the gap data");
+});
+
+// Audit 2026-10-27: a keyword Gemini made up (not in the gap list) went into Missed Opportunities with blank numbers.
+test("keepRealOpportunities: only keywords that are real gaps stay (matched ignoring case/spacing)", () => {
+  const gaps = findGaps(client, competitors);
+  const advice: GapAdvice = {
+    summary: "s",
+    keyFindings: [],
+    opportunities: [
+      { priority: "High", keyword: "Yoga  for Beginners", recommendation: "r", targetPage: "p" },
+      { priority: "Low", keyword: "aerial yoga melbourne", recommendation: "made up", targetPage: "p" },
+    ],
+    actionPlan: [],
+  };
+  assert.deepEqual(keepRealOpportunities(advice, gaps).opportunities.map((o) => o.keyword), ["Yoga  for Beginners"]);
 });

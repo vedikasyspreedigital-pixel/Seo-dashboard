@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { KeywordExportError, SOURCE_LABELS, readKeywordExport, type KeywordSource } from "./readKeywordExport.js";
@@ -54,6 +54,24 @@ async function prune() {
   }
 }
 
+/**
+ * Called at server start: exports fetched before a restart can't be used any more (their jobs lived in
+ * memory), so they're removed by the same one-day rule as prune() -- they used to stay forever (audit
+ * 2026-10-27). Only files in the fetches folder, only older than a day.
+ */
+export async function removeOldFetchFiles(now = Date.now()): Promise<number> {
+  const names = await readdir(fetchDir()).catch(() => [] as string[]);
+  let removed = 0;
+  for (const name of names) {
+    const file = path.join(fetchDir(), name);
+    const info = await stat(file).catch(() => null);
+    if (!info?.isFile() || now - info.mtimeMs < KEEP_MS) continue;
+    await rm(file, { force: true }).catch(() => {});
+    removed++;
+  }
+  return removed;
+}
+
 export class FetchJobError extends Error {}
 
 /** Starts a background fetch; returns at once with the queued job. */
@@ -63,12 +81,14 @@ export async function startFetch(
 ): Promise<FetchJob> {
   const fetcher = fetchers[input.source];
   if (!fetcher) throw new FetchJobError(`${SOURCE_LABELS[input.source]} can't be fetched automatically -- upload its export instead.`);
-  // Same client, tool AND website: a competitor's Semrush fetch runs alongside the client's own.
+  // Same client, tool, website AND country: a competitor's Semrush fetch runs alongside the client's own, and a
+  // UK fetch is not handed the Australian one still running (audit 2026-10-27).
   const running = [...jobs.values()].find(
     (j) =>
       j.clientId === input.client.id &&
       j.source === input.source &&
       bareDomain(j.websiteUrl) === bareDomain(input.websiteUrl) &&
+      (j.location ?? null) === (input.location ?? null) &&
       (j.state === "queued" || j.state === "fetching"),
   );
   if (running) return running; // a double-click never starts a second robot
@@ -105,6 +125,8 @@ async function run(job: FetchJob, fetcher: FetchExportFn) {
   } catch (err) {
     const code = err instanceof FetchError ? err.code : err instanceof KeywordExportError ? "BAD_EXPORT" : "FAILED";
     if (!(err instanceof FetchError) && !(err instanceof KeywordExportError)) console.error(`[domainIntel] ${job.source} fetch ${job.id} failed:`, err);
+    // Known failures too (signed out, no data, ...) -- one line, so a tool dropping out of a run is traceable.
+    else console.warn(`[domainIntel] ${job.source} fetch for ${bareDomain(job.websiteUrl)} failed (${code}): ${(err as Error).message}`);
     update(job, { state: "failed", step: undefined, code, error: (err as Error).message.slice(0, 500) });
   }
 }

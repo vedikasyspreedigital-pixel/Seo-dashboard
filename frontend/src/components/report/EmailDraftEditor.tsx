@@ -30,13 +30,18 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
   // touch `report`. A successful save updates `report` with exactly what
   // was just persisted, so this also re-syncs the form to the confirmed
   // saved values (not merely whatever was typed) right after Save Changes.
+  // Keyed on the recipient lists' TEXT, not the arrays: any other update of the
+  // report (e.g. adding a GA PDF) brings new arrays with the same addresses,
+  // and that wiped everything typed but not yet saved (audit 2026-10-27).
+  const savedRecipients = (report.resolvedRecipients ?? []).join(', ');
+  const savedCc = (report.resolvedCc ?? []).join(', ');
   useEffect(() => {
     setSubject(report.emailSubject ?? '');
     setBody(report.emailBody ?? '');
-    setRecipientsInput((report.resolvedRecipients ?? []).join(', '));
-    setCcInput((report.resolvedCc ?? []).join(', '));
+    setRecipientsInput(savedRecipients);
+    setCcInput(savedCc);
     setClickupTaskUrl(report.resolvedClickupTaskUrl ?? '');
-  }, [report.id, report.emailSubject, report.emailBody, report.resolvedRecipients, report.resolvedCc, report.resolvedClickupTaskUrl]);
+  }, [report.id, report.emailSubject, report.emailBody, savedRecipients, savedCc, report.resolvedClickupTaskUrl]);
 
   const editable = isDraftEditable(report.status);
   const { recipients, invalid } = parseRecipientsInput(recipientsInput);

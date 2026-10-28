@@ -88,7 +88,7 @@ compareReportsRouter.post("/pdf", expensiveActionRateLimit, json({ limit: "2mb" 
     const safeName = clientName.replace(/[\\/:*?"<>|]/g, "").trim() || "Client";
     const filename = `${safeName} - Keyword Ranking Report - ${formatOrdinalDate(olderDate)} - ${formatOrdinalDate(newerDate)}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/"/g, "")}"`);
+    res.attachment(filename); // encodes any name (a "–" or non-English letters used to make this a 500)
     res.send(pdf);
   } catch (err) {
     if (err instanceof CompareReportsError) {

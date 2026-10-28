@@ -6,10 +6,10 @@ import { requireAuth } from "../../auth/requireAuth.js";
 import { findOwnedClientOrRespond } from "../../auth/ownership.js";
 import { expensiveActionRateLimit } from "../rateLimit.js";
 import { KeywordExportError, type KeywordSource } from "../../domainIntel/readKeywordExport.js";
-import { LOCATIONS, REPORT_MODES, SOURCES, createDomainReport, postDomainReport, type ReportFile, type ReportMode } from "../../domainIntel/createDomainReport.js";
+import { LOCATIONS, REPORT_MODES, SOURCES, createDomainReport, isPostingNow, postDomainReport, type ReportFile, type ReportMode } from "../../domainIntel/createDomainReport.js";
 import type { PostCommentFn } from "../../domainIntel/clickupCommentPoster.js";
 import type { ClassifyWithAiFn } from "../../domainIntel/classifyIntent.js";
-import type { FetchExportFn } from "../../domainIntel/fetchers/flikoverAhrefs.js";
+import { bareDomain, type FetchExportFn } from "../../domainIntel/fetchers/flikoverAhrefs.js";
 import { FetchJobError, fetchedCompetitorExport, fetchedExport, getJob, latestLoginProblem, publicJob, startFetch } from "../../domainIntel/fetchJob.js";
 import {
   COMPETITOR_COUNT,
@@ -20,7 +20,8 @@ import {
 } from "../../domainIntel/competitorJob.js";
 import type { AiAuditWriter } from "../../domainIntel/aiSeoAudit.js";
 import type { GapAdvisor } from "../../domainIntel/gapReport.js";
-import { AUDIT_KINDS, AuditJobError, auditFile, getAudit, publicAudit, startAudit, type AuditKind } from "../../domainIntel/auditJob.js";
+import { AUDIT_KINDS, AuditJobError, auditFile, getAudit, latestAudits, publicAudit, startAudit, type AuditKind } from "../../domainIntel/auditJob.js";
+import { BUNDLE_REPORTS, BundleJobError, getBundle, latestBundle, postBundle, publicBundle, startBundle, syncBundle } from "../../domainIntel/bundleJob.js";
 
 // "Domain Intelligence" tab: a client's Semrush / Ubersuggest / Ahrefs keyword
 // exports in -> intent-labelled Excel report(s) out, posted automatically as
@@ -37,6 +38,8 @@ export interface DomainIntelRouterDeps {
   fetchers?: Partial<Record<KeywordSource, FetchExportFn>>;
   /** Report PDFs the office Chrome agent makes (Semrush Site Audit, WooRank). */
   auditFetchers?: Partial<Record<AuditKind, FetchExportFn>>;
+  /** Tests only: how often a "Run all 5 reports" checks on its parts (default 2s). */
+  bundlePollMs?: number;
   /** Gemini's recommendations for the Gap & Competitor Analysis; omitted/null = gap data only. */
   gapAdvisor?: GapAdvisor | null;
   /** Semrush's "Main Organic Competitors" through the office Chrome agent (agent mode only). */
@@ -57,8 +60,6 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 
 const isSource = (s: unknown): s is KeywordSource => typeof s === "string" && (SOURCES as string[]).includes(s);
 
-// A post still marked POSTING after this long was cut off (restart/crash) -- allow retrying it.
-const STALE_POSTING_MS = 10 * 60 * 1000;
 
 type DomainReportRow = Awaited<ReturnType<typeof prisma.domainReport.findFirstOrThrow>>;
 
@@ -219,6 +220,122 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
     return job;
   };
 
+  // The client's newest Site Audit / WooRank / AI audit (any state) -- the page's audit cards.
+  router.get("/audits", async (req, res) => {
+    const clientId = typeof req.query.clientId === "string" ? req.query.clientId : "";
+    const client = clientId ? await findOwnedClientOrRespond(req, res, clientId) : null;
+    if (!client) {
+      if (!res.headersSent) res.status(400).json({ error: "Pick a client." });
+      return;
+    }
+    const latest = latestAudits(client.id);
+    res.json(Object.fromEntries(Object.entries(latest).map(([kind, job]) => [kind, publicAudit(job!)])));
+  });
+
+  // "Run all 5 reports": keywords (+ competitors, gap), Site Audit, WooRank, AI audit, then one ClickUp comment.
+  router.post("/bundles", expensiveActionRateLimit, async (req, res) => {
+    const body = req.body ?? {};
+    if (typeof body.clientId !== "string" || !body.clientId) {
+      res.status(400).json({ error: "Pick a client." });
+      return;
+    }
+    const client = await findOwnedClientOrRespond(req, res, body.clientId, { requireActive: true });
+    if (!client) return;
+    const websiteUrl = (typeof body.websiteUrl === "string" ? body.websiteUrl.trim().slice(0, 300) : "") || client.domain || "";
+    if (!websiteUrl) {
+      res.status(400).json({ error: "Enter the client's website URL." });
+      return;
+    }
+    const sources = Array.isArray(body.sources) ? (body.sources as unknown[]).filter(isSource) : [];
+    const reports = Array.isArray(body.reports) ? BUNDLE_REPORTS.filter((r) => (body.reports as unknown[]).includes(r)) : undefined;
+    // Keyword tools only matter for the Keyword Analysis and the Gap report -- an audits-only run needs none.
+    if (sources.length === 0 && (!reports || reports.includes("keywords") || reports.includes("gap"))) {
+      res.status(400).json({ error: "Pick at least one keyword tool." });
+      return;
+    }
+    const competitors =
+      body.competitors === "auto"
+        ? ("auto" as const)
+        : Array.isArray(body.competitors)
+          ? [...new Set((body.competitors as unknown[]).filter((c): c is string => typeof c === "string" && !!c.trim()).map((c) => bareDomain(c.slice(0, 200))))]
+              .filter((d) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d) && d !== bareDomain(websiteUrl))
+              .slice(0, COMPETITOR_COUNT)
+          : [];
+    try {
+      const job = startBundle(
+        {
+          client: { id: client.id, workspaceId: client.workspaceId, name: client.name, domainReportTaskId: client.domainReportTaskId },
+          websiteUrl,
+          location: (LOCATIONS as readonly string[]).includes(body.location) ? body.location : null,
+          sources,
+          competitors,
+          reportMode: (REPORT_MODES as string[]).includes(body.reportMode) ? (body.reportMode as ReportMode) : "combined",
+          createdBy: req.authUser!.email,
+          // The reports the team ticked; omitted = all 5 (unknown names are ignored).
+          ...(reports ? { reports } : {}),
+        },
+        {
+          fetchers,
+          competitorFetcher: deps.competitorFetcher,
+          auditFetchers: deps.auditFetchers ?? {},
+          aiAuditWriter: deps.aiAuditWriter,
+          classifyWithAi: deps.classifyWithAi,
+          gapAdvisor: deps.gapAdvisor,
+          postComment: deps.postComment,
+          pollMs: deps.bundlePollMs,
+        },
+      );
+      res.status(202).json(publicBundle(job));
+    } catch (err) {
+      if (err instanceof BundleJobError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // The client's newest run (any state) -- the page shows its progress again after a reload.
+  router.get("/bundles", async (req, res) => {
+    const clientId = typeof req.query.clientId === "string" ? req.query.clientId : "";
+    const client = clientId ? await findOwnedClientOrRespond(req, res, clientId) : null;
+    if (!client) {
+      if (!res.headersSent) res.status(400).json({ error: "Pick a client." });
+      return;
+    }
+    const job = latestBundle(client.id);
+    res.json(job ? publicBundle(syncBundle(job)) : null);
+  });
+
+  const ownedBundle = (req: Request, res: Response) => {
+    const job = getBundle(req.params.id as string);
+    if (!job || !job.workspaceId || !req.authUser!.workspaceIds.includes(job.workspaceId)) {
+      res.status(404).json({ error: "This run is no longer available -- start it again." });
+      return null;
+    }
+    return job;
+  };
+
+  router.get("/bundles/:id", (req, res) => {
+    const job = ownedBundle(req, res);
+    if (job) res.json(publicBundle(syncBundle(job)));
+  });
+
+  // Post a finished run: adds any audit retried since (Audits section), then one ClickUp comment.
+  router.post("/bundles/:id/post", expensiveActionRateLimit, async (req, res) => {
+    const job = ownedBundle(req, res);
+    if (!job) return;
+    try {
+      res.json(publicBundle(await postBundle(job, deps.postComment)));
+    } catch (err) {
+      if (err instanceof BundleJobError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
   router.get("/audits/:id", (req, res) => {
     const job = ownedAudit(req, res);
     if (job) res.json(publicAudit(job));
@@ -233,7 +350,7 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
       return;
     }
     res.setHeader("Content-Type", file.name.toLowerCase().endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${file.name.replace(/"/g, "")}"`);
+    res.attachment(file.name); // encodes any name (a "–" or non-English letters used to make this a 500)
     res.send(file.buffer);
   });
 
@@ -343,7 +460,9 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
   router.post("/reports/:id/post", expensiveActionRateLimit, async (req, res) => {
     const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
     if (!report) return;
-    const stalePosting = report.status === "POSTING" && Date.now() - report.createdAt.getTime() > STALE_POSTING_MS;
+    // POSTING but not being posted by this server = cut off by a restart: retryable (the poster's marker check
+    // still stops a second comment if the first one did land).
+    const stalePosting = report.status === "POSTING" && !isPostingNow(report.id);
     if (report.status === "POSTED" || (report.status === "POSTING" && !stalePosting) || report.status === "GENERATING") {
       res.status(409).json({ error: report.status === "POSTED" ? "This report is already posted." : "This report is still being processed." });
       return;

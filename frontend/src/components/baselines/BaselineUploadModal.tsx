@@ -48,6 +48,8 @@ export function BaselineUploadModal({ open, clientId, onClose, onConfirmed }: Pr
   }
 
   function handleClose() {
+    // Not while storing: the save carried on in the background, so uploading again stored it twice (audit 2026-10-27).
+    if (confirming) return;
     reset();
     onClose();
   }
@@ -86,7 +88,8 @@ export function BaselineUploadModal({ open, clientId, onClose, onConfirmed }: Pr
     try {
       await confirmBaseline(clientId, preview);
       onConfirmed();
-      handleClose();
+      reset();
+      onClose();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -102,7 +105,7 @@ export function BaselineUploadModal({ open, clientId, onClose, onConfirmed }: Pr
       footer={
         preview ? (
           <>
-            <Button variant="ghost" onClick={reset}>
+            <Button variant="ghost" disabled={confirming} onClick={reset}>
               Choose a different file
             </Button>
             <Button disabled={confirming} onClick={handleConfirm}>

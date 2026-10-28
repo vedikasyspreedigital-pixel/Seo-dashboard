@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { AppShell } from '../components/layout/AppShell';
 import { Card } from '../components/ui/Card';
@@ -12,16 +12,31 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { GlobeIcon, UploadDropIcon } from '../components/ui/icons';
 import { useActiveClient } from '../context/ClientContext';
 import { competitorProblems, fillFromPaste, toDomain } from '../utils/competitorDomains';
+import { RunAllPanel } from '../components/domainIntel/RunAllPanel';
+import { bundleSelectionProblem } from '../utils/bundleSelection';
+import { AuditsSection } from '../components/domainIntel/AuditsSection';
 import {
   createDomainReport,
+  downloadDomainAuditFile,
   downloadDomainReportFile,
+  getDomainBundle,
   getDomainFetch,
   getDomainFetchStatus,
   getCompetitorSearch,
   getDomainReports,
+  getLatestDomainAudits,
+  getLatestDomainBundle,
+  postDomainBundle,
   retryDomainReportPost,
   startCompetitorSearch,
+  startDomainAudit,
+  startDomainBundle,
   startDomainFetch,
+  DOMAIN_BUNDLE_REPORTS,
+  type DomainBundleReport,
+  type DomainAuditJob,
+  type DomainAuditKind,
+  type DomainBundle,
   type DomainCompetitorSearch,
   type DomainFetchJob,
   type DomainFetchStatus,
@@ -52,9 +67,9 @@ const LOCATIONS = [
 ];
 
 const MODES: { value: DomainReportMode; label: string }[] = [
-  { value: 'combined', label: 'Combined report only' },
-  { value: 'individual', label: 'Individual source reports' },
-  { value: 'both', label: 'Combined and individual reports' },
+  { value: 'combined', label: 'Combined (all tools side by side)' },
+  { value: 'individual', label: 'One file per tool' },
+  { value: 'both', label: 'Both' },
 ];
 
 const STATUS: Record<DomainReportStatus, { label: string; tone: string }> = {
@@ -64,6 +79,7 @@ const STATUS: Record<DomainReportStatus, { label: string; tone: string }> = {
   POSTED: { label: 'Posted to ClickUp', tone: 'bg-emerald-500/15 text-emerald-300' },
   POST_FAILED: { label: 'Post failed', tone: 'bg-rose-500/15 text-rose-300' },
   NOT_POSTED: { label: 'Not posted', tone: 'bg-amber-500/10 text-amber-300' },
+  FAILED: { label: "Couldn't build the files", tone: 'bg-rose-500/15 text-rose-300' },
 };
 
 const EXPORT_TYPES = {
@@ -214,6 +230,7 @@ function CompetitorsSection({
   onDomain,
   onPaste,
   onFetch,
+  showFetch = true,
 }: {
   search: DomainCompetitorSearch | null;
   domains: string[];
@@ -227,6 +244,8 @@ function CompetitorsSection({
   /** A pasted list fills several boxes; returns false for a single entry (the box takes it as typed). */
   onPaste: (i: number, text: string) => boolean;
   onFetch: () => void;
+  /** The per-competitor fetch status and "Fetch competitors' keywords" (the manual flow only). */
+  showFetch?: boolean;
 }) {
   const searching = search?.state === 'queued' || search?.state === 'running';
   const anyRunning = jobs.some((j) => j?.state === 'queued' || j?.state === 'fetching');
@@ -236,8 +255,8 @@ function CompetitorsSection({
     <div>
       <p className="mb-1 text-sm font-medium text-[var(--color-ink-muted)]">Competitors (optional)</p>
       <p className="mb-3 text-xs text-[var(--color-ink-faint)]">
-        Adds a “Competitors” sheet to the Keyword Analysis: the client’s Semrush keywords and up to {COMPETITOR_COUNT} competitors’ side by side — position, landing page, traffic, difficulty and intent.
-        Find them in Semrush, or type or paste the competitors’ websites (a full URL or a list works too).
+        Type or paste up to {COMPETITOR_COUNT} competitors’ websites (a full URL or a list works), or find them in Semrush. Left empty, Run all uses Semrush’s top {COMPETITOR_COUNT}.
+        They give the Keyword Analysis its side-by-side Competitors sheet and the Gap & Competitor report.
       </p>
       <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] px-4 py-3 text-sm">
         <div className="flex flex-wrap items-center gap-3">
@@ -273,28 +292,33 @@ function CompetitorsSection({
               </div>
               {problems[i] && <span className="text-xs text-amber-300">{problems[i]}</span>}
               {!problems[i] && info?.commonKeywords != null && <span className="text-xs text-[var(--color-ink-faint)]">{info.commonKeywords} shared keywords</span>}
-              {(job?.state === 'queued' || job?.state === 'fetching') && (
+              {showFetch && (job?.state === 'queued' || job?.state === 'fetching') && (
                 <span className="flex items-center gap-2 text-xs text-brand-300">
                   <Spinner /> {job.step ?? 'Fetching…'}
                 </span>
               )}
-              {job?.state === 'done' && <span className="text-xs text-emerald-300">✓ {job.keywords} keywords</span>}
-              {job?.state === 'failed' && <span className="text-xs text-amber-300">{job.error}</span>}
+              {showFetch && job?.state === 'done' && <span className="text-xs text-emerald-300">✓ {job.keywords} keywords</span>}
+              {showFetch && job?.state === 'failed' && <span className="text-xs text-amber-300">{job.error}</span>}
             </div>
           );
         })}
-        <div>
-          <Button variant="secondary" className="!py-1.5 text-xs" disabled={!canStart || disabled || anyRunning || filled === 0 || blocked} onClick={onFetch}>
-            Fetch competitors’ keywords
-          </Button>
-        </div>
+        {showFetch && (
+          <div>
+            <Button variant="secondary" className="!py-1.5 text-xs" disabled={!canStart || disabled || anyRunning || filled === 0 || blocked} onClick={onFetch}>
+              Fetch competitors’ keywords
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 async function saveFile(reportId: string, index: number, name: string) {
-  const blob = await downloadDomainReportFile(reportId, index);
+  saveBlob(await downloadDomainReportFile(reportId, index), name);
+}
+
+function saveBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -332,8 +356,16 @@ export function DomainIntelligencePage() {
   const [compSearch, setCompSearch] = useState<DomainCompetitorSearch | null>(null);
   const [compDomains, setCompDomains] = useState<string[]>(() => Array(COMPETITOR_COUNT).fill(''));
   const [compJobs, setCompJobs] = useState<(DomainFetchJob | null)[]>(() => Array(COMPETITOR_COUNT).fill(null));
+  const [bundle, setBundle] = useState<DomainBundle | null>(null);
+  const [bundleStarting, setBundleStarting] = useState(false);
+  // The reports to make in the next run (all 5 by default; the team can untick some -- 2026-10-27).
+  const [bundleReports, setBundleReports] = useState<DomainBundleReport[]>(DOMAIN_BUNDLE_REPORTS);
+  const [postingReady, setPostingReady] = useState(false);
+  const [audits, setAudits] = useState<Partial<Record<DomainAuditKind, DomainAuditJob>>>({});
+  // The folded "keyword report only / upload files yourself" section; null = not touched yet.
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
 
-  const client =useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
+  const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
   const isAuto = (s: DomainSource) => !!fetchStatus?.automatic.includes(s);
 
   // Follow the header's client by default; the page can still pick another.
@@ -399,18 +431,77 @@ export function DomainIntelligencePage() {
     refreshFetchStatus();
   }, [refreshFetchStatus]);
 
+  // The client whose data is on screen: an answer that arrives for a client the user has since switched away
+  // from is dropped -- a slow one used to fill in the previous client's history, audits and run (audit 2026-10-27).
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const shownClient = useRef(clientId);
+
   const loadReports = useCallback(async () => {
     if (!clientId) return setReports([]);
     try {
-      setReports(await getDomainReports(clientId));
-    } catch {
-      // history is secondary -- the form still works
+      const list = await getDomainReports(clientId);
+      if (shownClient.current !== clientId) return;
+      setReports(list);
+      setHistoryError(null);
+    } catch (err) {
+      // history is secondary -- the form still works, but say it didn't load (it used to read "No domain reports yet")
+      if (shownClient.current === clientId) setHistoryError((err as Error).message);
     }
   }, [clientId]);
 
   useEffect(() => {
     void loadReports();
   }, [loadReports]);
+
+  // The client's latest "Run all 5" and audits -- they run on the server, so they're picked up again here.
+  const loadAudits = useCallback(async () => {
+    if (!clientId) return setAudits({});
+    try {
+      const latest = await getLatestDomainAudits(clientId);
+      if (shownClient.current === clientId) setAudits(latest);
+    } catch {
+      // the audit cards are secondary -- the form still works
+    }
+  }, [clientId]);
+
+  useEffect(() => {
+    void loadAudits();
+  }, [loadAudits]);
+
+  useEffect(() => {
+    // Switching client: nothing of the previous client stays on screen while this one's data loads.
+    shownClient.current = clientId;
+    setBundle(null);
+    setReports([]);
+    setAudits({});
+    setHistoryError(null);
+    if (!clientId) return;
+    getLatestDomainBundle(clientId).then((b) => {
+      if (shownClient.current === clientId) setBundle(b);
+    }, () => {});
+  }, [clientId]);
+
+  // Follow a running "Run all" and running audits.
+  const bundleId = bundle?.id ?? null;
+  const bundleRunning = bundle?.state === 'running';
+  const auditsRunning = Object.values(audits).some((a) => a && (a.state === 'queued' || a.state === 'running'));
+  useEffect(() => {
+    if (!bundleRunning && !auditsRunning) return;
+    const t = window.setInterval(async () => {
+      try {
+        await loadAudits();
+        // Also after the run: an audit retried in the Audits section counts for the run (the server syncs it).
+        if (bundleId) {
+          const b = await getDomainBundle(bundleId);
+          setBundle(b);
+          if (b.state !== 'running') void loadReports();
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, 3000);
+    return () => window.clearInterval(t);
+  }, [bundleId, bundleRunning, auditsRunning, loadAudits, loadReports]);
 
   // Posting runs in the background on the server; refresh while any report is still in flight.
   const inFlight = reports.some((r) => r.status === 'GENERATED' || r.status === 'POSTING' || r.status === 'GENERATING');
@@ -447,6 +538,89 @@ export function DomainIntelligencePage() {
   const compFetching = compJobs.some((j) => j?.state === 'queued' || j?.state === 'fetching');
   const compProblems = competitorProblems(compDomains, websiteUrl);
   const ready = formReady && chosen.length > 0 && missing.length === 0 && !compFetching;
+
+  // "Run all 5": the ticked tools the office Chrome can fetch, and the typed competitors (else Semrush's top 3).
+  const agentMode = fetchStatus?.mode === 'agent';
+  const autoSources = chosen.filter((s) => isAuto(s.value)).map((s) => s.value);
+  const typedCompetitors = compDomains.map(toDomain).filter(Boolean);
+  const semrushOn = enabled.semrush && isAuto('semrush');
+  const competitorNote = !semrushOn ? 'none (they need Semrush)' : typedCompetitors.length ? typedCompetitors.join(', ') : 'Semrush’s top 3 (or type them below)';
+  // Keyword tools and competitors only matter for the Keyword Analysis and the Gap report.
+  const needsKeywords = bundleReports.includes('keywords') || bundleReports.includes('gap');
+  const bundleBlocked = !client
+    ? 'Pick a client.'
+    : !websiteUrl.trim()
+      ? 'Enter the client’s website URL.'
+      : bundleSelectionProblem(bundleReports)
+        ? bundleSelectionProblem(bundleReports)
+        : !agentMode
+          ? 'Needs the office Chrome agent — this server isn’t set up for it yet.'
+          : fetchStatus?.agentOnline === false
+            ? 'The office Chrome agent is offline — turn that computer and Chrome on (the extension checks in every 30 seconds).'
+            : needsKeywords && autoSources.length === 0
+              ? 'Tick at least one keyword tool below.'
+              : needsKeywords && compProblems.some(Boolean)
+                ? 'Fix the competitor websites below first.'
+                : null;
+
+  // Without the office Chrome, uploading the exports is the only way -- so that section opens by itself.
+  const showManual = manualOpen ?? (!!fetchStatus && !agentMode);
+
+  async function handleRunAll() {
+    if (!client || bundleBlocked) return;
+    setBundleStarting(true);
+    setError(null);
+    try {
+      setBundle(
+        await startDomainBundle({
+          clientId: client.id,
+          websiteUrl: websiteUrl.trim(),
+          location,
+          sources: autoSources,
+          competitors: typedCompetitors.length ? typedCompetitors : 'auto',
+          reportMode: mode,
+          reports: bundleReports,
+        }),
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBundleStarting(false);
+    }
+  }
+
+  async function handlePostReady() {
+    if (!bundle?.reportId) return;
+    setPostingReady(true);
+    setError(null);
+    try {
+      setBundle(await postDomainBundle(bundle.id));
+      await loadReports();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setPostingReady(false);
+    }
+  }
+
+  async function handleRunAudit(kind: DomainAuditKind) {
+    if (!client || !formReady) return;
+    setError(null);
+    try {
+      const job = await startDomainAudit({ kind, clientId: client.id, websiteUrl: websiteUrl.trim() });
+      setAudits((prev) => ({ ...prev, [kind]: job }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleDownloadAudit(job: DomainAuditJob) {
+    try {
+      saveBlob(await downloadDomainAuditFile(job.id), job.fileName ?? `${job.kind}.pdf`);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
 
   async function handleFindCompetitors() {
     if (!client || !formReady) return;
@@ -558,65 +732,31 @@ export function DomainIntelligencePage() {
           </FormField>
 
           <div>
-            <p className="mb-2 text-sm font-medium text-[var(--color-ink-muted)]">Data sources</p>
-            <div className="flex flex-col gap-3">
+            <p className="mb-2 text-sm font-medium text-[var(--color-ink-muted)]">Keyword tools</p>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
               {SOURCES.map((s) => (
-                <div key={s.value} className="flex flex-col gap-2">
-                  <label className="flex w-fit cursor-pointer items-center gap-2.5 text-sm text-[var(--color-ink)]">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-[var(--color-brand-500)]"
-                      checked={enabled[s.value]}
-                      disabled={busy}
-                      onChange={(e) => setEnabled((prev) => ({ ...prev, [s.value]: e.target.checked }))}
-                    />
-                    {s.label}
-                  </label>
-                  {enabled[s.value] && (
-                    <div className="pl-6.5">
-                      {isAuto(s.value) ? (
-                        <FetchSlot
-                          label={s.label}
-                          job={jobs[s.value] ?? null}
-                          file={files[s.value] ?? null}
-                          mock={!!fetchStatus && !fetchStatus.live}
-                          agentNote={
-                            fetchStatus?.mode === 'agent'
-                              ? fetchStatus.agentOnline
-                                ? 'Done by the office Chrome (online).'
-                                : 'The office Chrome agent is OFFLINE — turn that computer and Chrome on, or upload the file instead.'
-                              : undefined
-                          }
-                          canStart={formReady}
-                          disabled={busy}
-                          onStart={() => void handleStartFetch(s.value)}
-                          onFile={(f) =>
-                            setFiles((prev) => {
-                              const next = { ...prev };
-                              if (f) next[s.value] = f;
-                              else delete next[s.value];
-                              return next;
-                            })
-                          }
-                        />
-                      ) : (
-                        <ExportDrop file={files[s.value] ?? null} onFile={(f) => setFiles((prev) => ({ ...prev, [s.value]: f }))} disabled={busy} />
-                      )}
-                    </div>
-                  )}
-                </div>
+                <label key={s.value} className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--color-ink)]">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-[var(--color-brand-500)]"
+                    checked={enabled[s.value]}
+                    disabled={busy || bundleRunning}
+                    onChange={(e) => setEnabled((prev) => ({ ...prev, [s.value]: e.target.checked }))}
+                  />
+                  {s.label}
+                </label>
               ))}
             </div>
           </div>
 
-          {enabled.semrush && isAuto('semrush') && (
+          {semrushOn && (
             <CompetitorsSection
               search={compSearch}
               domains={compDomains}
               problems={compProblems}
               jobs={compJobs}
               canStart={formReady}
-              disabled={busy}
+              disabled={busy || bundleRunning}
               onFind={() => void handleFindCompetitors()}
               onDomain={(i, value) => {
                 if (value === compDomains[i]) return;
@@ -632,20 +772,21 @@ export function DomainIntelligencePage() {
                 return true;
               }}
               onFetch={() => void handleFetchCompetitors()}
+              showFetch={false}
             />
           )}
 
           <div>
-            <p className="mb-2 text-sm font-medium text-[var(--color-ink-muted)]">Reports to generate</p>
-            <div className="flex flex-col gap-2.5">
+            <p className="mb-2 text-sm font-medium text-[var(--color-ink-muted)]">Keyword Analysis file</p>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
               {MODES.map((m) => (
-                <label key={m.value} className="flex w-fit cursor-pointer items-center gap-2.5 text-sm text-[var(--color-ink)]">
+                <label key={m.value} className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--color-ink)]">
                   <input
                     type="radio"
                     name="di-mode"
                     className="h-4 w-4 accent-[var(--color-brand-500)]"
                     checked={mode === m.value}
-                    disabled={busy}
+                    disabled={busy || bundleRunning}
                     onChange={() => setMode(m.value)}
                   />
                   {m.label}
@@ -657,42 +798,157 @@ export function DomainIntelligencePage() {
           {client && (
             <p className={`text-xs ${client.domainReportTaskId ? 'text-[var(--color-ink-muted)]' : 'text-amber-300'}`}>
               {client.domainReportTaskId
-                ? `Reports are posted as a comment on ClickUp task ${client.domainReportTaskId}.`
-                : 'No domain-report ClickUp task is set for this client, so reports will be generated for download only. Add the task ID in Client Management.'}
+                ? `Reports are posted as one comment on ClickUp task ${client.domainReportTaskId}.`
+                : 'No domain-report ClickUp task is set for this client, so reports are made for download only. Add the task ID in Client Management.'}
             </p>
           )}
+
+          <RunAllPanel
+            bundle={bundle}
+            selected={bundleReports}
+            onSelectedChange={setBundleReports}
+            blockedReason={bundleBlocked}
+            starting={bundleStarting}
+            competitorNote={competitorNote}
+            onStart={() => void handleRunAll()}
+            onPostReady={() => void handlePostReady()}
+            posting={postingReady}
+          />
 
           <InlineError message={error} />
 
-          <Button disabled={!ready || busy} onClick={() => void handleCombine()}>
-            {busy ? (
-              <>
-                <Spinner /> Combining…
-              </>
-            ) : client?.domainReportTaskId ? (
-              'Combine and post to ClickUp'
-            ) : (
-              'Combine reports'
-            )}
-          </Button>
-          {!busy && client && chosen.length > 0 && missing.length > 0 && (
-            <p className="-mt-3 text-center text-xs text-[var(--color-ink-faint)]">
-              {fetching.length > 0 && `Waiting for ${fetching.map((s) => s.label).join(', ')} to finish fetching. `}
-              {compFetching && 'Waiting for the competitors’ keywords. '}
-              {missing.filter((s) => !fetching.includes(s)).length > 0 &&
-                `Add the ${missing
-                  .filter((s) => !fetching.includes(s))
-                  .map((s) => s.label)
-                  .join(', ')} file to continue.`}
-            </p>
-          )}
+          <details
+            className="group rounded-2xl border border-[var(--color-border)] px-4 py-3"
+            open={showManual}
+            onToggle={(e) => setManualOpen((e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary className="cursor-pointer select-none text-sm font-medium text-[var(--color-ink)]">
+              Keyword report only, or upload the files yourself
+              <span className="ml-2 text-xs font-normal text-[var(--color-ink-faint)]">— no audits; use it when a tool’s file is uploaded by hand or only the keywords are needed</span>
+            </summary>
+            <div className="mt-4 flex flex-col gap-4">
+              {chosen.length === 0 && <p className="text-xs text-[var(--color-ink-faint)]">Tick at least one keyword tool above.</p>}
+              {SOURCES.filter((s) => enabled[s.value]).map((s) => (
+                <div key={s.value} className="flex flex-col gap-2">
+                  <p className="text-sm text-[var(--color-ink)]">{s.label}</p>
+                  {isAuto(s.value) ? (
+                    <FetchSlot
+                      label={s.label}
+                      job={jobs[s.value] ?? null}
+                      file={files[s.value] ?? null}
+                      mock={!!fetchStatus && !fetchStatus.live}
+                      agentNote={
+                        fetchStatus?.mode === 'agent'
+                          ? fetchStatus.agentOnline
+                            ? 'Done by the office Chrome (online).'
+                            : 'The office Chrome agent is OFFLINE — turn that computer and Chrome on, or upload the file instead.'
+                          : undefined
+                      }
+                      canStart={formReady}
+                      disabled={busy}
+                      onStart={() => void handleStartFetch(s.value)}
+                      onFile={(f) =>
+                        setFiles((prev) => {
+                          const next = { ...prev };
+                          if (f) next[s.value] = f;
+                          else delete next[s.value];
+                          return next;
+                        })
+                      }
+                    />
+                  ) : (
+                    <ExportDrop file={files[s.value] ?? null} onFile={(f) => setFiles((prev) => ({ ...prev, [s.value]: f }))} disabled={busy} />
+                  )}
+                </div>
+              ))}
+
+              {semrushOn && typedCompetitors.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm text-[var(--color-ink)]">Competitors’ keywords (Semrush)</p>
+                  <ul className="flex flex-col gap-1 text-xs">
+                    {compDomains.map((d, i) => {
+                      if (!toDomain(d)) return null;
+                      const job = compJobs[i];
+                      return (
+                        <li key={i} className="flex flex-wrap items-center gap-2">
+                          <span className="text-[var(--color-ink-muted)]">{toDomain(d)}</span>
+                          {(job?.state === 'queued' || job?.state === 'fetching') && (
+                            <span className="flex items-center gap-1.5 text-brand-300">
+                              <Spinner className="h-3 w-3" /> {job.step ?? 'Fetching…'}
+                            </span>
+                          )}
+                          {job?.state === 'done' && <span className="text-emerald-300">✓ {job.keywords} keywords</span>}
+                          {job?.state === 'failed' && <span className="text-amber-300">{job.error}</span>}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div>
+                    <Button
+                      variant="secondary"
+                      className="!py-1.5 text-xs"
+                      disabled={!formReady || busy || compFetching || compProblems.some(Boolean)}
+                      onClick={() => void handleFetchCompetitors()}
+                    >
+                      Fetch competitors’ keywords
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-col items-start gap-1.5">
+                <Button variant="secondary" disabled={!ready || busy} onClick={() => void handleCombine()}>
+                  {busy ? (
+                    <>
+                      <Spinner /> Combining…
+                    </>
+                  ) : client?.domainReportTaskId ? (
+                    'Combine keywords and post to ClickUp'
+                  ) : (
+                    'Combine keywords'
+                  )}
+                </Button>
+                {!busy && client && chosen.length > 0 && missing.length > 0 && (
+                  <p className="text-xs text-[var(--color-ink-faint)]">
+                    {fetching.length > 0 && `Waiting for ${fetching.map((s) => s.label).join(', ')} to finish fetching. `}
+                    {compFetching && 'Waiting for the competitors’ keywords. '}
+                    {missing.filter((s) => !fetching.includes(s)).length > 0 &&
+                      `Fetch or upload the ${missing
+                        .filter((s) => !fetching.includes(s))
+                        .map((s) => s.label)
+                        .join(', ')} file to continue.`}
+                  </p>
+                )}
+              </div>
+            </div>
+          </details>
         </div>
       </Card>
 
       {client && (
         <Card className="mt-6 p-6">
+          <AuditsSection
+            audits={audits}
+            agentReady={agentMode}
+            canStart={formReady}
+            disabled={bundleRunning}
+            onRun={(kind) => void handleRunAudit(kind)}
+            onDownload={(job) => void handleDownloadAudit(job)}
+          />
+        </Card>
+      )}
+
+      {client && (
+        <Card className="mt-6 p-6">
           <h2 className="text-sm font-semibold text-[var(--color-ink)]">Reports for {client.name}</h2>
-          {reports.length === 0 ? (
+          {historyError && reports.length === 0 ? (
+            <p className="mt-3 text-sm text-rose-300">
+              Couldn't load the history ({historyError}).{' '}
+              <button type="button" className="underline" onClick={() => void loadReports()}>
+                Try again
+              </button>
+            </p>
+          ) : reports.length === 0 ? (
             <p className="mt-3 text-sm text-[var(--color-ink-faint)]">No domain reports yet.</p>
           ) : (
             <ul className="mt-4 flex flex-col gap-3">
@@ -705,7 +961,7 @@ export function DomainIntelligencePage() {
                         <span className="ml-2 font-normal text-[var(--color-ink-muted)]">{r.websiteUrl}</span>
                       </p>
                       <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-                        {sourceSummary(r)} keywords
+                        {r.summary.auditsOnly ? 'Audits only' : `${sourceSummary(r)} keywords`}
                         {!!r.summary.competitors?.length && ` · vs ${r.summary.competitors.map((c) => c.domain).join(', ')}`}
                         {r.summary.intents &&
                           ` · ${Object.entries(r.summary.intents)
@@ -714,13 +970,19 @@ export function DomainIntelligencePage() {
                             .join(', ')}`}
                       </p>
                     </div>
-                    <StatusBadge label={STATUS[r.status]?.label ?? r.status} toneClassName={STATUS[r.status]?.tone ?? ''} />
+                    <StatusBadge
+                      label={r.status === 'POSTED' && r.summary.mockPosted ? 'Test mode — not posted' : (STATUS[r.status]?.label ?? r.status)}
+                      toneClassName={r.status === 'POSTED' && r.summary.mockPosted ? 'bg-amber-500/15 text-amber-300' : (STATUS[r.status]?.tone ?? '')}
+                    />
                   </div>
                   {r.error && r.status !== 'POSTED' && <p className="mt-2 text-xs text-amber-300">{r.error}</p>}
                   {!!r.summary.intentUnresolved && (
                     <p className="mt-2 text-xs text-[var(--color-ink-faint)]">
                       {r.summary.intentUnresolved} keyword(s) had no clear intent and were labelled Informational.
                     </p>
+                  )}
+                  {r.summary.filesExpired && (
+                    <p className="mt-2 text-xs text-[var(--color-ink-faint)]">Files removed 10 days after posting to save space — they’re in the ClickUp comment.</p>
                   )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     {r.files.map((f, i) => (

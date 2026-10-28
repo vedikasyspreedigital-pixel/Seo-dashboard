@@ -12,6 +12,7 @@ import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { deleteExtraAttachmentFiles } from '../../reporting/extraAttachments.js';
 import { processVerifiedExcelUpload, describeRegenerationBlock, describeReportGeneration } from '../../reporting/processVerifiedExcelUpload.js';
 import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
+import { callDataForSeoLive, hasDataForSeoCredentials, MISSING_CREDENTIALS_MESSAGE } from '../../dataforseo/client.js';
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
 import { expensiveActionRateLimit } from '../rateLimit.js';
@@ -21,6 +22,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // other than the repo checkout -- defaults to the existing local-dev path
 // when UPLOADS_DIR isn't set, so nothing changes for local development.
 const UPLOADS_DIR = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.resolve(__dirname, '../../../uploads');
+const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, '../../../reports');
+
+/**
+ * Deletes a run's stored file -- but only inside the app's own uploads/reports folders. A run whose file
+ * never got saved kept the uploaded NAME as its path, so deleting it removed a file of that name from the
+ * server's working folder (an upload called "package.json"...). Audit 2026-10-27.
+ */
+async function removeOwnFile(filePath: string) {
+  const resolved = path.resolve(filePath);
+  const inside = [UPLOADS_DIR, REPORTS_DIR].some((dir) => resolved.startsWith(dir + path.sep));
+  if (!inside) {
+    console.warn(`[runs] not deleting ${filePath}: it isn't in the uploads or reports folder`);
+    return;
+  }
+  await unlink(resolved).catch(() => undefined);
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -42,6 +59,8 @@ function countFor(counts: { status: string; _count: { _all: number } }[], status
 
 export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   const router = Router();
+  /** Uploads being created right now (client + file name + size) -> the run they're creating. */
+  const uploadsInFlight = new Map<string, Promise<{ run: { id: string }; insertedRowCount: number; rowErrors: unknown[] }>>();
   router.use(requireAuth);
 
   router.post('/', expensiveActionRateLimit, upload.single('file'), async (req, res) => {
@@ -65,6 +84,18 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     // already-created run rather than erroring, so a duplicate click just
     // silently resolves to the one real run instead of surfacing a
     // confusing error to the user.
+    // ...and a click that arrives while the first one is STILL being created (both passed the check below
+    // before either run existed -- two runs, audit 2026-10-27) waits for it and gets the same run.
+    const uploadKey = `${clientId}\n${file.originalname}\n${file.size}`;
+    const inFlight = uploadsInFlight.get(uploadKey);
+    if (inFlight) {
+      const first = await inFlight.catch(() => null);
+      if (first) {
+        res.status(200).json({ run: first.run, insertedRowCount: first.insertedRowCount, rowErrors: [] });
+        return;
+      }
+    }
+
     const recentDuplicate = await prisma.rankingRun.findFirst({
       where: { clientId, sourceFilename: file.originalname, createdAt: { gte: new Date(Date.now() - 10_000) } },
       orderBy: { createdAt: "desc" },
@@ -74,11 +105,14 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       return;
     }
 
-    try {
+    const creating = (async () => {
       const { run, insertedRowCount, rowErrors } = await ingestExcelRun({
         clientId,
         sourceFilename: file.originalname,
-        sourceFilePath: file.originalname, // placeholder, replaced below once we know run.id
+        // A placeholder INSIDE the uploads folder, replaced below once we know run.id. It used to be the
+        // uploaded file's own name: if saving then failed, deleting the run deleted a file of that name
+        // from the server's working folder (audit 2026-10-27).
+        sourceFilePath: path.join(UPLOADS_DIR, 'not-saved-yet.xlsx'),
         fileBuffer: file.buffer,
       });
 
@@ -86,10 +120,16 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       const storedPath = path.join(UPLOADS_DIR, `${run.id}.xlsx`);
       await writeFile(storedPath, file.buffer);
       await prisma.rankingRun.update({ where: { id: run.id }, data: { sourceFilePath: storedPath } });
+      return { run: { ...run, sourceFilePath: storedPath }, insertedRowCount, rowErrors };
+    })();
+    uploadsInFlight.set(uploadKey, creating);
 
-      res.status(201).json({ run: { ...run, sourceFilePath: storedPath }, insertedRowCount, rowErrors });
+    try {
+      res.status(201).json(await creating);
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
+    } finally {
+      uploadsInFlight.delete(uploadKey);
     }
   });
 
@@ -114,6 +154,9 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       const { rows, rowErrors } = await parseRankingExcel(file.buffer, { clientId });
       res.json({
         insertedRowCount: rows.length,
+        // Rows already "Completed" with a rank are kept as they are and NOT checked again -- the page
+        // warns, so last period's downloaded Excel isn't mistaken for fresh ranks (the user's choice, 2026-10-27).
+        alreadyRankedCount: (rows as { status: string }[]).filter((r) => r.status === 'COMPLETED').length,
         rowErrorCount: rowErrors.length,
         rowErrors: rowErrors.slice(0, 5),
         detectedColumns: Object.values(COLUMN_HEADERS),
@@ -124,8 +167,16 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     }
   });
 
+  // Live DataForSEO without its login: refused up front -- a started run used to hang on its first keyword.
+  const cantCheckRankings = (res: import('express').Response) => {
+    if (callDataForSeo !== callDataForSeoLive || hasDataForSeoCredentials()) return false;
+    res.status(503).json({ error: MISSING_CREDENTIALS_MESSAGE });
+    return true;
+  };
+
   router.post('/:id/start', expensiveActionRateLimit, async (req, res) => {
     if (!(await findOwnedRunOrRespond(req, res, req.params.id as string, { requireActive: true }))) return;
+    if (cantCheckRankings(res)) return;
     try {
       const run = await startRun(req.params.id as string);
       // Fire-and-forget: the HTTP response returns immediately, the
@@ -137,6 +188,8 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       });
       res.json(run);
     } catch (err) {
+      // 409 only when the run is in the wrong state; a database failure is a real error, not a "conflict".
+      if (!(err instanceof InvalidRunTransitionError)) throw err;
       res.status(409).json({ error: (err as Error).message });
     }
   });
@@ -153,6 +206,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       res.status(409).json({ error: 'This run already has a report. Rerun failed keywords before uploading the verified Excel.' });
       return;
     }
+    if (cantCheckRankings(res)) return;
     try {
       const { run, resetCount } = await rerunFailedRows(runId);
       processRun(run.id, callDataForSeo).catch((err) => {
@@ -195,6 +249,8 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     // run as a historical COMPARISON for a different (still-existing) run
     // -- see the previousRunId detach below, which leaves those reports and
     // their own run completely untouched.
+    // That includes SENT reports and their send history -- the user's
+    // decision (2026-10-27, after the audit asked): deleting a run removes everything from it.
     const dependentReports = await prisma.rankingReport.findMany({ where: { runId: run.id } });
 
     await prisma.$transaction(async (tx) => {
@@ -212,11 +268,11 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       await tx.rankingRun.delete({ where: { id: run.id } });
     });
 
-    await unlink(run.sourceFilePath).catch(() => undefined);
-    if (run.resultFilePath) await unlink(run.resultFilePath).catch(() => undefined);
+    await removeOwnFile(run.sourceFilePath);
+    if (run.resultFilePath) await removeOwnFile(run.resultFilePath);
     for (const report of dependentReports) {
-      if (report.clientPdfPath) await unlink(report.clientPdfPath).catch(() => undefined);
-      if (report.customPdfPath) await unlink(report.customPdfPath).catch(() => undefined);
+      if (report.clientPdfPath) await removeOwnFile(report.clientPdfPath);
+      if (report.customPdfPath) await removeOwnFile(report.customPdfPath);
       await deleteExtraAttachmentFiles(report.id, report.extraAttachments);
     }
     res.status(204).send();
@@ -291,7 +347,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     const { buffer: updatedBuffer, filename } = await exportRunExcelBuffer(runId);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`);
+    res.attachment(filename); // encodes any name (a "–" or non-English letters used to make this a 500)
     res.send(updatedBuffer);
   });
 
@@ -345,6 +401,12 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
             unmatchedKeywords: result.unmatchedKeywords,
           });
           return;
+        case 'INVALID_ROWS': {
+          const shown = result.problems.slice(0, 8).join('; ');
+          const more = result.problems.length > 8 ? ` (and ${result.problems.length - 8} more)` : '';
+          res.status(422).json({ error: `Nothing was changed -- fix these rows and upload again: ${shown}${more}`, problems: result.problems });
+          return;
+        }
         case 'SUCCESS':
           res.status(result.regenerated ? 200 : 201).json(describeReportGeneration(result));
           return;

@@ -49,6 +49,10 @@ export function RunDetailPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [confirmingRerun, setConfirmingRerun] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+  // A failed load used to leave "Loading..." on screen for good (a deleted run, a restart, an expired
+  // login) -- now it says why, with a Retry (audit 2026-10-27).
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   // Tracks the last-seen runStatus for THIS runId, purely to detect the edge
   // into a terminal state for the completion toast -- reset alongside the
   // other per-runId state below so switching runs never fires a stale toast.
@@ -63,6 +67,7 @@ export function RunDetailPage() {
     setRun(null);
     setRows([]);
     setActionError(null);
+    setLoadError(null);
     setConfirmingRerun(false);
     previousStatusRef.current = null;
   }, [runId]);
@@ -80,21 +85,35 @@ export function RunDetailPage() {
 
   useEffect(() => {
     if (!runId) return;
-    getRun(runId).then(setRun);
-  }, [runId]);
+    let cancelled = false;
+    getRun(runId)
+      .then((data) => {
+        if (!cancelled) setRun(data);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setLoadError(err.message || 'Something went wrong.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, loadAttempt]);
 
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
-    getRunRows(runId).then((data) => {
-      if (!cancelled) setRows(data);
-    });
+    getRunRows(runId)
+      .then((data) => {
+        if (!cancelled) setRows(data);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setLoadError(err.message || 'Something went wrong.');
+      });
     return () => {
       cancelled = true;
     };
     // Re-fetch rows every time progress changes (each poll tick), so the
     // table reflects live rank/status updates while a run is processing.
-  }, [runId, progress]);
+  }, [runId, progress, loadAttempt]);
 
   if (!runId) return null;
 
@@ -267,6 +286,21 @@ export function RunDetailPage() {
         </div>
       )}
 
+      {loadError && (
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <InlineError message={`Couldn't load this run: ${loadError}`} />
+          <Button
+            variant="secondary"
+            className="!py-1 text-xs"
+            onClick={() => {
+              setLoadError(null);
+              setLoadAttempt((n) => n + 1);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
       <InlineError message={actionError} className="mt-2" />
 
       {progress && !isTerminal && (

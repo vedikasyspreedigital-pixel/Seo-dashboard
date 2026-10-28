@@ -44,6 +44,8 @@ export default function App() {
         <Route path="/reports/:reportId/preview" element={<ReportPreviewWizardPage />} />
         <Route path="/reports/:reportId/email" element={<EmailDraftPage />} />
         <Route path="/reports/:reportId/send" element={<SendConfirmationPage />} />
+        {/* A mistyped address showed a blank page (audit 2026-10-27) -- back to the Overview instead. */}
+        <Route path="*" element={<Navigate to="/overview" replace />} />
       </Route>
     </Routes>
   );

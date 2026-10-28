@@ -60,7 +60,7 @@ export interface ClientReportPdfInput {
   analytics: RunAnalytics;
 }
 
-type MovementKind = "improved" | "dropped" | "unchanged" | "new" | "lost";
+type MovementKind = "improved" | "dropped" | "unchanged" | "new" | "lost" | "nodata";
 
 interface TableRow {
   rowUid: string;
@@ -82,7 +82,11 @@ const MOVEMENT_COLOR: Record<MovementKind, string> = {
   dropped: "#c0362c",
   lost: "#c0362c",
   unchanged: "#6b7280",
+  nodata: "#6b7280",
 };
+
+/** No rank data (the check failed / a blank baseline cell) -- shown as such, never as "Not in 100". */
+const NO_DATA = "No data";
 
 /**
  * Human-readable overall movement, never raw signed arithmetic. Lower rank
@@ -165,9 +169,34 @@ export function buildRowsAndSummary(analytics: RunAnalytics, sourceOrder?: Recor
     rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: RANK_DISPLAY(m.previousRank), currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "→ 0", kind: "unchanged", currentRank: m.currentRank });
   }
 
+  // Newly tracked: "↑ New" (green, counted as entering the top 100) only when it actually ranks now --
+  // an unranked new keyword is "New" in grey, and one whose check failed says "No data" (audit 2026-10-27).
+  const noDataRows: TableRow[] = [];
   for (const m of analytics.movements.newlyTracked) {
-    enteredTop100Count++;
-    rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
+    if (m.noData) {
+      noDataRows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: NO_DATA, movementLabel: NO_DATA, kind: "nodata", currentRank: null });
+    } else if (m.currentRank === null) {
+      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "New", kind: "unchanged", currentRank: m.currentRank });
+    } else {
+      enteredTop100Count++;
+      rows.push({ rowUid: m.rowUid, keyword: m.keyword, previousRankLabel: "Not in 100", currentRankLabel: RANK_DISPLAY(m.currentRank), movementLabel: "↑ New", kind: "new", currentRank: m.currentRank });
+    }
+  }
+
+  // Missing data on either side: no movement claimed, not counted anywhere. Ranked now -> sorted with the
+  // ranked keywords; otherwise after the "Not in 100" tail.
+  for (const m of analytics.movements.noData ?? []) {
+    const row: TableRow = {
+      rowUid: m.rowUid,
+      keyword: m.keyword,
+      previousRankLabel: m.previousKnown ? RANK_DISPLAY(m.previousRank) : NO_DATA,
+      currentRankLabel: m.currentKnown ? RANK_DISPLAY(m.currentRank) : NO_DATA,
+      movementLabel: NO_DATA,
+      kind: "nodata",
+      currentRank: m.currentKnown ? m.currentRank : null,
+    };
+    if (m.currentKnown) rows.push(row);
+    else noDataRows.push(row);
   }
 
   // Ranked keywords first (rank ascending, 1..100), then a clearly separated
@@ -182,7 +211,7 @@ export function buildRowsAndSummary(analytics: RunAnalytics, sourceOrder?: Recor
   const notInTop100 = orderNotRanked(rows.filter((r) => r.currentRank === null), sourceOrder);
 
   return {
-    rows: [...ranked, ...notInTop100],
+    rows: [...ranked, ...notInTop100, ...orderNotRanked(noDataRows, sourceOrder)],
     summary: {
       hasComparison: true as const,
       totalKeywords: analytics.totals.totalKeywords,
@@ -215,17 +244,18 @@ function buildCurrentOnlyRowsAndSummary(analytics: RunAnalytics, sourceOrder?: R
     rowUid: m.rowUid,
     keyword: m.keyword,
     previousRankLabel: "—",
-    currentRankLabel: RANK_DISPLAY(m.currentRank),
+    currentRankLabel: m.noData ? NO_DATA : RANK_DISPLAY(m.currentRank),
     movementLabel: "—",
-    kind: "unchanged",
+    kind: m.noData ? "nodata" : "unchanged",
     currentRank: m.currentRank,
   }));
 
   const ranked = rows.filter((r) => r.currentRank !== null).sort((a, b) => (a.currentRank as number) - (b.currentRank as number));
-  const notInTop100 = orderNotRanked(rows.filter((r) => r.currentRank === null), sourceOrder);
+  const notInTop100 = orderNotRanked(rows.filter((r) => r.currentRank === null && r.kind !== "nodata"), sourceOrder);
+  const noData = orderNotRanked(rows.filter((r) => r.kind === "nodata"), sourceOrder);
 
   return {
-    rows: [...ranked, ...notInTop100],
+    rows: [...ranked, ...notInTop100, ...noData],
     summary: {
       hasComparison: false as const,
       totalKeywords: analytics.totals.totalKeywords,
@@ -331,7 +361,7 @@ function buildHtml(input: ClientReportPdfInput): string {
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #111827; margin: 0; }
   .brand-header { display: flex; align-items: center; justify-content: space-between; background: #58595b; color: #ffffff; padding: 10px 18px; margin-bottom: 18px; }
-  .brand-logo-chip { background: #ffffff; padding: 6px 14px; display: flex; align-items: center; }
+  .brand-logo-chip { background: transparent; padding: 6px 14px; display: flex; align-items: center; }
   .brand-logo-chip img { display: block; height: 34px; width: auto; }
   .brand-meta { text-align: right; line-height: 1.5; }
   .brand-meta .title { font-size: 13px; font-weight: 700; }

@@ -5,6 +5,7 @@ import { PageHeader, PageTitle } from '../../components/layout/PageHeader';
 import { Button } from '../../components/ui/Button';
 import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
+import { ReportLoadFailed } from '../../components/report/ReportLoadFailed';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { EmailDraftEditor } from '../../components/report/EmailDraftEditor';
 import { EmailTemplateToggle } from '../../components/report/EmailTemplateToggle';
@@ -27,6 +28,8 @@ export function EmailDraftPage() {
   const [savingDraft, setSavingDraft] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     if (!reportId) return;
@@ -34,15 +37,17 @@ export function EmailDraftPage() {
     // update from Save/Regenerate/Reject below, so a Regenerate failure
     // (which leaves emailSubject null, same as "no draft yet") never yanks
     // the user off the page they're actively looking at.
-    getReport(reportId).then((r) => {
-      const hasDraft = Boolean(r.clientPdfPath) && (Boolean(r.emailSubject) || r.status === 'EMAIL_DRAFT_FAILED');
-      if (!hasDraft) {
-        navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
-        return;
-      }
-      setReport(r);
-    });
-  }, [reportId]);
+    getReport(reportId)
+      .then((r) => {
+        const hasDraft = Boolean(r.clientPdfPath) && (Boolean(r.emailSubject) || r.status === 'EMAIL_DRAFT_FAILED');
+        if (!hasDraft) {
+          navigate(resumeRouteForStatus(reportId, r.status), { replace: true });
+          return;
+        }
+        setReport(r);
+      })
+      .catch((err: Error) => setLoadError(err.message || 'Something went wrong.'));
+  }, [reportId, loadAttempt]);
 
   async function refresh() {
     if (!reportId) return;
@@ -130,7 +135,7 @@ export function EmailDraftPage() {
   if (!report) {
     return (
       <AppShell>
-        <ReportWorkingCard label="Loading..." />
+        {loadError ? <ReportLoadFailed message={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} /> : <ReportWorkingCard label="Loading..." />}
       </AppShell>
     );
   }

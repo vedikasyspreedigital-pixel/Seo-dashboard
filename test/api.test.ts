@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
-import { writeFile, access } from "node:fs/promises";
+import { writeFile, access, mkdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import ExcelJS from "exceljs";
@@ -286,8 +286,11 @@ test("DELETE /api/runs/:id cascades: deletes a report generated FROM this run, i
     const runId = uploadRes.body.run.id;
     await prisma.rankingRun.update({ where: { id: runId }, data: { status: "COMPLETED", completedAt: new Date() } });
 
-    const clientPdfPath = path.join(os.tmpdir(), `delete-cascade-generated-${randomUUID()}.pdf`);
-    const customPdfPath = path.join(os.tmpdir(), `delete-cascade-custom-${randomUUID()}.pdf`);
+    // In the reports folder, where report PDFs really live (a run delete removes files only there, 2026-10-28).
+    const reportsDir = process.env.REPORTS_DIR ?? os.tmpdir();
+    await mkdir(reportsDir, { recursive: true });
+    const clientPdfPath = path.join(reportsDir, `delete-cascade-generated-${randomUUID()}.pdf`);
+    const customPdfPath = path.join(reportsDir, `delete-cascade-custom-${randomUUID()}.pdf`);
     await writeFile(clientPdfPath, "fake generated pdf");
     await writeFile(customPdfPath, "fake custom pdf");
     const report = await prisma.rankingReport.create({
@@ -302,6 +305,29 @@ test("DELETE /api/runs/:id cascades: deletes a report generated FROM this run, i
     await assert.rejects(() => access(clientPdfPath), "the generated PDF must be removed from disk");
     await assert.rejects(() => access(customPdfPath), "the custom PDF must be removed from disk");
   } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// The user's decision, 2026-10-27 (asked during the audit): deleting a run removes its sent reports too,
+// send history included.
+test("DELETE /api/runs/:id also removes a sent report's send history", async () => {
+  const app = createApp(mockCallDataForSeo, 'mock');
+  const client = await prisma.client.create({ data: { name: `API Test - delete removes send history ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  try {
+    const fileBuffer = await buildTestWorkbookBuffer();
+    const uploadRes = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", fileBuffer, "delete-send-history.xlsx");
+    const runId = uploadRes.body.run.id;
+    await prisma.rankingRun.update({ where: { id: runId }, data: { status: "COMPLETED", completedAt: new Date() } });
+    const report = await prisma.rankingReport.create({ data: { clientId: client.id, runId, analyticsJson: {}, status: "SENT", sentAt: new Date() } });
+    await prisma.reportSend.create({ data: { reportId: report.id, sentBy: "om@syspreedigital.com", subject: "Sep update" } });
+
+    assert.equal((await authedApp(app).delete(`/api/runs/${runId}`)).status, 204);
+    assert.equal(await prisma.rankingReport.count({ where: { id: report.id } }), 0);
+    assert.equal(await prisma.reportSend.count({ where: { reportId: report.id } }), 0);
+  } finally {
+    await prisma.reportSend.deleteMany({ where: { report: { clientId: client.id } } });
+    await prisma.rankingReport.deleteMany({ where: { clientId: client.id } });
     await cleanupClient(client.id);
   }
 });
@@ -408,6 +434,46 @@ test("POST /api/runs/validate: parses without persisting anything", async () => 
     assert.equal(runs.length, 0, "validate must not create a run");
   } finally {
     await prisma.client.delete({ where: { id: client.id } });
+  }
+});
+
+// Audit 2026-10-27 (#9, the user's choice "warn, keep as is"): rows already "Completed" with a rank are not
+// checked again -- the page now says how many, so last period's Excel isn't taken for fresh ranks.
+// And a file with no usable rows no longer creates an empty run that "completes" instantly.
+async function workbookWith(rows: (string | number)[][]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Sheet1");
+  sheet.addRow(Object.values(COLUMN_HEADERS));
+  for (const row of rows) sheet.addRow(row);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+const sheetRow = (keyword: string, status: string, rank = "") => [keyword, "https://example.com/", "*example.*", `${keyword} example`, "Australia", "google.com.au", "English", status, rank, rank ? "https://example.com/" : ""];
+
+test("POST /api/runs/validate: says how many rows already have a rank (they won't be checked again)", async () => {
+  const app = createApp(mockCallDataForSeo, 'mock');
+  const client = await prisma.client.create({ data: { name: `API Test - validate already ranked ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  try {
+    const file = await workbookWith([sheetRow("yoga sydney", "Completed", "7"), sheetRow("pilates sydney", "Pending"), sheetRow("barre sydney", "Completed", "Not in 100")]);
+    const res = await authedApp(app).post("/api/runs/validate").field("clientId", client.id).attach("file", file, "last-period.xlsx");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.insertedRowCount, 3);
+    assert.equal(res.body.alreadyRankedCount, 2);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("POST /api/runs: a file with no usable rows is refused and creates no run", async () => {
+  const app = createApp(mockCallDataForSeo, 'mock');
+  const client = await prisma.client.create({ data: { name: `API Test - no usable rows ${randomUUID()}`, workspaceId: sharedAuth.workspace.id } });
+  try {
+    const file = await workbookWith([sheetRow("yoga sydney", "Complete")]); // a Status nobody recognises
+    const res = await authedApp(app).post("/api/runs").field("clientId", client.id).attach("file", file, "empty.xlsx");
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /No keyword rows could be read.*row 2: Unrecognized Status value/);
+    assert.equal(await prisma.rankingRun.count({ where: { clientId: client.id } }), 0);
+  } finally {
+    await cleanupClient(client.id);
   }
 });
 

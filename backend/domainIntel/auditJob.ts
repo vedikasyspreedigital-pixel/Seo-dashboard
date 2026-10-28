@@ -81,24 +81,38 @@ export async function loadSavedAudits() {
 
 export class AuditJobError extends Error {}
 
-/** The client's newest finished report of each kind the AI audit reads. */
-function latestSources(clientId: string): AuditJob[] {
+/**
+ * The reports the AI audit reads: exactly `sourceIds` when given (a run passes its OWN Site Audit and
+ * WooRank), else the client's newest finished one of each kind for the SAME website. It used to take the
+ * newest of any website from the last week -- so a run whose WooRank failed silently used last week's
+ * (audit 2026-10-27; the user's choice: only this run's audits).
+ */
+function latestSources(clientId: string, websiteUrl: string, sourceIds?: string[]): AuditJob[] {
+  const usable = (j: AuditJob) => j.state === "done" && !!j.filePath;
+  if (sourceIds) return sourceIds.map((id) => jobs.get(id)).filter((j): j is AuditJob => !!j && usable(j) && j.clientId === clientId);
   return AI_SOURCE_KINDS.flatMap((kind) => {
-    const done = [...jobs.values()].filter((j) => j.clientId === clientId && j.kind === kind && j.state === "done" && j.filePath);
+    const done = [...jobs.values()].filter((j) => j.clientId === clientId && j.kind === kind && usable(j) && bareDomain(j.websiteUrl) === bareDomain(websiteUrl));
     done.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return done.slice(0, 1);
   });
 }
 
 export async function startAudit(
-  input: { kind: AuditKind; client: { id: string; workspaceId: string | null; name?: string }; websiteUrl: string },
+  input: {
+    kind: AuditKind;
+    client: { id: string; workspaceId: string | null; name?: string };
+    websiteUrl: string;
+    /** AI audit only: read exactly these finished audits (a run's own), not the newest ones. */
+    sourceIds?: string[];
+  },
   fetchers: Partial<Record<AuditKind, FetchExportFn>>,
   aiWriter?: AiAuditWriter | null,
 ): Promise<AuditJob> {
   const fetcher = fetchers[input.kind];
+  const sources = () => latestSources(input.client.id, input.websiteUrl, input.sourceIds);
   if (input.kind === "aiaudit") {
     if (!aiWriter) throw new AuditJobError("The AI SEO Audit needs Gemini (GEMINI_API_KEY isn't set on this server).");
-    if (latestSources(input.client.id).length === 0) throw new AuditJobError("Run the WooRank audit (and the Semrush Site Audit) first -- the AI SEO Audit is built from them.");
+    if (sources().length === 0) throw new AuditJobError("Run the WooRank audit (and the Semrush Site Audit) first, for this website -- the AI SEO Audit is built from them.");
   } else if (!fetcher) throw new AuditJobError(`${AUDIT_LABELS[input.kind]} isn't available on this server (it needs the office Chrome agent).`);
   const running = [...jobs.values()].find((j) => j.clientId === input.client.id && j.kind === input.kind && (j.state === "queued" || j.state === "running"));
   if (running) return running; // a double-click never queues a second audit
@@ -123,7 +137,7 @@ export async function startAudit(
             clientName: input.client.name ?? bareDomain(input.websiteUrl),
             websiteUrl: input.websiteUrl,
             sources: await Promise.all(
-              latestSources(input.client.id).map(async (s) => ({ label: AUDIT_LABELS[s.kind], fileName: s.fileName ?? `${s.kind}.pdf`, buffer: await readFile(s.filePath!) })),
+              sources().map(async (s) => ({ label: AUDIT_LABELS[s.kind], fileName: s.fileName ?? `${s.kind}.pdf`, buffer: await readFile(s.filePath!) })),
             ),
             onStep: (step) => update(job, { state: "running", step }),
           })
@@ -159,6 +173,17 @@ async function run(job: AuditJob, make: () => Promise<{ buffer: Buffer; fileName
 
 export function getAudit(id: string): AuditJob | undefined {
   return jobs.get(id);
+}
+
+/** The client's newest job of each kind (any state) -- what the page's audit cards show. */
+export function latestAudits(clientId: string): Partial<Record<AuditKind, AuditJob>> {
+  const out: Partial<Record<AuditKind, AuditJob>> = {};
+  for (const job of jobs.values()) {
+    if (job.clientId !== clientId) continue;
+    const current = out[job.kind];
+    if (!current || job.createdAt > current.createdAt) out[job.kind] = job;
+  }
+  return out;
 }
 
 export async function auditFile(id: string): Promise<{ buffer: Buffer; name: string } | null> {

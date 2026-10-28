@@ -42,51 +42,124 @@ function clickAccessLink() {
   return !!el;
 }
 
-/** The keyword TABLE's toolbar: "N keywords" ... Columns | API | Export. Returns N, or null if not there yet. */
+/**
+ * The keyword TABLE is ready: returns its "N keywords", or null if not there yet. Found by position, as a
+ * person sees it (2026-10-27: Flikover injects its own scripts into Ahrefs and the structure-based match
+ * kept missing): the LAST "N keywords" label on the page (the table's -- the chart above has its own)
+ * with an "Export" control on the SAME ROW (Columns · API · Export).
+ */
 function tableKeywordCount() {
-  const label = [...document.querySelectorAll("div, span")].find((e) => /^[\d,]+ keywords$/.test((e.textContent || "").trim()) && e.children.length === 0);
+  const visible = (e) => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+  const norm = (e) => (e.textContent || "").replace(/\s+/g, " ").trim();
+  const labels = [...document.querySelectorAll("div, span, h2, h3, p")].filter((e) => visible(e) && /^[\d,]+ keywords$/i.test(norm(e)) && e.children.length <= 2);
+  const label = labels.pop();
   if (!label) return null;
-  let bar = label.parentElement;
-  for (let i = 0; i < 8 && bar; i++, bar = bar.parentElement) {
-    const buttons = [...bar.querySelectorAll("button")].map((b) => (b.textContent || "").trim());
-    if (buttons.includes("Columns") && buttons.includes("Export")) return Number(label.textContent.replace(/[^\d]/g, ""));
+  const row = label.getBoundingClientRect();
+  const exportOnRow = [...document.querySelectorAll('button, a, [role="button"]')].some((b) => {
+    if (!visible(b) || (b.textContent || "").replace(/[^a-z]/gi, "").toLowerCase() !== "export") return false;
+    const r = b.getBoundingClientRect();
+    return Math.abs(r.top + r.height / 2 - (row.top + row.height / 2)) < 30;
+  });
+  return exportOnRow ? Number(norm(label).replace(/[^\d]/g, "")) : null;
+}
+
+/** For error messages: the page path, any "… keywords"-style counts, and the visible buttons. */
+function describePage() {
+  const visible = (e) => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+  const counts = [...document.querySelectorAll("div, span, h1, h2, h3")]
+    .filter((e) => visible(e) && e.children.length <= 2 && /^[\d,.]+\s*[KM]?\s+\w+/.test((e.textContent || "").trim()) && (e.textContent || "").length < 40)
+    .map((e) => (e.textContent || "").trim())
+    .slice(0, 8);
+  const describe = (e) => `${e.tagName.toLowerCase()}${e.getAttribute("role") ? `[role=${e.getAttribute("role")}]` : ""}${e.getAttribute("aria-label") ? `[aria=${e.getAttribute("aria-label")}]` : ""}"${(e.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30)}"`;
+  // Anything that mentions "export" (text, aria-label, title, data attributes).
+  const exportish = [...document.querySelectorAll("*")]
+    .filter((e) => visible(e) && e.children.length <= 3)
+    .filter((e) => /export/i.test(`${(e.textContent || "").slice(0, 40)} ${e.getAttribute("aria-label") || ""} ${e.getAttribute("title") || ""} ${e.getAttribute("data-testid") || ""}`))
+    .map(describe)
+    .slice(0, 12);
+  // The clickable things in the last "N keywords" label's toolbar.
+  const isCount = (e) => /^[\d,]+\s+keywords$/.test((e.textContent || "").trim());
+  const label = [...document.querySelectorAll("div, span")].filter((e) => isCount(e) && ![...e.children].some(isCount)).pop();
+  let bar = label?.parentElement;
+  for (let i = 0; i < 4 && bar; i++) bar = bar.parentElement;
+  const near = bar ? [...bar.querySelectorAll('button, a, [role="button"], [role="menuitem"]')].filter(visible).map(describe).slice(0, 15) : [];
+  // The table label's exact characters, and per ancestor level what "export" texts it holds -- so a
+  // mismatch (odd spaces, an Export that isn't where expected) shows in the error itself.
+  const anyCount = [...document.querySelectorAll("div, span")].filter((e) => /^[\d,]+\s*keywords$/i.test((e.textContent || "").replace(/\s+/g, " ").trim()) && e.children.length <= 2).pop();
+  const codes = anyCount ? [...(anyCount.textContent || "")].map((c) => c.charCodeAt(0)).join(",") : "none";
+  const levels = [];
+  for (let i = 1, el = anyCount?.parentElement; i <= 8 && el; i++, el = el.parentElement) {
+    const ex = [...el.querySelectorAll("*")].filter((e) => /export/i.test(e.textContent || "") && e.children.length <= 3).map((e) => `${e.tagName.toLowerCase()}:${JSON.stringify((e.textContent || "").trim().slice(0, 12))}:${e.children.length}`);
+    levels.push(`L${i}=${ex.slice(-2).join("+") || "-"}`);
   }
-  return null;
+  // The position check's own view: where the table's label is, and where each Export control is.
+  const norm = (e) => (e.textContent || "").replace(/\s+/g, " ").trim();
+  const lab = [...document.querySelectorAll("div, span, h2, h3, p")].filter((e) => visible(e) && /^[\d,]+ keywords$/i.test(norm(e)) && e.children.length <= 2).pop();
+  const lr = lab?.getBoundingClientRect();
+  const exps = [...document.querySelectorAll('button, a, [role="button"]')]
+    .filter((b) => (b.textContent || "").replace(/[^a-z]/gi, "").toLowerCase() === "export")
+    .map((b) => {
+      const r = b.getBoundingClientRect();
+      return `${b.tagName.toLowerCase()}@${Math.round(r.top)}${visible(b) ? "" : "(hidden)"}`;
+    });
+  const onRow = !!lr && [...document.querySelectorAll('button, a, [role="button"]')].some((b) => {
+    if (!visible(b) || (b.textContent || "").replace(/[^a-z]/gi, "").toLowerCase() !== "export") return false;
+    const r = b.getBoundingClientRect();
+    return Math.abs(r.top + r.height / 2 - (lr.top + lr.height / 2)) < 30;
+  });
+  return `[flow v6] export-on-row=${onRow} label@${lr ? Math.round(lr.top) : "none"} "${lab ? norm(lab) : ""}" exports: ${exps.join(" ") || "none"} | path ${location.pathname} | label chars: ${codes} | levels: ${levels.join(" ")} | counts: ${counts.join(" / ") || "none"} | near: ${near.slice(0, 8).join(" , ") || "none"}`;
 }
 
 function clickTableExport() {
-  const label = [...document.querySelectorAll("div, span")].find((e) => /^[\d,]+ keywords$/.test((e.textContent || "").trim()) && e.children.length === 0);
-  let bar = label?.parentElement;
-  for (let i = 0; i < 8 && bar; i++, bar = bar.parentElement) {
-    const buttons = [...bar.querySelectorAll("button")];
-    if (buttons.some((b) => (b.textContent || "").trim() === "Columns")) {
-      const exp = buttons.find((b) => (b.textContent || "").trim() === "Export");
-      if (exp) {
-        exp.click();
-        return true;
-      }
-    }
+  // Same rule as tableKeywordCount: the Export on the same row as the table's "N keywords".
+  const visible = (e) => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+  const norm = (e) => (e.textContent || "").replace(/\s+/g, " ").trim();
+  // A full press (some controls only react to pointer events) on the clickable around the "Export" text.
+  const press = (el) => {
+    const r = el.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, view: window, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    el.dispatchEvent(new PointerEvent("pointerdown", { ...at, pointerType: "mouse", isPrimary: true }));
+    el.dispatchEvent(new MouseEvent("mousedown", at));
+    el.dispatchEvent(new PointerEvent("pointerup", { ...at, pointerType: "mouse", isPrimary: true }));
+    el.dispatchEvent(new MouseEvent("mouseup", at));
+    el.dispatchEvent(new MouseEvent("click", at));
+  };
+  const label = [...document.querySelectorAll("div, span, h2, h3, p")].filter((e) => visible(e) && /^[\d,]+ keywords$/i.test(norm(e)) && e.children.length <= 2).pop();
+  if (!label) return false;
+  const row = label.getBoundingClientRect();
+  const exp = [...document.querySelectorAll('button, a, [role="button"]')].find((b) => {
+    if (!visible(b) || (b.textContent || "").replace(/[^a-z]/gi, "").toLowerCase() !== "export") return false;
+    const r = b.getBoundingClientRect();
+    return Math.abs(r.top + r.height / 2 - (row.top + row.height / 2)) < 30;
+  });
+  if (exp) {
+    press(exp);
+    return true;
   }
   return false;
 }
 
 /** In the Export dialog: make sure "All N" + CSV UTF-16 are chosen (both are the defaults), then press its Export. */
 function exportFromDialog() {
-  const heading = [...document.querySelectorAll("div, span, label, p")].find((e) => (e.textContent || "").trim() === "Number of rows");
+  // Spaces normalised: Ahrefs uses non-breaking spaces in labels (seen 2026-10-27 in "78 keywords").
+  const text = (e) => (e.textContent || "").replace(/\s+/g, " ").trim();
+  const heading = [...document.querySelectorAll("div, span, label, p")].find((e) => text(e) === "Number of rows");
   if (!heading) return null; // not open yet -- waitFor() asks again
+  // The dialog's controls may not be <button>s either -- match any element by its own text.
+  // Letters only: the labels can carry invisible characters (seen 2026-10-27 on the table's "Export").
+  const byText = (root, re) => [...root.querySelectorAll("*")].filter((e) => re.test((e.textContent || "").replace(/[^a-z]/gi, "")) && e.children.length <= 3).pop();
   let dialog = heading.parentElement;
   for (let i = 0; i < 10 && dialog; i++, dialog = dialog.parentElement) {
-    const buttons = [...dialog.querySelectorAll("button")].map((b) => (b.textContent || "").trim());
-    if (buttons.includes("Cancel") && buttons.includes("Export")) break;
+    if (byText(dialog, /^cancel$/i) && byText(dialog, /^export$/i)) break; // letters-only text, see byText
   }
   if (!dialog) return null;
   const radioFor = (test) =>
-    [...dialog.querySelectorAll('input[type="radio"]')].find((r) => test((r.closest("label")?.textContent || r.parentElement?.textContent || "").trim()));
+    [...dialog.querySelectorAll('input[type="radio"]')].find((r) => test((r.closest("label")?.textContent || r.parentElement?.textContent || "").replace(/\s+/g, " ").trim()));
   for (const r of [radioFor((t) => /^All [\d,]+$/.test(t)), radioFor((t) => t.startsWith("CSV (UTF-16"))]) {
     if (r && !r.checked) r.click();
   }
-  const exp = [...dialog.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Export");
-  exp.click();
+  const exp = byText(dialog, /^export$/i);
+  (exp.closest('button, a, [role="button"]') || exp).click();
   return "clicked";
 }
 
@@ -160,8 +233,12 @@ export async function runAhrefs(task, ctx) {
   await navigate(tabId, url.toString());
   await waitForHuman(tabId, ctx, "Ahrefs");
   await assertSignedIn(tabId);
-  const expected = await waitFor(tabId, tableKeywordCount, [], 60_000);
-  if (expected === null) throw new AgentError("TIMEOUT", "Ahrefs' Organic keywords table didn't load.");
+  const expected = await waitFor(tabId, tableKeywordCount, [], 90_000);
+  if (expected === null) {
+    // Say what the page DID show, so a changed Ahrefs layout can be fixed from the error alone.
+    const seen = await run(tabId, describePage).catch(() => "?");
+    throw new AgentError("TIMEOUT", `Ahrefs' Organic keywords table didn't load. Page shows: ${seen}`.slice(0, 900));
+  }
   if (expected === 0) throw new AgentError("NO_DATA", `Ahrefs has 0 organic keywords for ${task.domain} in ${country.toUpperCase()}.`);
   await pause(2000, 4000); // let the table finish loading
 
@@ -169,7 +246,10 @@ export async function runAhrefs(task, ctx) {
   await run(tabId, installExportCapture, [], "MAIN");
   if (!(await run(tabId, clickTableExport))) throw new AgentError("FAILED", "Couldn't find the keyword table's Export button.");
   const dialog = await waitFor(tabId, exportFromDialog, [], 20_000);
-  if (dialog !== "clicked") throw new AgentError("TIMEOUT", "Ahrefs' Export dialog didn't open.");
+  if (dialog !== "clicked") {
+    const seen = await run(tabId, describePage).catch(() => "?");
+    throw new AgentError("TIMEOUT", `Ahrefs' Export dialog didn't open. Page shows: ${seen}`.slice(0, 900));
+  }
   const base64 = await waitFor(tabId, readCapturedExport, [], 120_000, 1000, "MAIN");
   if (!base64) throw new AgentError("TIMEOUT", "Ahrefs didn't produce the CSV within 2 minutes.");
 

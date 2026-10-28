@@ -4,44 +4,47 @@ import { processRun, type CallDataForSeoFn } from './processRun.js';
 
 /**
  * Called once at server startup, before the server starts accepting
- * requests. Any RankingRow still marked PROCESSING at boot is, by
- * definition, orphaned: a fresh process has no in-flight DataForSEO call
- * matching it -- whatever process dequeued it is gone (crash, OOM kill,
- * manual restart, or a hung request that got killed along with the old
- * process). Left alone, that row -- and every row behind it in the same
- * run, since processRun is sequential -- would sit stuck forever with
+ * requests. Any RankingRun still PROCESSING at boot has no live processRun
+ * behind it -- whatever process was working on it is gone (crash, OOM kill,
+ * manual restart, deploy). Left alone it would sit PROCESSING forever with
  * nothing to resume it (there is no "resume a stuck run" API endpoint, only
- * /start, which only accepts UPLOADED runs).
+ * /start, which only accepts UPLOADED runs, and a PROCESSING run can't be
+ * deleted).
  *
- * Only considers rows whose RUN is still PROCESSING -- a row could show
- * PROCESSING while its run was separately CANCELLED (cancelRun doesn't
- * touch row statuses), and that must never be silently resumed after a
- * restart; the run-status join excludes that case entirely.
+ * Covers every way a run can be left behind, not just a row caught
+ * mid-call: a row stuck PROCESSING, rows still PENDING/ERROR_RETRY (the
+ * process died during a retry backoff or between rows -- found in the
+ * 2026-10-27 audit), or every row finished but the run never marked
+ * complete. Only runs that are still PROCESSING count -- a CANCELLED run is
+ * never silently resumed.
  *
- * Resets each stale row (see recoverOrphanedRow -- never re-charges the
- * retry budget for an interrupted attempt, since we don't know whether it
- * would have succeeded) before returning, then resumes each affected run's
- * processRun fire-and-forget, same pattern as a fresh /start call -- so a
- * stuck run recovers automatically on the next boot, no manual DB surgery
- * or restart-and-hope required.
+ * Resets each stale PROCESSING row (see recoverOrphanedRow -- never
+ * re-charges the retry budget for an interrupted attempt, since we don't
+ * know whether it would have succeeded), then resumes each run's
+ * processRun fire-and-forget, same pattern as a fresh /start call.
+ * processRun only picks up PENDING/ERROR_RETRY rows, so COMPLETED rows are
+ * never sent to DataForSEO again, and it finishes the run's status itself.
+ *
+ * `onlyClientId` limits the sweep to one client (tests share one database).
  */
-export async function recoverStaleProcessingRows(callDataForSeo: CallDataForSeoFn): Promise<void> {
-  const staleRows = await prisma.rankingRow.findMany({
-    where: { status: 'PROCESSING', run: { status: 'PROCESSING' } },
-    select: { id: true, runId: true },
+export async function recoverStaleProcessingRows(callDataForSeo: CallDataForSeoFn, { onlyClientId }: { onlyClientId?: string } = {}): Promise<void> {
+  const runs = await prisma.rankingRun.findMany({
+    where: { status: 'PROCESSING', ...(onlyClientId ? { clientId: onlyClientId } : {}) },
+    select: { id: true },
   });
-  if (staleRows.length === 0) return;
+  if (runs.length === 0) return;
 
-  const affectedRunIds = new Set<string>();
-  for (const row of staleRows) {
-    await recoverOrphanedRow(row.id);
-    affectedRunIds.add(row.runId);
+  let staleRowCount = 0;
+  for (const run of runs) {
+    const staleRows = await prisma.rankingRow.findMany({ where: { runId: run.id, status: 'PROCESSING' }, select: { id: true } });
+    for (const row of staleRows) await recoverOrphanedRow(row.id);
+    staleRowCount += staleRows.length;
   }
 
-  console.log(`Recovered ${staleRows.length} stale PROCESSING row(s) across ${affectedRunIds.size} run(s) -- resuming automatically.`);
-  for (const runId of affectedRunIds) {
-    processRun(runId, callDataForSeo).catch((err) => {
-      console.error(`processRun failed while auto-resuming recovered run ${runId}:`, err);
+  console.log(`Resuming ${runs.length} interrupted run(s) (${staleRowCount} stale PROCESSING row(s) reset).`);
+  for (const run of runs) {
+    processRun(run.id, callDataForSeo).catch((err) => {
+      console.error(`processRun failed while auto-resuming recovered run ${run.id}:`, err);
     });
   }
 }

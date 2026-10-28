@@ -78,6 +78,19 @@ const norm = (s: unknown) =>
     .toLowerCase()
     .replace(/\s+/g, " ");
 
+/**
+ * Which tool's export these headers are, by columns only that tool has (checked against real exports,
+ * 2026-10-28): Ahrefs "Current position"; Semrush "Search Volume" + "Keyword Difficulty"; Ubersuggest
+ * "Seo Difficulty" / "Est. Visits". null = not recognisable, so not refused.
+ */
+export function toolOfHeaders(headers: string[]): KeywordSource | null {
+  const has = (h: string) => headers.includes(h);
+  if (has("current position")) return "ahrefs";
+  if (has("search volume") && has("keyword difficulty")) return "semrush";
+  if (has("seo difficulty") || has("est. visits")) return "ubersuggest";
+  return null;
+}
+
 export const keywordKey = (keyword: string) => keyword.trim().toLowerCase().replace(/\s+/g, " ");
 
 export async function readKeywordExport(source: KeywordSource, buffer: Buffer, fileName: string): Promise<KeywordExport> {
@@ -87,11 +100,13 @@ export async function readKeywordExport(source: KeywordSource, buffer: Buffer, f
   let headerIndex = -1;
   let cols = { keyword: -1, position: -1, volume: -1, intent: -1, url: -1, traffic: -1, difficulty: -1 };
   let intentFlags: { label: string; col: number }[] = [];
+  let headerCells: string[] = [];
   for (let i = 0; i < Math.min(table.length, 15); i++) {
     const cells = table[i].map(norm);
     const keyword = cells.findIndex((c) => KEYWORD_HEADERS.includes(c));
     if (keyword < 0) continue;
     headerIndex = i;
+    headerCells = cells;
     cols = {
       keyword,
       position: firstHeader(cells, POSITION_HEADERS),
@@ -108,6 +123,12 @@ export async function readKeywordExport(source: KeywordSource, buffer: Buffer, f
   }
   const label = SOURCE_LABELS[source];
   if (headerIndex < 0) throw new KeywordExportError(`No "Keyword" column found in the ${label} file "${fileName}".`);
+  // A file in the wrong tool's slot was accepted and labelled as that tool (audit 2026-10-27; the user's
+  // choice). Refused only when it clearly IS another tool's export -- an unknown layout still goes through.
+  const looksLike = toolOfHeaders(headerCells);
+  if (looksLike && looksLike !== source) {
+    throw new KeywordExportError(`"${fileName}" looks like a ${SOURCE_LABELS[looksLike]} export, not ${label} -- put it in the ${SOURCE_LABELS[looksLike]} slot.`);
+  }
   if (cols.position < 0) throw new KeywordExportError(`No "Position" column found in the ${label} file "${fileName}".`);
 
   const byKey = new Map<string, KeywordRow>();

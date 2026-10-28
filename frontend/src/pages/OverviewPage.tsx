@@ -5,6 +5,7 @@ import { KpiCard } from "../components/overview/KpiCard";
 import { MovementsChart } from "../components/overview/MovementsChart";
 import { RecentRunsCard } from "../components/overview/RecentRunsCard";
 import { ClientDetailsCard } from "../components/overview/ClientDetailsCard";
+import { Button } from "../components/ui/Button";
 import { useActiveClient } from "../context/ClientContext";
 import { useSession } from "../context/SessionContext";
 import { getOverview } from "../api/client";
@@ -21,6 +22,8 @@ export function OverviewPage() {
   const { activeClient } = useActiveClient();
   const { activeWorkspace } = useSession();
   const [overview, setOverview] = useState<OverviewData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   // Scoped to the active CLIENT (falls back to workspace-wide only if none
   // is selected) -- every tile on this page must reflect whichever client
@@ -36,19 +39,40 @@ export function OverviewPage() {
     if (!activeWorkspace) return;
     let cancelled = false;
     setOverview(null); // clear stale data immediately -- never show the previous client's numbers while the new ones load
-    getOverview(activeWorkspace.id, activeClient?.id).then((data) => {
-      if (!cancelled) setOverview(data);
-    });
+    getOverview(activeWorkspace.id, activeClient?.id)
+      .then((data) => {
+        if (cancelled) return;
+        setOverview(data);
+        setLoadError(null);
+      })
+      // A failed load used to leave "Loading overview..." for good (audit 2026-10-27).
+      .catch((err: Error) => {
+        if (!cancelled) setLoadError(err.message || "Something went wrong.");
+      });
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspace, activeClient]);
+  }, [activeWorkspace, activeClient, loadAttempt]);
 
   return (
     <AppShell wide>
       <PageTitle title="Overall Overview" subtitle="Welcome back, Admin 👋" className="mb-6" />
 
-      {!overview ? (
+      {!overview && loadError ? (
+        <div className="py-24 text-center text-sm">
+          <p className="text-rose-300">Couldn't load the overview: {loadError}</p>
+          <Button
+            variant="secondary"
+            className="mt-3"
+            onClick={() => {
+              setLoadError(null);
+              setLoadAttempt((n) => n + 1);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : !overview ? (
         <div className="py-24 text-center text-sm text-[var(--color-ink-faint)]">
           Loading overview...
         </div>

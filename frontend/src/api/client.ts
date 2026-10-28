@@ -33,8 +33,16 @@ const BASE = `${import.meta.env?.VITE_API_BASE_URL ?? ''}/api`;
 function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const method = (init?.method ?? 'GET').toUpperCase();
   const request = () => fetch(`${BASE}${path}`, { ...init, credentials: 'include' });
-  return method === 'GET' ? withRetry(request) : request();
+  return (method === 'GET' ? withRetry(request) : request()).then((res) => {
+    // The login ran out while the page was open: every request just failed with "Not authenticated"
+    // (audit 2026-10-27). The session is cleared so the sign-in guard sends the user to the login page.
+    if (res.status === 401 && !path.startsWith('/auth/') && typeof window !== 'undefined') window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    return res;
+  });
 }
+
+/** Fired when the server says the login has run out (see SessionContext). */
+export const SESSION_EXPIRED_EVENT = 'serp:session-expired';
 
 /** Statuses a restarting/redeploying backend answers with for a few seconds. */
 const RETRYABLE_STATUSES = new Set([502, 503, 504]);
@@ -416,6 +424,17 @@ export interface StorageUsage {
 }
 
 /** Settings > Storage: how full the uploads disk is and what uses it. */
+/** What the server really does -- "mock" = test mode, nothing is fetched/sent for real. */
+export interface DeliveryMode {
+  dataForSeo: 'live' | 'mock';
+  email: 'live' | 'mock';
+  comments: 'live' | 'mock';
+}
+
+export async function getDeliveryMode(): Promise<DeliveryMode> {
+  return handle<DeliveryMode>(await apiFetch('/delivery-mode'));
+}
+
 export async function getStorageUsage(): Promise<StorageUsage> {
   return handle<StorageUsage>(await apiFetch('/storage'));
 }
@@ -581,7 +600,7 @@ export async function compareReportsPdf(comparison: ReportComparison, clientName
 
 export type DomainSource = 'semrush' | 'ubersuggest' | 'ahrefs';
 export type DomainReportMode = 'combined' | 'individual' | 'both';
-export type DomainReportStatus = 'GENERATING' | 'GENERATED' | 'POSTING' | 'POSTED' | 'POST_FAILED' | 'NOT_POSTED';
+export type DomainReportStatus = 'GENERATING' | 'GENERATED' | 'POSTING' | 'POSTED' | 'POST_FAILED' | 'NOT_POSTED' | 'FAILED';
 
 /** "Fetch from Ahrefs" -- runs in the background; when done its file is used like an upload. */
 export interface DomainFetchJob {
@@ -629,6 +648,12 @@ export interface DomainReport {
     intentByAi?: number;
     intentUnresolved?: number;
     competitors?: { domain: string; keywords: number }[];
+    /** The files were removed 10 days after posting -- they're in the ClickUp comment. */
+    filesExpired?: boolean;
+    /** "Posted" while the server was in test mode -- nothing reached ClickUp. */
+    mockPosted?: boolean;
+    /** A run where only audits were picked: no keyword data. */
+    auditsOnly?: boolean;
   };
   files: { name: string }[];
   createdBy: string | null;
@@ -721,4 +746,105 @@ export async function downloadDomainReportFile(reportId: string, index: number):
   const res = await apiFetch(`/domain-intel/reports/${reportId}/files/${index}`);
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   return res.blob();
+}
+
+/** Semrush Site Audit / WooRank (made by the office Chrome agent) and the AI SEO Audit (Gemini). */
+export type DomainAuditKind = 'siteaudit' | 'woorank' | 'aiaudit';
+
+export interface DomainAuditJob {
+  id: string;
+  kind: DomainAuditKind;
+  clientId: string;
+  websiteUrl: string;
+  state: 'queued' | 'running' | 'done' | 'failed';
+  step?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function startDomainAudit(input: { kind: DomainAuditKind; clientId: string; websiteUrl: string }): Promise<DomainAuditJob> {
+  const res = await apiFetch('/domain-intel/audits', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return handle<DomainAuditJob>(res);
+}
+
+export async function getDomainAudit(id: string): Promise<DomainAuditJob> {
+  const res = await apiFetch(`/domain-intel/audits/${id}`);
+  return handle<DomainAuditJob>(res);
+}
+
+/** The client's newest audit of each kind (any state). */
+export async function getLatestDomainAudits(clientId: string): Promise<Partial<Record<DomainAuditKind, DomainAuditJob>>> {
+  const res = await apiFetch(`/domain-intel/audits?clientId=${encodeURIComponent(clientId)}`);
+  return handle<Partial<Record<DomainAuditKind, DomainAuditJob>>>(res);
+}
+
+export async function downloadDomainAuditFile(id: string): Promise<Blob> {
+  const res = await apiFetch(`/domain-intel/audits/${id}/file`);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  return res.blob();
+}
+
+/** "Run all 5 reports" -- runs on the server; the page follows its progress. */
+export type DomainBundlePart = 'keywords' | 'gap' | 'siteaudit' | 'woorank' | 'aiaudit' | 'post';
+/** The 5 reports a run can make -- the team ticks which ones. */
+export type DomainBundleReport = Exclude<DomainBundlePart, 'post'>;
+export const DOMAIN_BUNDLE_REPORTS: DomainBundleReport[] = ['keywords', 'gap', 'siteaudit', 'woorank', 'aiaudit'];
+
+export interface DomainBundle {
+  id: string;
+  clientId: string;
+  websiteUrl: string;
+  state: 'running' | 'done' | 'attention';
+  parts: Record<DomainBundlePart, { state: 'waiting' | 'running' | 'done' | 'failed' | 'skipped'; step?: string; error?: string }>;
+  /** The reports ticked for this run (missing on runs made before 2026-10-27 = all 5). */
+  selected?: DomainBundleReport[];
+  competitors: string[];
+  auditIds: Partial<Record<DomainAuditKind, string>>;
+  attachedAudits: DomainAuditKind[];
+  reportId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function startDomainBundle(input: {
+  clientId: string;
+  websiteUrl: string;
+  location: string;
+  sources: DomainSource[];
+  /** Typed by the team, or "auto" = Semrush's top 3. */
+  competitors: string[] | 'auto';
+  reportMode: DomainReportMode;
+  /** Which reports to make (all 5 when omitted). */
+  reports?: DomainBundleReport[];
+}): Promise<DomainBundle> {
+  const res = await apiFetch('/domain-intel/bundles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return handle<DomainBundle>(res);
+}
+
+/** Post a finished run: adds audits retried since (Audits section), then one ClickUp comment. */
+export async function postDomainBundle(id: string): Promise<DomainBundle> {
+  const res = await apiFetch(`/domain-intel/bundles/${id}/post`, { method: 'POST' });
+  return handle<DomainBundle>(res);
+}
+
+export async function getDomainBundle(id: string): Promise<DomainBundle> {
+  const res = await apiFetch(`/domain-intel/bundles/${id}`);
+  return handle<DomainBundle>(res);
+}
+
+/** The client's newest run (any state), or null. */
+export async function getLatestDomainBundle(clientId: string): Promise<DomainBundle | null> {
+  const res = await apiFetch(`/domain-intel/bundles?clientId=${encodeURIComponent(clientId)}`);
+  return handle<DomainBundle | null>(res);
 }

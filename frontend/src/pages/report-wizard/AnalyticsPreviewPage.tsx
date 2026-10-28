@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/Button';
 import { Spinner } from '../../components/ui/Spinner';
 import { StatTile } from '../../components/ui/StatTile';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
+import { ReportLoadFailed } from '../../components/report/ReportLoadFailed';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
 import { isReportAlreadyBuilt } from '../../components/report/reportStatus';
 import { Badge } from '../../components/ui/Badge';
@@ -33,6 +34,8 @@ export function AnalyticsPreviewPage() {
   const [regenerating, setRegenerating] = useState(false);
   // Open while the "already sent -- Continue?" warning is showing for Regenerate.
   const [resendPrompt, setResendPrompt] = useState<{ sendCount: number; lastSentAt: string | null } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     if (!reportId) return;
@@ -43,8 +46,10 @@ export function AnalyticsPreviewPage() {
     setReport(null);
     setError(null);
     setGenerating(false);
-    getReport(reportId).then(setReport);
-  }, [reportId]);
+    getReport(reportId)
+      .then(setReport)
+      .catch((err: Error) => setLoadError(err.message || 'Something went wrong.'));
+  }, [reportId, loadAttempt]);
 
   async function handleRegenerate(confirmResend = false) {
     if (!reportId || regenerating) return;
@@ -98,7 +103,7 @@ export function AnalyticsPreviewPage() {
   if (!report) {
     return (
       <AppShell>
-        <ReportWorkingCard label="Loading..." />
+        {loadError ? <ReportLoadFailed message={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} /> : <ReportWorkingCard label="Loading..." />}
       </AppShell>
     );
   }
@@ -212,6 +217,16 @@ export function AnalyticsPreviewPage() {
             <StatTile label="Unchanged" value={analytics.movements.unchanged.length} />
             <StatTile label="Newly Tracked" value={analytics.movements.newlyTracked.length} accent="text-blue-300" />
           </div>
+
+          {/* Keywords whose check failed (or a blank previous rank): shown as "No data" in the report, never as a loss/gain. */}
+          {(() => {
+            const noData = (analytics.movements.noData?.length ?? 0) + analytics.movements.newlyTracked.filter((m) => m.noData).length;
+            return noData > 0 ? (
+              <p className="mt-3 text-xs text-amber-300">
+                {noData} keyword{noData === 1 ? '' : 's'} had no rank data on one side (a failed check or a blank previous rank) — shown as “No data” in the report, not as a rise or drop.
+              </p>
+            ) : null;
+          })()}
 
           {(analytics.movements.improved.length > 0 || analytics.movements.declined.length > 0) && (
             <Card className="mt-4 overflow-hidden p-0">

@@ -1,6 +1,7 @@
 import express, { Router } from "express";
 import multer from "multer";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { prisma } from "../../db/client.js";
@@ -14,6 +15,7 @@ import { buildReport } from "../../reporting/buildReport.js";
 import { regenerateReport, describeRegenerationBlock, describeReportGeneration } from "../../reporting/processVerifiedExcelUpload.js";
 import { InvalidReportTransitionError } from "../../reporting/errors.js";
 import type { SendEmailFn } from "../../reporting/emailSender.js";
+import { isClickUpTaskUrl } from "../../reporting/clickupEmailSender.js";
 import type { GenerateExcelAttachmentFn } from "../../reporting/generateExcelAttachment.js";
 import { requireAuth } from "../../auth/requireAuth.js";
 import { findOwnedClientOrRespond, findOwnedRunOrRespond, findOwnedReportOrRespond } from "../../auth/ownership.js";
@@ -32,8 +34,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // locally. Custom PDFs live alongside the generated ones, distinguished
 // by the "-custom" suffix so neither ever collides with or overwrites
 // the other.
-const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, "../../../reports");
-const uploadCustomPdf = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, "../../../reports");const uploadCustomPdf = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const uploadExtraPdfs = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_EXTRA_ATTACHMENT_BYTES, files: MAX_EXTRA_ATTACHMENTS } });
 
 export interface ReportsRouterDeps {
@@ -218,6 +219,10 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
       res.status(400).json({ error: "resolvedClickupTaskUrl must be a string or null" });
       return;
     }
+    if (typeof resolvedClickupTaskUrl === "string" && resolvedClickupTaskUrl.trim() && !isClickUpTaskUrl(resolvedClickupTaskUrl)) {
+      res.status(400).json({ error: "The ClickUp task link must be an https://app.clickup.com/... address." });
+      return;
+    }
     try {
       const updated = await updateReportDraft(req.params.id, { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedCc, resolvedClickupTaskUrl, attachmentSource });
       res.json(updated);
@@ -239,7 +244,8 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   // later if the user changes their mind again.
   router.post("/:id/custom-pdf", uploadCustomPdf.single("file"), async (req, res) => {
     const reportId = req.params.id as string;
-    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    const owned = await findOwnedReportOrRespond(req, res, reportId, { requireActive: true });
+    if (!owned) return;
     const file = req.file;
     if (!file) {
       res.status(400).json({ error: "file is required" });
@@ -252,13 +258,18 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
       res.status(400).json({ error: "File does not look like a valid PDF (missing %PDF- signature)." });
       return;
     }
+    // A new file every upload, and the old one removed only once the report accepted the new one: writing
+    // over one fixed name BEFORE the status check meant a refused upload (report already APPROVED/SENDING)
+    // still replaced the PDF the next send attaches (audit 2026-10-27).
+    await mkdir(REPORTS_DIR, { recursive: true });
+    const storedPath = path.join(REPORTS_DIR, `${reportId}-custom-${randomUUID()}.pdf`);
+    await writeFile(storedPath, file.buffer);
     try {
-      await mkdir(REPORTS_DIR, { recursive: true });
-      const storedPath = path.join(REPORTS_DIR, `${reportId}-custom.pdf`);
-      await writeFile(storedPath, file.buffer);
       const updated = await setCustomPdfAttachment(reportId, storedPath, file.originalname);
+      if (owned.customPdfPath && owned.customPdfPath !== storedPath) await unlink(owned.customPdfPath).catch(() => undefined);
       res.json(updated);
     } catch (err) {
+      await unlink(storedPath).catch(() => undefined);
       if (err instanceof InvalidReportTransitionError) {
         res.status(409).json({ error: err.message });
         return;

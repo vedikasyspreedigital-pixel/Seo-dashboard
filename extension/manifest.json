@@ -13,7 +13,7 @@
     "https://woorank.com/*",
     "https://*.woorank.com/*",
     "http://localhost:3001/*",
-    "https://*.up.railway.app/*"
+    "https://serp-console-backend-production.up.railway.app/*"
   ],
   "optional_host_permissions": ["<all_urls>"],
   "content_scripts": [

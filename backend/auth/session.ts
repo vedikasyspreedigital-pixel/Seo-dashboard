@@ -44,7 +44,13 @@ export function parseCookies(cookieHeader: string | undefined): Record<string, s
     if (eq === -1) continue;
     const key = part.slice(0, eq).trim();
     const value = part.slice(eq + 1).trim();
-    if (key) cookies[key] = decodeURIComponent(value);
+    if (!key) continue;
+    // A malformed cookie (a stray "%") made every request a 500 -- it's ignored instead (audit 2026-10-27).
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch {
+      continue;
+    }
   }
   return cookies;
 }

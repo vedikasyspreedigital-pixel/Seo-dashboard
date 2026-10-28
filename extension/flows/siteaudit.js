@@ -25,7 +25,10 @@ const POLL_MS = 30 * 1000;
  * the newest is ours (the list may show the name differently from what was typed, seen 2026-10-22).
  */
 function findCampaignId(name, domain) {
-  const bare = (s) => s.toLowerCase().replace(/^www\./, "");
+  // The EXACT website, not any text containing it: the project list is shared with other seotooladda users,
+  // and "contains" took shopyogapeace.com or yogapeace.com.au for yogapeace.com (audit 2026-10-27).
+  const esc = domain.toLowerCase().replace(/^www\./, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const isSite = (t) => new RegExp(`(^|[^a-z0-9.-])(www\\.)?${esc}(?![a-z0-9-]|\\.[a-z0-9])`, "i").test(t);
   let newest = null;
   for (const a of document.querySelectorAll('a[href*="/siteaudit/campaign/"]')) {
     const m = a.getAttribute("href").match(/\/siteaudit\/campaign\/(\d+)/);
@@ -33,7 +36,7 @@ function findCampaignId(name, domain) {
     const text = (a.textContent || "").trim().toLowerCase();
     if (text === name.toLowerCase()) return m[1];
     const row = a.closest('[data-ui-name="Row"], tr, [role="row"]') || a.parentElement?.parentElement;
-    if ((row?.textContent || text).toLowerCase().includes(bare(domain)) && (!newest || Number(m[1]) > Number(newest))) newest = m[1];
+    if (isSite(row?.innerText || row?.textContent || text) && (!newest || Number(m[1]) > Number(newest))) newest = m[1];
   }
   return newest;
 }
@@ -43,15 +46,17 @@ function findCampaignId(name, domain) {
  * link (like "Set up" rows, seen 2026-10-22), so: { id } once it's a link (crawl done), else { text } of the row.
  */
 function projectRow(domain) {
-  const bare = domain.toLowerCase().replace(/^www\./, "");
+  // The EXACT website only (see findCampaignId) -- visible text, so neighbouring cells don't run together.
+  const esc = domain.toLowerCase().replace(/^www\./, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const isSite = (t) => new RegExp(`(^|[^a-z0-9.-])(www\\.)?${esc}(?![a-z0-9-]|\\.[a-z0-9])`, "i").test(t);
   let newest = null;
   for (const a of document.querySelectorAll('a[href*="/siteaudit/campaign/"]')) {
     const m = a.getAttribute("href").match(/\/siteaudit\/campaign\/(\d+)/);
     const row = a.closest('[data-ui-name="Row"], tr, [role="row"]') || a.parentElement?.parentElement;
-    if (m && (row?.textContent || a.textContent || "").toLowerCase().includes(bare) && (!newest || Number(m[1]) > Number(newest))) newest = m[1];
+    if (m && isSite(row?.innerText || row?.textContent || a.textContent || "") && (!newest || Number(m[1]) > Number(newest))) newest = m[1];
   }
   if (newest) return { id: newest };
-  const rows = [...document.querySelectorAll('[data-ui-name="Row"], tr, [role="row"]')].filter((r) => (r.textContent || "").toLowerCase().includes(bare));
+  const rows = [...document.querySelectorAll('[data-ui-name="Row"], tr, [role="row"]')].filter((r) => isSite(r.innerText || r.textContent || ""));
   if (rows.length) {
     const text = (rows[0].innerText || rows[0].textContent || "").replace(/\s+/g, " ").trim();
     // "Set up" = the project exists but its audit was never started.
@@ -62,8 +67,9 @@ function projectRow(domain) {
 
 /** Presses the "Set up" button on the domain's row (a project whose audit was never started). */
 function pressSetUp(domain) {
-  const bare = domain.toLowerCase().replace(/^www\./, "");
-  const row = [...document.querySelectorAll('[data-ui-name="Row"], tr, [role="row"]')].find((r) => (r.textContent || "").toLowerCase().includes(bare) && /\bSet up\b/.test(r.textContent || ""));
+  const esc = domain.toLowerCase().replace(/^www\./, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const isSite = (t) => new RegExp(`(^|[^a-z0-9.-])(www\\.)?${esc}(?![a-z0-9-]|\\.[a-z0-9])`, "i").test(t);
+  const row = [...document.querySelectorAll('[data-ui-name="Row"], tr, [role="row"]')].find((r) => isSite(r.innerText || r.textContent || "") && /\bSet up\b/.test(r.textContent || ""));
   const btn = row && [...row.querySelectorAll("button, [role='button'], span")].find((b) => (b.textContent || "").trim() === "Set up");
   const el = btn?.closest("button, [role='button']") || btn;
   if (!el) return false;

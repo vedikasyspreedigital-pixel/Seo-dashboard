@@ -22,6 +22,13 @@ export function ReportsListPage() {
       <PageTitle title="Client Reports" subtitle={activeClient ? `${activeClient.name} · ${reports.length} report${reports.length === 1 ? '' : 's'}` : undefined} />
 
       <Card className="mt-6 overflow-hidden p-0">
+        {/* A refresh that failed while a list is shown: said so, instead of silently showing the old list. */}
+        {error && reports.length > 0 && (
+          <p className="flex items-center justify-between gap-3 border-b border-rose-500/20 bg-rose-500/10 px-6 py-3 text-sm text-rose-200">
+            Couldn't refresh the reports ({error}) -- this list may be out of date.
+            <Button variant="secondary" className="!py-1 text-xs" onClick={reload}>Retry</Button>
+          </p>
+        )}
         {!activeClient ? (
           <EmptyState label="Select a client in the top bar to see its reports." />
         ) : error && reports.length === 0 ? (

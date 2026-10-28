@@ -5,7 +5,7 @@ import { Spinner } from '../ui/Spinner';
 
 export type FileValidationState =
   | { status: 'validating' }
-  | { status: 'valid'; insertedRowCount: number; rowErrorCount: number; detectedColumns: string[]; fileSizeBytes: number }
+  | { status: 'valid'; insertedRowCount: number; alreadyRankedCount?: number; rowErrorCount: number; detectedColumns: string[]; fileSizeBytes: number }
   | { status: 'invalid'; message: string };
 
 interface Props {
@@ -100,6 +100,13 @@ export function ExcelDropzone({ file, validation, onFileSelected, disabled }: Pr
                 </p>
               </div>
             </div>
+            {!!validation.alreadyRankedCount && (
+              <p className="border-b border-[var(--color-border)] bg-amber-500/10 px-5 py-3 text-xs text-amber-200">
+                {validation.alreadyRankedCount} of {validation.insertedRowCount} row{validation.insertedRowCount === 1 ? '' : 's'} already have
+                Status “Completed” with a rank and won’t be checked again — their ranks come from this file. To check them fresh, set their
+                Status to “Pending” (e.g. if this is last period’s downloaded Excel).
+              </p>
+            )}
             <div className="p-5">
               <p className="eyebrow-label">Required columns detected</p>
               <div className="mt-3 flex flex-wrap gap-2">

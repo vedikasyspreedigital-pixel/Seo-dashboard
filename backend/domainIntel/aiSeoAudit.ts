@@ -179,12 +179,23 @@ export async function geminiJson(apiKey: string, model: string, systemPrompt: st
   let res: Response | null = null;
   for (let i = 0; i < attempts.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, i * 5000));
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(attempts[i])}:generateContent`, {
-      method: "POST",
-      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body,
-    });
+    try {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(attempts[i])}:generateContent`, {
+        method: "POST",
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body,
+      });
+    } catch (err) {
+      // Too slow (seen 2026-10-26: "The operation was aborted due to timeout"): don't wait that long
+      // again on the same model -- go straight to the lighter, faster one.
+      const timedOut = (err as Error).name === "TimeoutError" || (err as Error).name === "AbortError";
+      if (!timedOut) throw err;
+      console.error(`[domainIntel] ${what}: Gemini (${attempts[i]}) took longer than ${GEMINI_TIMEOUT_MS / 1000}s`);
+      if (i >= attempts.length - 1) throw new Error(`Gemini took too long -- try ${what} again in a few minutes.`);
+      i = attempts.length - 2; // the loop's i++ lands on the fallback model
+      continue;
+    }
     if (res.ok || (res.status !== 503 && res.status !== 429 && res.status !== 500)) break;
   }
   if (!res!.ok) {

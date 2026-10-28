@@ -90,7 +90,9 @@ test("POST /api/reports/:id/custom-pdf uploads and switches attachmentSource to 
     assert.ok(res.body.customPdfPath, "customPdfPath should be set");
     assert.ok(res.body.clientPdfPath === null || res.body.clientPdfPath === undefined || true); // clientPdfPath untouched either way -- this fixture never set one
 
-    const onDisk = await readFile(res.body.customPdfPath);
+    assert.equal(res.body.customPdfPath, path.basename(res.body.customPdfPath), "only the file name -- never where it's stored on the server");
+    const stored = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    const onDisk = await readFile(stored.customPdfPath!);
     assert.ok(onDisk.subarray(0, 5).equals(Buffer.from("%PDF-")), "the uploaded file was actually written to disk");
   } finally {
     await cleanupClient(client.id);
@@ -135,6 +137,45 @@ test("POST /api/reports/:id/custom-pdf is refused once the report is no longer P
 
     const res = await authedApp(app).post(`/api/reports/${report.id}/custom-pdf`).attach("file", MINIMAL_PDF, "custom.pdf");
     assert.equal(res.status, 409);
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+// Audit 2026-10-27: the upload wrote over one fixed file name BEFORE checking the report's status, so a
+// refused upload (report already APPROVED, i.e. a send being retried) still replaced the approved PDF.
+test("POST /api/reports/:id/custom-pdf: a refused upload leaves the approved custom PDF exactly as it was", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Custom PDF Test - refused keeps file ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+    const approvedPdf = Buffer.from("%PDF-1.4 the approved one\n%%EOF");
+    const first = await authedApp(app).post(`/api/reports/${report.id}/custom-pdf`).attach("file", approvedPdf, "approved.pdf");
+    assert.equal(first.status, 200);
+    await prisma.rankingReport.update({ where: { id: report.id }, data: { status: ReportStatus.APPROVED } }); // e.g. a failed send awaiting retry
+
+    const late = await authedApp(app).post(`/api/reports/${report.id}/custom-pdf`).attach("file", Buffer.from("%PDF-1.4 NOT approved\n%%EOF"), "late.pdf");
+    assert.equal(late.status, 409);
+    const persisted = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.deepEqual(await readFile(persisted.customPdfPath!), approvedPdf, "the file the next send attaches is still the approved one");
+  } finally {
+    await cleanupClient(client.id);
+  }
+});
+
+test("POST /api/reports/:id/custom-pdf: uploading a replacement removes the old file", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const client = await makeClient(`Custom PDF Test - replacement ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const report = await makePendingApprovalReport(client.id, run.id);
+    const first = await authedApp(app).post(`/api/reports/${report.id}/custom-pdf`).attach("file", MINIMAL_PDF, "one.pdf");
+    const second = await authedApp(app).post(`/api/reports/${report.id}/custom-pdf`).attach("file", Buffer.from("%PDF-1.4 two\n%%EOF"), "two.pdf");
+    assert.equal(second.status, 200);
+    assert.notEqual(second.body.customPdfPath, first.body.customPdfPath);
+    await assert.rejects(() => readFile(first.body.customPdfPath), "the replaced file is gone");
+    assert.equal(second.body.customPdfFilename, "two.pdf");
   } finally {
     await cleanupClient(client.id);
   }
