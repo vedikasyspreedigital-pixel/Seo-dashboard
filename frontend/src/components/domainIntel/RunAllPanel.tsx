@@ -55,7 +55,7 @@ export function RunAllPanel({
         <div>
           <p className="text-sm font-semibold text-[var(--color-ink)]">Run the reports</p>
           <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-            Tick the reports you want. Keywords come from the tools ticked below, competitors: {competitorNote}. All 5 take about 20–30 minutes. It runs on the
+            Tick the reports you want. Keywords come from the tools ticked above, competitors: {competitorNote}. All 5 take about 20–30 minutes. It runs on the
             server, so you can close this page.
           </p>
         </div>

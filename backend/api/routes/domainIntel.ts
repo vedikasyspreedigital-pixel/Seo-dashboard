@@ -21,7 +21,8 @@ import {
 import type { AiAuditWriter } from "../../domainIntel/aiSeoAudit.js";
 import type { GapAdvisor } from "../../domainIntel/gapReport.js";
 import { AUDIT_KINDS, AuditJobError, auditFile, getAudit, latestAudits, publicAudit, startAudit, type AuditKind } from "../../domainIntel/auditJob.js";
-import { BUNDLE_REPORTS, BundleJobError, getBundle, latestBundle, postBundle, publicBundle, startBundle, syncBundle } from "../../domainIntel/bundleJob.js";
+import { BUNDLE_REPORTS, BundleJobError, getBundle, latestBundle, myLatestBundle, postBundle, publicBundle, startBundle, syncBundle } from "../../domainIntel/bundleJob.js";
+import { ProspectClientError, findOrCreateProspectClient } from "../../domainIntel/prospectClient.js";
 
 // "Domain Intelligence" tab: a client's Semrush / Ubersuggest / Ahrefs keyword
 // exports in -> intent-labelled Excel report(s) out, posted automatically as
@@ -67,6 +68,22 @@ type DomainReportRow = Awaited<ReturnType<typeof prisma.domainReport.findFirstOr
 function toResponse(report: DomainReportRow) {
   const { files, ...rest } = report;
   return { ...rest, files: (files as unknown as ReportFile[]).map((f) => ({ name: f.name })) };
+}
+
+const HISTORY_LIMIT = 100;
+
+/** The ?workspaceId= the caller is a member of, else answers 400/403 and returns null. */
+function ownedWorkspaceOrRespond(req: Request, res: Response): string | null {
+  const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : "";
+  if (!workspaceId) {
+    res.status(400).json({ error: "workspaceId query parameter is required" });
+    return null;
+  }
+  if (!req.authUser!.workspaceIds.includes(workspaceId)) {
+    res.status(403).json({ error: "You do not have access to this workspace" });
+    return null;
+  }
+  return workspaceId;
 }
 
 async function findOwnedReportOrRespond(req: Request, res: Response, id: string) {
@@ -307,6 +324,14 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
     res.json(job ? publicBundle(syncBundle(job)) : null);
   });
 
+  // This person's run in this workspace that's still going (or just finished) -- the page shows it again.
+  router.get("/bundles/mine", (req, res) => {
+    const workspaceId = ownedWorkspaceOrRespond(req, res);
+    if (!workspaceId) return;
+    const job = myLatestBundle(workspaceId, req.authUser!.email);
+    res.json(job ? publicBundle(syncBundle(job)) : null);
+  });
+
   const ownedBundle = (req: Request, res: Response) => {
     const job = getBundle(req.params.id as string);
     if (!job || !job.workspaceId || !req.authUser!.workspaceIds.includes(job.workspaceId)) {
@@ -437,6 +462,44 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
     if (!client) return;
     const reports = await prisma.domainReport.findMany({ where: { clientId }, orderBy: { createdAt: "desc" }, take: 20 });
     res.json(reports.map(toResponse));
+  });
+
+  // Every Domain Intelligence report in the workspace, newest first, with its client's name (the page's history).
+  router.get("/history", async (req, res) => {
+    const workspaceId = ownedWorkspaceOrRespond(req, res);
+    if (!workspaceId) return;
+    const reports = await prisma.domainReport.findMany({
+      where: { client: { workspaceId } },
+      orderBy: { createdAt: "desc" },
+      take: HISTORY_LIMIT,
+      include: { client: { select: { name: true, domainReportTaskId: true } } },
+    });
+    res.json(reports.map(({ client, ...r }) => ({ ...toResponse(r), clientName: client.name, clientTaskId: client.domainReportTaskId })));
+  });
+
+  // The page's typed client name -> a (hidden) Domain Intelligence client, made once per name and reused after.
+  router.post("/clients", async (req, res) => {
+    const body = req.body ?? {};
+    const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : "";
+    if (!workspaceId || !req.authUser!.workspaceIds.includes(workspaceId)) {
+      res.status(403).json({ error: "You do not have access to this workspace" });
+      return;
+    }
+    try {
+      const client = await findOrCreateProspectClient({
+        workspaceId,
+        name: typeof body.name === "string" ? body.name : "",
+        websiteUrl: typeof body.websiteUrl === "string" ? body.websiteUrl : "",
+        clickupTask: typeof body.clickupTask === "string" ? body.clickupTask : "",
+      });
+      res.json(client);
+    } catch (err) {
+      if (err instanceof ProspectClientError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   router.get("/reports/:id", async (req, res) => {

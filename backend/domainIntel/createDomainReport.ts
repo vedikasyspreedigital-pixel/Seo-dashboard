@@ -195,7 +195,7 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
       },
       // No domain task configured: kept, downloadable, just not posted.
       status: input.domainReportTaskId ? "GENERATED" : "NOT_POSTED",
-      error: input.domainReportTaskId ? null : "No domain-report ClickUp task ID is set for this client (Client Management).",
+      error: input.domainReportTaskId ? null : "No ClickUp task was given, so the files are for download only.",
     },
   });
   }
@@ -269,7 +269,7 @@ export async function createAuditsOnlyReport(input: { client: { id: string }; we
       files: [],
       createdBy: input.createdBy,
       status: input.domainReportTaskId ? "GENERATED" : "NOT_POSTED",
-      error: input.domainReportTaskId ? null : "No domain-report ClickUp task ID is set for this client (Client Management).",
+      error: input.domainReportTaskId ? null : "No ClickUp task was given, so the files are for download only.",
     },
   });
 }
@@ -310,7 +310,7 @@ async function postDomainReportOnce(reportId: string, postComment: PostCommentFn
   if (!taskId) {
     await prisma.domainReport.update({
       where: { id: reportId },
-      data: { status: "NOT_POSTED", error: "No domain-report ClickUp task ID is set for this client (Client Management)." },
+      data: { status: "NOT_POSTED", error: "No ClickUp task was given, so the files are for download only." },
     });
     return;
   }

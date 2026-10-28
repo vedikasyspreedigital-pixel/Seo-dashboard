@@ -193,6 +193,9 @@ model Client {
   // are posted to as a comment -- deliberately separate from the ranking
   // reports' task (ClientReportConfig.clickupTaskId).
   domainReportTaskId String? @map("domain_report_task_id")
+  // "ranking" = a real ranking client; "domain" = made by the Domain Intelligence page from a typed name
+  // (2026-10-28: those are new prospects every time) -- hidden from the ranking side's client lists.
+  kind       String   @default("ranking")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 

@@ -50,6 +50,10 @@ export interface BundleJob {
   clientName: string;
   workspaceId: string | null;
   websiteUrl: string;
+  /** Who started it, the country and the ClickUp task -- so the page can show the form again (missing on runs before 2026-10-28). */
+  createdBy?: string | null;
+  location?: string | null;
+  clickupTaskId?: string | null;
   state: "running" | "done" | "attention";
   parts: Record<BundlePart, { state: PartState; step?: string; error?: string }>;
   /** The reports the team ticked (missing on runs saved before 2026-10-27 = all 5). */
@@ -179,6 +183,9 @@ export function startBundle(input: BundleInput, deps: BundleDeps): BundleJob {
     clientName: input.client.name,
     workspaceId: input.client.workspaceId,
     websiteUrl: input.websiteUrl,
+    createdBy: input.createdBy,
+    location: input.location,
+    clickupTaskId: input.client.domainReportTaskId,
     state: "running",
     parts: Object.fromEntries(
       BUNDLE_PARTS.map((p) => [p, p === "post" || selected.includes(p) ? { state: "waiting" } : { state: "skipped", step: "Not selected" }]),
@@ -480,7 +487,7 @@ async function finish(job: BundleJob, input: BundleInput, deps: BundleDeps, repo
   job.attachedAudits = attached;
   const complete = isComplete(job);
   if (!input.client.domainReportTaskId) {
-    setPart(job, "post", { state: "skipped", step: "No domain-report ClickUp task is set for this client -- download the files below" });
+    setPart(job, "post", { state: "skipped", step: "No ClickUp task was given -- download the files below" });
   } else if (!complete) {
     setPart(job, "post", { state: "waiting", step: "Not posted: some reports are missing -- retry them, or post what's ready" });
     // Not "waiting to post" in the history (the page would keep checking): it's held until someone posts it.
@@ -504,6 +511,19 @@ export function getBundle(id: string): BundleJob | undefined {
 /** The client's newest run -- so the page shows it again after a reload. */
 export function latestBundle(clientId: string): BundleJob | undefined {
   return [...jobs.values()].filter((j) => j.clientId === clientId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+const RESUME_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * The page has no client picker any more (2026-10-28): coming back to it shows the run this person started
+ * in this workspace if it's still running, or finished in the last 2 hours needing a look (post / retry).
+ */
+export function myLatestBundle(workspaceId: string, createdBy: string): BundleJob | undefined {
+  const cutoff = Date.now() - RESUME_MS;
+  return [...jobs.values()]
+    .filter((j) => j.workspaceId === workspaceId && j.createdBy === createdBy && (j.state === "running" || (j.state === "attention" && Date.parse(j.updatedAt) >= cutoff)))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
 export function publicBundle(job: BundleJob) {

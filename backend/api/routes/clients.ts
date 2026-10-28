@@ -85,7 +85,7 @@ clientsRouter.get('/', async (req, res) => {
 
   if (!includeInactive) {
     const clients = await prisma.client.findMany({
-      where: { isActive: true, isTestData: false, workspaceId },
+      where: { isActive: true, isTestData: false, workspaceId, kind: 'ranking' },
       orderBy: { name: 'asc' },
     });
     res.json(clients);
@@ -93,7 +93,7 @@ clientsRouter.get('/', async (req, res) => {
   }
 
   const clients = await prisma.client.findMany({
-    where: { isTestData: false, workspaceId, ...(includeArchived ? {} : { archivedAt: null }) },
+    where: { isTestData: false, workspaceId, kind: 'ranking', ...(includeArchived ? {} : { archivedAt: null }) },
     orderBy: { name: 'asc' },
     include: {
       reportConfigs: { where: { isActive: true }, take: 1 },

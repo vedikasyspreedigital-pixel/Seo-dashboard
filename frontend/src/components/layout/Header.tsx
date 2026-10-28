@@ -15,7 +15,7 @@ import { useTheme } from '../../hooks/useTheme';
  * static "Admin / Internal access" placeholder) -- the workspace switcher
  * only renders when the signed-in user actually has more than one
  * workspace; a single-workspace user just sees their workspace name. */
-export function Header() {
+export function Header({ hideClientPicker = false }: { hideClientPicker?: boolean }) {
   const { clients, activeClient, setActiveClientId } = useActiveClient();
   const { user, workspaces, activeWorkspace, setActiveWorkspaceId, logout } = useSession();
   const { theme, toggleTheme } = useTheme();
@@ -33,15 +33,17 @@ export function Header() {
             />
           </div>
         )}
-        <div className="w-64">
-          <Select
-            value={activeClient?.id ?? ''}
-            onChange={setActiveClientId}
-            placeholder="Select a client..."
-            options={clients.map((c) => ({ value: c.id, label: c.name }))}
-            searchable
-          />
-        </div>
+        {!hideClientPicker && (
+          <div className="w-64">
+            <Select
+              value={activeClient?.id ?? ''}
+              onChange={setActiveClientId}
+              placeholder="Select a client..."
+              options={clients.map((c) => ({ value: c.id, label: c.name }))}
+              searchable
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-3">

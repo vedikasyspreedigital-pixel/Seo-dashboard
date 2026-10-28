@@ -67,7 +67,7 @@ overviewRouter.get("/", async (req, res) => {
     WHERE r.analytics_json IS NOT NULL AND c.workspace_id = ${workspaceId} AND c.is_test_data = false ${clientFilter}`;
 
   const [totalClients, totalRuns, totalSuccessfulRuns, recentRunsRaw, latestReports, dailyRows] = await Promise.all([
-    prisma.client.count({ where: { isActive: true, workspaceId, isTestData: false } }), // deliberately always workspace-wide -- "how many clients total" doesn't mean anything scoped to one client
+    prisma.client.count({ where: { isActive: true, workspaceId, isTestData: false, kind: "ranking" } }), // deliberately always workspace-wide -- "how many clients total" doesn't mean anything scoped to one client
     prisma.rankingRun.count({ where: { client: clientScope } }),
     prisma.rankingRun.count({ where: { status: RunStatus.COMPLETED, client: clientScope } }),
     prisma.rankingRun.findMany({

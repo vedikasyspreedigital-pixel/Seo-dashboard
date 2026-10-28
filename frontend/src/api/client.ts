@@ -732,11 +732,6 @@ export async function getCompetitorSearch(id: string): Promise<DomainCompetitorS
   return handle<DomainCompetitorSearch>(res);
 }
 
-export async function getDomainReports(clientId: string): Promise<DomainReport[]> {
-  const res = await apiFetch(`/domain-intel/reports?clientId=${encodeURIComponent(clientId)}`);
-  return handle<DomainReport[]>(res);
-}
-
 export async function retryDomainReportPost(reportId: string): Promise<void> {
   const res = await apiFetch(`/domain-intel/reports/${reportId}/post`, { method: 'POST' });
   await handle<{ ok: boolean }>(res);
@@ -800,7 +795,11 @@ export const DOMAIN_BUNDLE_REPORTS: DomainBundleReport[] = ['keywords', 'gap', '
 export interface DomainBundle {
   id: string;
   clientId: string;
+  clientName: string;
   websiteUrl: string;
+  /** Missing on runs started before 2026-10-28. */
+  location?: string | null;
+  clickupTaskId?: string | null;
   state: 'running' | 'done' | 'attention';
   parts: Record<DomainBundlePart, { state: 'waiting' | 'running' | 'done' | 'failed' | 'skipped'; step?: string; error?: string }>;
   /** The reports ticked for this run (missing on runs made before 2026-10-27 = all 5). */
@@ -843,8 +842,34 @@ export async function getDomainBundle(id: string): Promise<DomainBundle> {
   return handle<DomainBundle>(res);
 }
 
-/** The client's newest run (any state), or null. */
-export async function getLatestDomainBundle(clientId: string): Promise<DomainBundle | null> {
-  const res = await apiFetch(`/domain-intel/bundles?clientId=${encodeURIComponent(clientId)}`);
+/** The run this person started in the workspace that's still going (or just finished), or null. */
+export async function getMyDomainBundle(workspaceId: string): Promise<DomainBundle | null> {
+  const res = await apiFetch(`/domain-intel/bundles/mine?workspaceId=${encodeURIComponent(workspaceId)}`);
   return handle<DomainBundle | null>(res);
+}
+
+/** The Domain Intelligence client behind the page's typed name (made the first time, reused after). */
+export interface DomainClient {
+  id: string;
+  name: string;
+  domain: string | null;
+  domainReportTaskId: string | null;
+}
+
+export async function resolveDomainClient(input: { workspaceId: string; name: string; websiteUrl: string; clickupTask: string }): Promise<DomainClient> {
+  const res = await apiFetch('/domain-intel/clients', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return handle<DomainClient>(res);
+}
+
+/** A history row: the report plus its client's name and current ClickUp task (for "Post to ClickUp again"). */
+export type DomainHistoryReport = DomainReport & { clientName: string; clientTaskId: string | null };
+
+/** Every Domain Intelligence report in the workspace, newest first. */
+export async function getDomainHistory(workspaceId: string): Promise<DomainHistoryReport[]> {
+  const res = await apiFetch(`/domain-intel/history?workspaceId=${encodeURIComponent(workspaceId)}`);
+  return handle<DomainHistoryReport[]>(res);
 }

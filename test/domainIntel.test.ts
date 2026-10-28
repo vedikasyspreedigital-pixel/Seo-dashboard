@@ -292,7 +292,7 @@ test("POST /api/domain-intel/reports: no domain task id -> generated but NOT_POS
       .attach("semrush", Buffer.from(SEMRUSH_CSV), "semrush.csv");
     assert.equal(ok.status, 201);
     assert.equal(ok.body.status, "NOT_POSTED");
-    assert.match(ok.body.error, /domain-report ClickUp task/);
+    assert.match(ok.body.error, /No ClickUp task was given/);
 
     const bad = await api.post("/api/domain-intel/reports").field("clientId", client.id).field("websiteUrl", "x.com").attach("semrush", Buffer.from("a,b\n1,2"), "s.csv");
     assert.equal(bad.status, 422);
