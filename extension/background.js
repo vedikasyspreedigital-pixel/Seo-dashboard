@@ -73,11 +73,15 @@ async function runTask(task) {
       await setStatus({ state: needsHuman ? "needs_human" : "working", job: `${task.tool} · ${task.domain}`, step });
       await api(`/tasks/${task.id}/progress`, json({ step, needsHuman }));
     },
-    // Each job runs in its own normal (not minimised -- pages must render) window, closed afterwards.
+    // Each job runs in its own window (not minimised -- pages must render), closed afterwards.
     openTab: async (url) => {
       // "Show me the job window" (Settings): open it in front so a person can watch every step.
       const { watch = false } = await chrome.storage.local.get("watch");
-      const win = await chrome.windows.create({ url, focused: watch, width: 1400, height: 900 });
+      // Maximised, like the team's own Chrome (2026-10-28): a fixed 1400x900 window came out narrower on a
+      // laptop with display scaling, and Semrush then shrank "Export" to an icon the flows couldn't find.
+      const win = await chrome.windows
+        .create({ url, focused: watch, state: "maximized" })
+        .catch(() => chrome.windows.create({ url, focused: watch, width: 1400, height: 900 }));
       jobWindowId = win.id;
       const tabId = win.tabs[0].id;
       await new Promise((r) => setTimeout(r, 500));

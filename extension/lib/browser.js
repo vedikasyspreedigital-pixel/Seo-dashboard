@@ -80,7 +80,7 @@ export async function waitForHuman(tabId, ctx, where) {
   if (!(await run(tabId, pageHasHumanCheck).catch(() => false))) return;
   await ctx.progress(where, true);
   const tab = await chrome.tabs.get(tabId);
-  await chrome.windows.update(tab.windowId, { focused: true, state: "normal" }).catch(() => {});
+  await chrome.windows.update(tab.windowId, { focused: true, state: "maximized" }).catch(() => {});
   await chrome.tabs.update(tabId, { active: true }).catch(() => {});
   chrome.notifications.create(`human-${Date.now()}`, {
     type: "basic",

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SERP Console Agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Runs SERP Console's Domain Intelligence exports in this Chrome (where the team is signed in to the SEO tools) and sends the files back to the dashboard.",
   "background": { "service_worker": "background.js", "type": "module" },
   "permissions": ["alarms", "storage", "unlimitedStorage", "tabs", "scripting", "notifications", "downloads", "debugger"],

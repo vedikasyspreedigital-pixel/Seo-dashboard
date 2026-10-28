@@ -62,8 +62,12 @@ function finish(id: string, outcome: { result?: FetchedExport; error?: Error }) 
 
 /** Fails tasks nobody is working on any more -- called whenever the queue is touched. */
 export function expireStale(now = Date.now()) {
+  // The agent does one job at a time: a job queued behind a working one (WooRank behind an 8-10 minute Site
+  // Audit) isn't "unclaimed" -- it used to fail after 2 minutes with "didn't pick up the job" (2026-10-28).
+  // So the 2 minutes count only while the agent is free, from when it last showed up (polled or reported).
+  const agentBusy = [...waiting.values()].some(({ task }) => task.state === "claimed" || task.state === "needs_human");
   for (const { task } of waiting.values()) {
-    if (task.state === "pending" && now - task.createdAt > UNCLAIMED_TIMEOUT_MS) {
+    if (task.state === "pending" && !agentBusy && now - Math.max(task.createdAt, lastSeenAt) > UNCLAIMED_TIMEOUT_MS) {
       finish(task.id, { error: new FetchError("AGENT_OFFLINE", "The office Chrome agent didn't pick up the job -- is that computer on, with Chrome open and the SERP Console extension running?") });
     } else if (task.state === "claimed" && now - (task.lastProgressAt ?? task.claimedAt ?? now) > STALLED_TIMEOUT_MS) {
       finish(task.id, { error: new FetchError("TIMEOUT", `The office Chrome agent stopped responding${task.step ? ` at "${task.step}"` : ""}.`) });

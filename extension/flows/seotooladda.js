@@ -157,6 +157,30 @@ async function captureExport(tabId, clickExport) {
 
 // ---- Semrush: Organic Research > Positions > Export ----
 
+/**
+ * In-page: Semrush's Export button above the positions table. In a narrow window Semrush shows it as an icon
+ * only (2026-10-28, "Save keywords" -> "Save" too), so its aria-label / title count as well as its text.
+ * "Export to PDF" (the page header's) is a different button. press=true also clicks it.
+ */
+function semrushExportButton(press) {
+  const visible = (e) => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+  const isExport = (s) => /^export$/i.test((s || "").trim());
+  const button = [...document.querySelectorAll('button, [role="button"]')]
+    .filter((b) => visible(b) && !b.disabled && b.getAttribute("aria-disabled") !== "true")
+    .find((b) => isExport(b.textContent) || isExport(b.getAttribute("aria-label")) || isExport(b.getAttribute("title")) || isExport(b.getAttribute("data-test")));
+  if (!button) return false;
+  if (press) {
+    const r = button.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, view: window, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    button.dispatchEvent(new PointerEvent("pointerdown", { ...at, pointerType: "mouse", isPrimary: true }));
+    button.dispatchEvent(new MouseEvent("mousedown", at));
+    button.dispatchEvent(new PointerEvent("pointerup", { ...at, pointerType: "mouse", isPrimary: true }));
+    button.dispatchEvent(new MouseEvent("mouseup", at));
+    button.dispatchEvent(new MouseEvent("click", at));
+  }
+  return true;
+}
+
 export async function runSemrush(task, ctx) {
   const db = SEMRUSH_DB[(task.location || "au").toLowerCase()] || "au";
   const tabId = await openTool(ctx, "semrush", "smr.seotooladda.com");
@@ -168,18 +192,16 @@ export async function runSemrush(task, ctx) {
   url.searchParams.set("searchType", "domain");
   await navigate(tabId, url.toString());
   await waitForHuman(tabId, ctx, "Semrush");
-  const ready = await waitFor(
-    tabId,
-    () => [...document.querySelectorAll("button")].some((b) => (b.textContent || "").trim() === "Export" && !b.disabled),
-    [],
-    60_000,
-  );
-  if (!ready) throw new AgentError("TIMEOUT", "Semrush's Organic Positions report didn't load (no Export button).");
+  const ready = await waitFor(tabId, semrushExportButton, [false], 60_000);
+  if (!ready) {
+    const seen = await run(tabId, visibleButtonLabels).catch(() => "");
+    throw new AgentError("TIMEOUT", `Semrush's Organic Positions report didn't load (no Export button). Buttons on the page: ${seen}`.slice(0, 480));
+  }
   await pause(2000, 4000);
 
   await ctx.progress("Exporting from Semrush");
   const { bytes, ext } = await captureExport(tabId, async () => {
-    await run(tabId, clickByText, [["Export"]]);
+    await run(tabId, semrushExportButton, [true]);
     // The Export menu: CSV if offered, else Excel (.xlsx) -- both are read the same way.
     const chosen = await waitFor(tabId, clickByText, [["CSV", "Excel"]], 20_000);
     if (!chosen) throw new AgentError("FAILED", "Semrush's Export menu didn't open.");

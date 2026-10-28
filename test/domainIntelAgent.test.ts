@@ -6,7 +6,7 @@ import { createApp } from "../backend/api/app.js";
 import { createAuthenticatedSession } from "./helpers/auth.js";
 import { authedRequest } from "./helpers/authedRequest.js";
 import { clearFetchJobs } from "../backend/domainIntel/fetchJob.js";
-import { UNCLAIMED_TIMEOUT_MS, createAgentFetcher, expireStale, resetAgentQueue } from "../backend/domainIntel/agentQueue.js";
+import { UNCLAIMED_TIMEOUT_MS, claimNext, completeTask, createAgentFetcher, expireStale, reportProgress, resetAgentQueue } from "../backend/domainIntel/agentQueue.js";
 import { clearAuditJobs } from "../backend/domainIntel/auditJob.js";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
 
@@ -191,5 +191,41 @@ test("agent failures: a reported failure (e.g. signed out) and an agent that nev
     assert.match(offline.error, /office Chrome agent didn't pick up the job/);
   } finally {
     await t.cleanup();
+  }
+});
+
+test("a job queued behind a long one waits while the agent works -- it's not 'didn't pick up the job'", async () => {
+  resetAgentQueue();
+  const outcomes: string[] = [];
+  const track = (p: Promise<unknown>, name: string) => p.then(() => outcomes.push(`${name}: done`), (e: Error) => outcomes.push(`${name}: ${e.message}`));
+  try {
+    // A run queues the Site Audit and WooRank at once; the agent takes the Site Audit (8-10 minutes).
+    track(createAgentFetcher("siteaudit")({ domain: "fence.com.au", location: "au" }), "siteaudit");
+    await new Promise((r) => setTimeout(r, 5));
+    track(createAgentFetcher("woorank")({ domain: "fence.com.au", location: "au" }), "woorank");
+    const site = claimNext("test")!;
+    assert.equal(site.tool, "siteaudit");
+
+    // 3 minutes in, still crawling: WooRank keeps waiting.
+    reportProgress(site.id, "Crawling 120/1000");
+    expireStale(Date.now() + 3 * 60 * 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(outcomes, []);
+
+    // The Site Audit finishes; the agent asks for the next job and gets WooRank.
+    completeTask(site.id, { buffer: Buffer.from("%PDF-1.4"), fileName: "site.pdf" });
+    const next = claimNext("test")!;
+    assert.equal(next.tool, "woorank");
+    completeTask(next.id, { buffer: Buffer.from("%PDF-1.4"), fileName: "woorank.pdf" });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(outcomes.sort(), ["siteaudit: done", "woorank: done"]);
+
+    // With the agent really gone (nothing for over 2 minutes and nothing being worked on), a job still fails.
+    track(createAgentFetcher("woorank")({ domain: "other.com.au", location: "au" }), "offline");
+    expireStale(Date.now() + UNCLAIMED_TIMEOUT_MS + 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.match((outcomes as string[]).find((o) => o.startsWith("offline"))!, /didn't pick up the job/);
+  } finally {
+    resetAgentQueue();
   }
 });
