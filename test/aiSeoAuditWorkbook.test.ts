@@ -17,8 +17,11 @@ const content: AiAuditContent = {
   checks: [
     { category: "On-Page (Content & Meta)", check: "Title Tag", status: "Pass", finding: "50 characters.", recommendation: "No action." },
     { category: "On-Page (Content & Meta)", check: "Meta Description", status: "Warning", finding: "167 characters.", recommendation: "Shorten to 160." },
+    { category: "Indexing & Crawlability", check: "Robots.txt", status: "Pass", finding: "Found.", recommendation: "No action." },
     { category: "Mobile Usability", check: "Tap Targets", status: "Error", finding: "3 overlap.", recommendation: "Space them out." },
     { category: "Structured Data & Social Markup", check: "Twitter Card", status: "Warning", finding: "Missing twitter:site.", recommendation: "Add it." },
+    { category: "Security & Performance", check: "SSL Secure", status: "Pass", finding: "Valid.", recommendation: "No action." },
+    { category: "Accessibility", check: "Contrast", status: "Warning", finding: "Low contrast text.", recommendation: "Darken it." },
     { category: "Tech Stack & Branding", check: "Favicon", status: "Pass", finding: "Present.", recommendation: "No action." },
     { category: "Off-Page & Social", check: "Traffic Rank", status: "Info", finding: "Too low.", recommendation: "Re-check later." },
   ],
@@ -62,6 +65,22 @@ test("AI SEO Audit workbook: the team's sheets, Dashboard counts worked out from
 
   const plan = wb.getWorksheet("Action Plan")!;
   assert.deepEqual([plan.getCell(4, 1).value, plan.getCell(5, 1).value], ["High", "Medium"]);
+});
+
+test("AI SEO Audit workbook: a section WooRank had no checks for gets no tab and no Dashboard row", async () => {
+  // fencingcontractorssydney, 28 Oct 2026: WooRank couldn't read the homepage -- no On-Page / Mobile /
+  // Structured Data / Accessibility checks at all. Those tabs used to be there, empty.
+  const domainOnly = content.checks.filter((c) => ["Indexing & Crawlability", "Security & Performance", "Off-Page & Social"].includes(c.category));
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load((await buildAiAuditWorkbook({ ...content, checks: domainOnly, technologies: [] }, { clientName: "Fencing", websiteUrl: "x.com.au", sources: ["WooRank Audit", "Semrush Site Audit"] })) as never);
+  assert.deepEqual(
+    wb.worksheets.map((w) => w.name),
+    ["Dashboard", "Technical SEO", "Security & Performance", "Off-Page & Local", "Site Audit (Semrush)", "Action Plan"],
+  );
+  const dash = wb.getWorksheet("Dashboard")!;
+  const row = (r: number) => (dash.getRow(r).values as unknown[]).slice(1);
+  assert.deepEqual([10, 11, 12].map((r) => row(r)[0]), ["Indexing & Crawlability", "Security & Performance", "Off-Page & Social"]);
+  assert.equal(dash.getCell(15, 1).value, "Key Metrics", "the boxes below move up");
 });
 
 test("AI SEO Audit workbook: no Semrush sheet when only WooRank was read", async () => {

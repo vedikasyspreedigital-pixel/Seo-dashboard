@@ -47,6 +47,20 @@ const BLUE = "FF4472C4";
 const GRID = { style: "thin" as const, color: { argb: "FFD9D9D9" } };
 const BORDER = { top: GRID, left: GRID, bottom: GRID, right: GRID };
 const SPACER_WIDTH = 6;
+// Positions 1-10 (Google's first page) stand out in light green (the team's ask, 2026-10-29).
+const TOP_10_FILL = "FFC6EFCE";
+const TOP_10_FONT = "FF006100";
+
+/** Light green + bold for a position on Google's first page (1-10). */
+export function isFirstPage(position: number | null | undefined): boolean {
+  return typeof position === "number" && position >= 1 && position <= 10;
+}
+
+function highlightFirstPage(cell: ExcelJS.Cell, position: number | null | undefined) {
+  if (!isFirstPage(position)) return;
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOP_10_FILL } };
+  cell.font = { bold: true, color: { argb: TOP_10_FONT } };
+}
 
 /** One site's keywords for the competitor sheet (Semrush Positions export). */
 export interface SiteKeywords {
@@ -95,11 +109,13 @@ export async function buildDomainReportExcel(blocks: ReportBlock[], competitorSh
       cell.alignment = { horizontal: "center", vertical: "middle" };
       cell.border = BORDER;
 
+      const isPosition = /position/i.test(col.header);
       block.rows.forEach((row, r) => {
         const dataCell = sheet.getCell(3 + r, c);
         dataCell.value = col.value(row);
         dataCell.border = BORDER;
         if (i > 0 && col.header !== "Intent") dataCell.alignment = { horizontal: "right" };
+        if (isPosition) highlightFirstPage(dataCell, row.position);
       });
     });
 
@@ -201,6 +217,8 @@ function addCompetitorSheet(workbook: ExcelJS.Workbook, data: CompetitorSheet) {
       cell.border = BORDER;
       if (typeof v === "number") cell.alignment = { horizontal: "right" };
     });
+    // Each site's Position column (client's and competitors').
+    row.sites.forEach((site, s) => highlightFirstPage(sheet.getCell(3 + r, facts.length + 1 + s * siteCols.length), site?.position));
   });
   sheet.getRow(1).height = 20;
   sheet.getRow(2).height = 30;

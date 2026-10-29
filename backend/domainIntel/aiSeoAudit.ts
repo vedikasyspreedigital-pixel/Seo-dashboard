@@ -287,6 +287,27 @@ function checkRows(sheet: ExcelJS.Worksheet, startRow: number, rows: { check: st
   return startRow + rows.length - 1;
 }
 
+function addTechSheet(wb: ExcelJS.Workbook, technologies: AiAuditContent["technologies"], brandChecks: AiAuditContent["checks"]) {
+  const tech = wb.addWorksheet("Tech Stack & Branding");
+  [24, 57, 70].forEach((w, i) => (tech.getColumn(i + 1).width = w));
+  titleRow(tech, "Technology Stack & Branding Reference", 3);
+  tech.mergeCells(3, 1, 3, 2);
+  tech.getCell(3, 1).value = "Detected Technologies";
+  tech.getCell(3, 1).font = { bold: true };
+  headerRow(tech, 4, ["Technology", "Category"]);
+  technologies.forEach((t, i) => (tech.getRow(5 + i).values = [t.name, t.category]));
+  const brandRow = 5 + technologies.length + 3;
+  headerRow(tech, brandRow, ["Technology & Branding Checks", "Status", "Finding"], GREEN_HEADER);
+  brandChecks.forEach((c, i) => {
+    const row = tech.getRow(brandRow + 1 + i);
+    row.values = [c.check, c.status, c.finding];
+    row.alignment = { vertical: "top", wrapText: true };
+    styleStatus(row.getCell(2), c.status);
+  });
+  tech.views = [{ state: "frozen", ySplit: 1 }];
+  tech.pageSetup = { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+}
+
 export async function buildAiAuditWorkbook(content: AiAuditContent, meta: { clientName: string; websiteUrl: string; sources: string[] }): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const score = content.overallScore ?? null;
@@ -310,13 +331,16 @@ export async function buildAiAuditWorkbook(content: AiAuditContent, meta: { clie
   dash.getCell(5, 2).alignment = { wrapText: true, vertical: "middle" };
   dash.getRow(5).height = 44;
   headerRow(dash, 9, ["Category", "Pass", "Warning / To Improve", "Error", "Informational", "Total Checks"]);
-  CATEGORIES.forEach((cat, i) => {
+  // Only categories the reports actually checked (the team's call, 2026-10-29): when WooRank couldn't read a
+  // site's homepage it has no On-Page / Mobile / Accessibility checks, and empty rows and tabs looked broken.
+  const checked = CATEGORIES.filter((cat) => content.checks.some((c) => c.category === cat));
+  checked.forEach((cat, i) => {
     const inCat = content.checks.filter((c) => c.category === cat);
     const n = (s: string) => inCat.filter((c) => c.status === s).length;
     dash.getRow(10 + i).values = [cat, n("Pass"), n("Warning"), n("Error"), n("Info"), inCat.length];
   });
   // Key Metrics: the reports' headline numbers side by side (an addition to the sample).
-  let r0 = 10 + CATEGORIES.length + 2;
+  let r0 = 10 + checked.length + 2;
   if (content.keyMetrics.length > 0) {
     dash.getCell(r0, 1).value = "Key Metrics";
     dash.getCell(r0, 1).font = { bold: true };
@@ -339,41 +363,20 @@ export async function buildAiAuditWorkbook(content: AiAuditContent, meta: { clie
   });
   dash.pageSetup = { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
 
-  // One sheet per area
+  // One sheet per area -- left out when it has no checks at all.
   for (const s of CHECK_SHEETS) {
+    const rows = content.checks.filter((c) => s.categories.includes(c.category));
+    if (rows.length === 0) continue;
     const sheet = wb.addWorksheet(s.name);
     s.widths.forEach((w, i) => (sheet.getColumn(i + 1).width = w));
     titleRow(sheet, s.title, 4);
     headerRow(sheet, 3, [s.first, "Status", "Finding", "Recommendation"]);
-    const last = checkRows(
-      sheet,
-      4,
-      content.checks.filter((c) => s.categories.includes(c.category)),
-    );
-    finishSheet(sheet, 3, 4, last);
+    finishSheet(sheet, 3, 4, checkRows(sheet, 4, rows));
   }
 
-  // Tech stack & branding
-  const tech = wb.addWorksheet("Tech Stack & Branding");
-  [24, 57, 70].forEach((w, i) => (tech.getColumn(i + 1).width = w));
-  titleRow(tech, "Technology Stack & Branding Reference", 3);
-  tech.mergeCells(3, 1, 3, 2);
-  tech.getCell(3, 1).value = "Detected Technologies";
-  tech.getCell(3, 1).font = { bold: true };
-  headerRow(tech, 4, ["Technology", "Category"]);
-  content.technologies.forEach((t, i) => (tech.getRow(5 + i).values = [t.name, t.category]));
-  const brandRow = 5 + content.technologies.length + 3;
-  headerRow(tech, brandRow, ["Technology & Branding Checks", "Status", "Finding"], GREEN_HEADER);
-  content.checks
-    .filter((c) => c.category === "Tech Stack & Branding")
-    .forEach((c, i) => {
-      const row = tech.getRow(brandRow + 1 + i);
-      row.values = [c.check, c.status, c.finding];
-      row.alignment = { vertical: "top", wrapText: true };
-      styleStatus(row.getCell(2), c.status);
-    });
-  tech.views = [{ state: "frozen", ySplit: 1 }];
-  tech.pageSetup = { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+  // Tech stack & branding -- also only when there's something in it.
+  const brandChecks = content.checks.filter((c) => c.category === "Tech Stack & Branding");
+  if (content.technologies.length > 0 || brandChecks.length > 0) addTechSheet(wb, content.technologies, brandChecks);
 
   // Semrush's site-wide crawl, when it was part of the audit
   if (content.siteAudit.length > 0) {

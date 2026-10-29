@@ -161,6 +161,32 @@ test("buildDomainReportExcel: side-by-side yellow/blue blocks in Semrush, Ubersu
   assert.equal((sheet.getCell("A2").fill as ExcelJS.FillPattern).fgColor?.argb, "FF4472C4");
 });
 
+test("buildDomainReportExcel: positions 1-10 are highlighted green in every tool's block and on the Competitors sheet", async () => {
+  const buffer = await buildDomainReportExcel(
+    [
+      { source: "semrush", rows: [1, 10, 11, null].map((position, i) => ({ keyword: `k${i}`, volume: 100, position, intent: "Commercial" })) },
+      { source: "ahrefs", rows: [{ keyword: "k0", volume: 100, position: 4, intent: "Commercial" }] },
+    ],
+    {
+      client: { domain: "client.com.au", rows: [{ keyword: "k0", position: 2, volume: 100 }] },
+      competitors: [{ domain: "rival.com.au", rows: [{ keyword: "k0", position: 15, volume: 100 }] }],
+      intentOf: () => "Commercial",
+    },
+  );
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
+  const green = (cell: ExcelJS.Cell) => (cell.fill as ExcelJS.FillPattern | undefined)?.fgColor?.argb === "FFC6EFCE" && cell.font?.bold === true;
+  const main = workbook.getWorksheet("Domain Keywords")!;
+  // Semrush: Position is column B (rows 3-6 = positions 1, 10, 11, none); Ahrefs: Current position is column H.
+  assert.deepEqual([3, 4, 5, 6].map((r) => green(main.getCell(r, 2))), [true, true, false, false]);
+  assert.equal(green(main.getCell(3, 8)), true, "Ahrefs position 4");
+  assert.equal(green(main.getCell(3, 1)), false, "only the position cell, not the keyword");
+  const comp = workbook.getWorksheet("Competitors")!;
+  // Keyword facts are columns A-D; the client's Position is E, the competitor's H.
+  assert.equal(green(comp.getCell(3, 5)), true, "client at 2");
+  assert.equal(green(comp.getCell(3, 8)), false, "competitor at 15");
+});
+
 test("POST /api/domain-intel/reports: builds combined + individual files, posts them to the client's domain task, keeps history", async () => {
   const auth = await createAuthenticatedSession();
   const posted: PostCommentParams[] = [];
