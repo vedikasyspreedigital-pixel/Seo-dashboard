@@ -210,7 +210,7 @@ export async function runAhrefs(task, ctx) {
   const tabId = await ctx.openTab(ACCESS_PAGE);
   await waitForHuman(tabId, ctx, "Flikover");
   // Signed out (or "Multiple Sessions Detected"): a person signs in in this window and the report carries on.
-  await waitForSignIn(tabId, ctx, { where: "Flikover", signedOut: isFlikoverSignIn, reopenUrl: ACCESS_PAGE });
+  await waitForSignIn(tabId, ctx, { where: "Flikover", signedOut: async (id) => isFlikoverSignIn(new URL(await tabUrl(id))), reopenUrl: ACCESS_PAGE });
   await assertSignedIn(tabId);
 
   const access = await waitFor(tabId, findAccessLink, [], 30_000);

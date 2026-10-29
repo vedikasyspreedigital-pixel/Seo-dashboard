@@ -1,4 +1,4 @@
-import { AgentError, navigate, pause, run, tabUrl, waitFor, waitForHuman, waitForSignIn } from "../lib/browser.js";
+import { AgentError, navigate, pause, run, sleep, tabUrl, waitFor, waitForHuman, waitForLoad, waitForSignIn } from "../lib/browser.js";
 
 // Semrush and Ubersuggest exports through seotooladda, in THIS Chrome (where
 // someone is signed in -- seotooladda's login has a reCAPTCHA, so the agent
@@ -14,9 +14,27 @@ import { AgentError, navigate, pause, run, tabUrl, waitFor, waitForHuman, waitFo
 const SEMRUSH_DB = { au: "au", us: "us", uk: "uk", ca: "ca", nz: "nz", in: "in", ae: "ae", sa: "sa", qa: "qa", sg: "sg" };
 const UBERSUGGEST_LOC = { au: 2036, us: 2840, uk: 2826, ca: 2124, nz: 2554, in: 2356, ae: 2784, sa: 2682, qa: 2634, sg: 2702 };
 
+/**
+ * Is the tab on seotooladda's REAL sign-in form? Not just "login" in the address (2026-10-29): Ubersuggest came
+ * through in the same run while Semrush and WooRank said "signed out" -- the address "Go" passes through on the
+ * way to a tool can contain "login" too. A sign-in form has a password box.
+ */
+async function onSeotooladdaSignIn(tabId) {
+  let url;
+  try {
+    url = new URL(await tabUrl(tabId));
+  } catch {
+    return false;
+  }
+  if (!((url.hostname === "seotooladda.com" || url.hostname === "www.seotooladda.com") && /login/i.test(url.pathname))) return false;
+  await waitForLoad(tabId, 15_000);
+  // Still there once loaded, and showing a password box.
+  if (!/login/i.test(new URL(await tabUrl(tabId)).pathname)) return false;
+  return !!(await run(tabId, () => !!document.querySelector('input[type="password"]')).catch(() => false));
+}
+
 async function assertSignedIn(tabId) {
-  const url = new URL(await tabUrl(tabId));
-  if ((url.hostname === "seotooladda.com" || url.hostname === "www.seotooladda.com") && /login/i.test(url.pathname)) {
+  if (await onSeotooladdaSignIn(tabId)) {
     throw new AgentError("SESSION_EXPIRED", "seotooladda is signed out in the office Chrome. Sign in to seotooladda in that browser (its login has a captcha, so a person must do it).");
   }
 }
@@ -122,7 +140,6 @@ export function readCapturedExport() {
 // ---- shared steps ----
 
 const accessPage = (tool) => `https://seotooladda.com/user/in/access_${tool}.php`;
-const isSeotooladdaSignIn = (url) => (url.hostname === "seotooladda.com" || url.hostname === "www.seotooladda.com") && /login/i.test(url.pathname);
 const TOOL_NAMES = { semrush: "Semrush", ubersuggest: "Ubersuggest", woorank: "WooRank" };
 
 /**
@@ -155,6 +172,37 @@ async function reuseTool(ctx, tool, toolHost) {
   return { fallBackIn: tabId };
 }
 
+/**
+ * After "Go": the tab of the job window that's on the tool's site (this one or a new one, made the active tab),
+ * "signin" if this tab went to seotooladda's sign-in page instead, or null after `timeoutMs`.
+ */
+async function toolTabAfterGo(tabId, toolHost, timeoutMs) {
+  const { windowId } = await chrome.tabs.get(tabId);
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const host = (t) => {
+      try {
+        return new URL(t.pendingUrl || t.url || "").hostname;
+      } catch {
+        return "";
+      }
+    };
+    // The newest tab on the tool's site.
+    const tool = tabs.filter((t) => host(t) === toolHost).sort((a, b) => b.id - a.id)[0];
+    if (tool) {
+      await chrome.tabs.update(tool.id, { active: true }).catch(() => {});
+      await waitForLoad(tool.id);
+      return tool.id;
+    }
+    const here = tabs.find((t) => t.id === tabId);
+    // Only a real sign-in form -- "Go" passes through addresses with "login" in them on its way to the tool.
+    if (here && here.status === "complete" && (await onSeotooladdaSignIn(tabId))) return "signin";
+    await sleep(1000);
+  }
+  return null;
+}
+
 /** seotooladda's own Access page -> "Go" -> the tool's site. Returns the tab. */
 export async function openTool(ctx, tool, toolHost) {
   const reused = await reuseTool(ctx, tool, toolHost);
@@ -169,7 +217,7 @@ export async function openTool(ctx, tool, toolHost) {
   await waitForHuman(tabId, ctx, "seotooladda");
   // Signed out -- on the access page, or only after "Go" (seen 2026-10-29 with WooRank: Semrush's own session
   // still worked while seotooladda's had ended) -- a person signs in in this window and the report carries on.
-  const signIn = { where: "seotooladda", signedOut: isSeotooladdaSignIn, reopenUrl: accessPage(tool) };
+  const signIn = { where: "seotooladda", signedOut: onSeotooladdaSignIn, reopenUrl: accessPage(tool) };
   let arrived = false;
   for (let attempt = 0; attempt < 3 && !arrived; attempt++) {
     await waitForSignIn(tabId, ctx, signIn);
@@ -180,15 +228,15 @@ export async function openTool(ctx, tool, toolHost) {
     await pause();
     await ctx.progress(`Opening ${TOOL_NAMES[tool] ?? tool}`);
     await run(tabId, clickRedirectButton);
-    // The tool's site -- or seotooladda's sign-in page, which means: wait for a person, then "Go" again.
-    const landed = await waitFor(
-      tabId,
-      (host) => (location.hostname === host ? "tool" : /(^|\.)seotooladda\.com$/.test(location.hostname) && /login/i.test(location.pathname) ? "signin" : null),
-      [toolHost],
-      60_000,
-    );
+    // The tool's site -- in this tab, or in a NEW tab ("Go" opened WooRank in another tab on 2026-10-29 while the
+    // agent kept watching the first one and wrongly said "signed out") -- or seotooladda's sign-in page, which
+    // means: wait for a person, then "Go" again.
+    const landed = await toolTabAfterGo(tabId, toolHost, 60_000);
     if (landed === "signin") continue;
-    arrived = landed === "tool";
+    if (typeof landed === "number") {
+      tabId = landed;
+      arrived = true;
+    }
     if (!arrived) break;
   }
   await waitForHuman(tabId, ctx, tool);

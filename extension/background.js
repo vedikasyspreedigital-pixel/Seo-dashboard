@@ -107,7 +107,9 @@ async function runTask(task) {
     await setStatus({ state: "idle", lastResult: `✓ ${task.tool} · ${task.domain} · ${fileName}`, step: null, job: null });
   } catch (err) {
     const code = err instanceof AgentError ? err.code : "FAILED";
-    const message = err?.message || String(err);
+    // Where the job window was when it failed (2026-10-29: the window closes afterwards, so nobody could see it).
+    // (Room kept for it: the server keeps 500 characters.)
+    const message = `${(err?.message || String(err)).slice(0, 400)}${await whereItStopped()}`;
     await api(`/tasks/${task.id}/fail`, json({ code, message })).catch(() => {});
     // A reused tool session may be what failed: the next report goes through seotooladda's "Go" again.
     await chrome.storage.local.remove("toolOpenedAt").catch(() => {});
@@ -119,6 +121,23 @@ async function runTask(task) {
     activeTool = null;
     if (jobWindowId !== null) await chrome.windows.remove(jobWindowId).catch(() => {});
     jobWindowId = null;
+  }
+}
+
+/**
+ * " [page: host/path -- title]" of the job window's open tab, or "". Address without its query string: the
+ * tools' links carry seotooladda's access keys (?api_key=...), which must not end up in the dashboard.
+ */
+async function whereItStopped() {
+  if (jobWindowId === null) return "";
+  try {
+    const [tab] = await chrome.tabs.query({ windowId: jobWindowId, active: true });
+    if (!tab?.url) return "";
+    const url = new URL(tab.url);
+    const title = (tab.title || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    return ` [page: ${url.hostname}${url.pathname}${title ? ` -- "${title}"` : ""}]`;
+  } catch {
+    return "";
   }
 }
 

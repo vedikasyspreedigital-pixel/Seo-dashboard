@@ -77,11 +77,11 @@ export const SIGN_IN_WAIT_MS = 10 * 60 * 1000;
 /**
  * The tab is on a tool's sign-in page: instead of failing the job (2026-10-29, the team's ask), bring the window
  * to the front, ask for a person in a notification and WAIT until they've signed in -- then open `reopenUrl`
- * (the tool's access page) again and carry on. Never types anything itself. `signedOut(url)` tells, from the
- * tab's address, whether it's still on the sign-in page. Returns true if it waited, false if no sign-in was needed.
+ * (the tool's access page) again and carry on. Never types anything itself. `await signedOut(tabId)` tells
+ * whether the tab is (still) on the sign-in page. Returns true if it waited, false if no sign-in was needed.
  */
 export async function waitForSignIn(tabId, ctx, { where, signedOut, reopenUrl }) {
-  if (!signedOut(new URL(await tabUrl(tabId)))) return false;
+  if (!(await signedOut(tabId))) return false;
   await ctx.progress(`Sign in to ${where} in the window that just opened -- the report continues by itself afterwards`, true);
   const tab = await chrome.tabs.get(tabId);
   await chrome.windows.update(tab.windowId, { focused: true, state: "maximized" }).catch(() => {});
@@ -99,12 +99,12 @@ export async function waitForSignIn(tabId, ctx, { where, signedOut, reopenUrl })
     await sleep(3000);
     const url = await tabUrl(tabId).catch(() => "");
     if (!url) throw new AgentError("FAILED", `The ${where} window was closed while waiting for the sign-in.`);
-    if (!signedOut(new URL(url))) {
+    if (!(await signedOut(tabId))) {
       await ctx.progress(`Signed in to ${where} -- continuing`);
       await pause();
       await navigate(tabId, reopenUrl);
       // Signed in, but the tool still sends us back to its sign-in page: keep waiting.
-      if (signedOut(new URL(await tabUrl(tabId)))) continue;
+      if (await signedOut(tabId)) continue;
       return true;
     }
   }
