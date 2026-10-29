@@ -1,4 +1,4 @@
-import { AgentError, navigate, pause, run, tabUrl, waitFor, waitForHuman } from "../lib/browser.js";
+import { AgentError, navigate, pause, run, tabUrl, waitFor, waitForHuman, waitForSignIn } from "../lib/browser.js";
 
 // Semrush and Ubersuggest exports through seotooladda, in THIS Chrome (where
 // someone is signed in -- seotooladda's login has a reCAPTCHA, so the agent
@@ -121,23 +121,68 @@ export function readCapturedExport() {
 
 // ---- shared steps ----
 
+const accessPage = (tool) => `https://seotooladda.com/user/in/access_${tool}.php`;
+const isSeotooladdaSignIn = (url) => (url.hostname === "seotooladda.com" || url.hostname === "www.seotooladda.com") && /login/i.test(url.pathname);
+const TOOL_NAMES = { semrush: "Semrush", ubersuggest: "Ubersuggest", woorank: "WooRank" };
+
+/**
+ * A tool opened through seotooladda's "Go" in the last 30 minutes is reused directly (2026-10-29): every report
+ * used to go through the access page again -- ~10 times a run -- and seotooladda kept signing the account out.
+ */
+const TOOL_REUSE_MS = 30 * 60 * 1000;
+// Semrush only: it's opened ~5 times a run (keywords, 3 competitors, Site Audit). WooRank's pages carry a key
+// from the "Go" link (?api_key=...), and WooRank / Ubersuggest are opened once a run anyway.
+const REUSABLE_TOOLS = new Set(["semrush"]);
+
+/** In-page: a sign-in form or an "expired / access denied" notice instead of the tool. */
+function toolSessionEnded() {
+  const text = (document.body?.innerText ?? "").slice(0, 3000);
+  return !!document.querySelector('input[type="password"]') || /session (has )?expired|access denied|please (log|sign) ?in|log ?in again/i.test(text);
+}
+
+/** The tool's own site, if its session from an earlier report still works (else null -- go through seotooladda). */
+async function reuseTool(ctx, tool, toolHost) {
+  if (!REUSABLE_TOOLS.has(tool)) return null;
+  const { toolOpenedAt = {} } = await chrome.storage.local.get("toolOpenedAt");
+  if (!(Date.now() - (toolOpenedAt[tool] ?? 0) < TOOL_REUSE_MS)) return null;
+  await ctx.progress(`Opening ${TOOL_NAMES[tool] ?? tool} (still open from the last report)`);
+  const tabId = await ctx.openTab(`https://${toolHost}/`);
+  await waitForHuman(tabId, ctx, TOOL_NAMES[tool] ?? tool);
+  const url = new URL(await tabUrl(tabId));
+  if (url.hostname === toolHost && !(await run(tabId, toolSessionEnded).catch(() => true))) return tabId;
+  // The tool's session has ended: the usual way, in the same window.
+  await navigate(tabId, accessPage(tool));
+  return { fallBackIn: tabId };
+}
+
 /** seotooladda's own Access page -> "Go" -> the tool's site. Returns the tab. */
 export async function openTool(ctx, tool, toolHost) {
-  await ctx.progress("Opening seotooladda");
-  const tabId = await ctx.openTab(`https://seotooladda.com/user/in/access_${tool}.php`);
+  const reused = await reuseTool(ctx, tool, toolHost);
+  if (typeof reused === "number") return reused;
+  let tabId;
+  if (reused) {
+    tabId = reused.fallBackIn;
+  } else {
+    await ctx.progress("Opening seotooladda");
+    tabId = await ctx.openTab(accessPage(tool));
+  }
   await waitForHuman(tabId, ctx, "seotooladda");
+  // Signed out: a person signs in in this window and the report carries on (it used to fail here).
+  await waitForSignIn(tabId, ctx, { where: "seotooladda", signedOut: isSeotooladdaSignIn, reopenUrl: accessPage(tool) });
   await assertSignedIn(tabId);
   if (!(await waitFor(tabId, hasRedirectButton, [], 30_000))) {
     await assertSignedIn(tabId);
     throw new AgentError("FAILED", `seotooladda's ${tool} access page has no "Go" button -- is the ${tool} subscription active?`);
   }
   await pause();
-  await ctx.progress(`Opening ${{ semrush: "Semrush", ubersuggest: "Ubersuggest", woorank: "WooRank" }[tool] ?? tool}`);
+  await ctx.progress(`Opening ${TOOL_NAMES[tool] ?? tool}`);
   await run(tabId, clickRedirectButton);
   const arrived = await waitFor(tabId, (host) => location.hostname === host, [toolHost], 60_000);
   await waitForHuman(tabId, ctx, tool);
   await assertSignedIn(tabId);
   if (!arrived) throw new AgentError("FAILED", `${tool} didn't open from seotooladda.`);
+  const { toolOpenedAt = {} } = await chrome.storage.local.get("toolOpenedAt");
+  await chrome.storage.local.set({ toolOpenedAt: { ...toolOpenedAt, [tool]: Date.now() } });
   await pause();
   return tabId;
 }

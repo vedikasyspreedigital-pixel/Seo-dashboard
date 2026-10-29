@@ -71,6 +71,46 @@ export function pageHasHumanCheck() {
   );
 }
 
+/** How long a job waits for a person to sign in to a tool before giving up (the server allows 15 min). */
+export const SIGN_IN_WAIT_MS = 10 * 60 * 1000;
+
+/**
+ * The tab is on a tool's sign-in page: instead of failing the job (2026-10-29, the team's ask), bring the window
+ * to the front, ask for a person in a notification and WAIT until they've signed in -- then open `reopenUrl`
+ * (the tool's access page) again and carry on. Never types anything itself. `signedOut(url)` tells, from the
+ * tab's address, whether it's still on the sign-in page. Returns true if it waited, false if no sign-in was needed.
+ */
+export async function waitForSignIn(tabId, ctx, { where, signedOut, reopenUrl }) {
+  if (!signedOut(new URL(await tabUrl(tabId)))) return false;
+  await ctx.progress(`Sign in to ${where} in the window that just opened -- the report continues by itself afterwards`, true);
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.windows.update(tab.windowId, { focused: true, state: "maximized" }).catch(() => {});
+  await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  chrome.notifications.create(`signin-${Date.now()}`, {
+    type: "basic",
+    iconUrl: "icon.png",
+    title: `SERP Console: sign in to ${where}`,
+    message: `Please sign in to ${where} in the window that just opened. The report continues by itself afterwards.`,
+    priority: 2,
+    requireInteraction: true,
+  });
+  const end = Date.now() + SIGN_IN_WAIT_MS;
+  while (Date.now() < end) {
+    await sleep(3000);
+    const url = await tabUrl(tabId).catch(() => "");
+    if (!url) throw new AgentError("FAILED", `The ${where} window was closed while waiting for the sign-in.`);
+    if (!signedOut(new URL(url))) {
+      await ctx.progress(`Signed in to ${where} -- continuing`);
+      await pause();
+      await navigate(tabId, reopenUrl);
+      // Signed in, but the tool still sends us back to its sign-in page: keep waiting.
+      if (signedOut(new URL(await tabUrl(tabId)))) continue;
+      return true;
+    }
+  }
+  throw new AgentError("SESSION_EXPIRED", `Nobody signed in to ${where} on this computer within ${SIGN_IN_WAIT_MS / 60000} minutes.`);
+}
+
 /**
  * If a "verify you are human" check is showing, brings the window to the front,
  * shows a notification and WAITS (up to 15 min) for a person to tick it. Never

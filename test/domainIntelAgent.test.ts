@@ -76,6 +76,11 @@ test("dashboard fetch -> extension claims it, reports steps (incl. waiting for a
 
     await t.agent("post", `/tasks/${claimed.body.id}/progress`).send({ step: "Opening Flikover", needsHuman: true });
     assert.match((await t.job(started.body.id)).step, /verify you are human/);
+    // Extension 0.1.2: a signed-out tool waits for a person to sign in -- said as that, not as a captcha.
+    await t.agent("post", `/tasks/${claimed.body.id}/progress`).send({ step: "Sign in to seotooladda in the window that just opened", needsHuman: true });
+    const waiting = (await t.job(started.body.id)).step;
+    assert.match(waiting, /Waiting for a person on the office computer: Sign in to seotooladda/);
+    assert.doesNotMatch(waiting, /verify you are human/);
     await t.agent("post", `/tasks/${claimed.body.id}/progress`).send({ step: "Exporting 2 keywords" });
     assert.equal((await t.job(started.body.id)).step, "Exporting 2 keywords");
 

@@ -1,4 +1,4 @@
-import { AgentError, navigate, pause, run, tabUrl, waitFor, waitForHuman } from "../lib/browser.js";
+import { AgentError, navigate, pause, run, tabUrl, waitFor, waitForHuman, waitForSignIn } from "../lib/browser.js";
 
 // Ahrefs "Organic keywords" export through Flikover, in THIS Chrome -- the path
 // mapped with the user (2026-10-16/19 recordings + screenshots):
@@ -15,6 +15,10 @@ const SITE_EXPLORER = "https://ahn.flikover.com/site-explorer";
 
 /** The page's Semrush-style codes -> Ahrefs (ISO) country codes. */
 const ahrefsCountry = (location) => ((location || "au").toLowerCase() === "uk" ? "gb" : (location || "au").toLowerCase());
+
+/** Flikover's sign-in page, or its "Multiple Sessions Detected" error page (both need a person to sign in). */
+const isFlikoverSignIn = (url) =>
+  url.hostname.endsWith("flikover.com") && url.hostname !== "ahn.flikover.com" && /login|error/i.test(url.pathname) && !/^\/user\/in\/(ahrefs|access2)\.php$/.test(url.pathname);
 
 /** Fails with the right code if the tab is on a Flikover sign-in / error page instead of where we expect. */
 async function assertSignedIn(tabId) {
@@ -205,6 +209,8 @@ export async function runAhrefs(task, ctx) {
   await ctx.progress("Opening Flikover");
   const tabId = await ctx.openTab(ACCESS_PAGE);
   await waitForHuman(tabId, ctx, "Flikover");
+  // Signed out (or "Multiple Sessions Detected"): a person signs in in this window and the report carries on.
+  await waitForSignIn(tabId, ctx, { where: "Flikover", signedOut: isFlikoverSignIn, reopenUrl: ACCESS_PAGE });
   await assertSignedIn(tabId);
 
   const access = await waitFor(tabId, findAccessLink, [], 30_000);

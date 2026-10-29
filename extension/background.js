@@ -109,6 +109,8 @@ async function runTask(task) {
     const code = err instanceof AgentError ? err.code : "FAILED";
     const message = err?.message || String(err);
     await api(`/tasks/${task.id}/fail`, json({ code, message })).catch(() => {});
+    // A reused tool session may be what failed: the next report goes through seotooladda's "Go" again.
+    await chrome.storage.local.remove("toolOpenedAt").catch(() => {});
     await setStatus({ state: "idle", lastResult: `✗ ${task.tool} · ${task.domain}: ${message}`, step: null, job: null });
     // Watching (Settings): leave the failed job's window open on the page where it stopped.
     const { watch = false } = await chrome.storage.local.get("watch");

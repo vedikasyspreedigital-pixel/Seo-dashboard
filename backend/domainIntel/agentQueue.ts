@@ -130,7 +130,9 @@ export function reportProgress(id: string, step: string, needsHuman = false) {
   w.task.state = needsHuman ? "needs_human" : "claimed";
   w.task.step = step;
   w.task.lastProgressAt = Date.now();
-  w.onStep?.(needsHuman ? `Waiting for someone to tick "verify you are human" on the office computer (${step})` : step);
+  // Since extension 0.1.2 a signed-out tool also waits for a person ("Sign in to seotooladda ...") instead of failing.
+  const humanStep = /^sign in/i.test(step) ? `Waiting for a person on the office computer: ${step}` : `Waiting for someone to tick "verify you are human" on the office computer (${step})`;
+  w.onStep?.(needsHuman ? humanStep : step);
 }
 
 export function completeTask(id: string, result: FetchedExport) {
