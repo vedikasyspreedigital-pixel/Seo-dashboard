@@ -106,6 +106,38 @@ function listReady() {
   return [...document.querySelectorAll("button, span")].some((e) => (e.textContent || "").trim() === "Create project");
 }
 
+/**
+ * /siteaudit/ with NO projects on the account shows Semrush's start page instead of the list ("Enter domain" +
+ * "Start SEO Audit", seen 2026-10-29 after the team deleted the old projects). "list" | "start" | null.
+ */
+function siteAuditPage() {
+  if ([...document.querySelectorAll("button, span")].some((e) => (e.textContent || "").trim() === "Create project")) return "list";
+  const box = [...document.querySelectorAll("input")].find((i) => /enter domain/i.test(i.placeholder || ""));
+  const start = [...document.querySelectorAll("button, a, span")].some((e) => /^start seo audit$/i.test((e.textContent || "").trim()));
+  return box && start ? "start" : null;
+}
+
+/** The start page: the domain into "Enter domain", then "Start SEO Audit". */
+function startFromStartPage(domain) {
+  const box = [...document.querySelectorAll("input")].find((i) => /enter domain/i.test(i.placeholder || ""));
+  const btn = [...document.querySelectorAll("button, a, span")].find((e) => /^start seo audit$/i.test((e.textContent || "").trim()));
+  const el = btn?.closest("button, a, [role='button']") || btn;
+  if (!box || !el) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  box.focus();
+  setter.call(box, domain);
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+  const r = el.getBoundingClientRect();
+  const at = { bubbles: true, cancelable: true, view: window, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+  el.dispatchEvent(new PointerEvent("pointerdown", { ...at, pointerType: "mouse", isPrimary: true }));
+  el.dispatchEvent(new MouseEvent("mousedown", at));
+  el.dispatchEvent(new PointerEvent("pointerup", { ...at, pointerType: "mouse", isPrimary: true }));
+  el.dispatchEvent(new MouseEvent("mouseup", at));
+  el.dispatchEvent(new MouseEvent("click", at));
+  return true;
+}
+
 /** "Create project" dialog, step 1: the Website box. Returns true once filled. */
 function fillWebsite(domain) {
   const site = document.querySelector("input#domain") || [...document.querySelectorAll("input")].find((i) => /domain or subdomain/i.test(i.placeholder || ""));
@@ -117,25 +149,6 @@ function fillWebsite(domain) {
   site.dispatchEvent(new Event("change", { bubbles: true }));
   site.blur();
   return true;
-}
-
-/**
- * Step 2: the Name box. It appears after Semrush has checked the website and Semrush fills it with the
- * domain itself (seen 2026-10-22) -- only fill it if it's empty. Returns "ok", "exists" (Semrush says a
- * project with this website already exists) or null (not there yet).
- */
-function fillName(name) {
-  if (/project with this website already exists/i.test(document.body?.innerText ?? "")) return "exists";
-  const input = document.querySelector("input#name") || [...document.querySelectorAll("input")].find((i) => /business name|project name/i.test(i.placeholder || ""));
-  if (!input) return null;
-  if (input.value.trim()) return "ok";
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-  input.focus();
-  setter.call(input, name);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-  input.blur();
-  return "ok";
 }
 
 /** The schedule dropdown's visible options (for a progress note when "Once" isn't among them). */
@@ -276,6 +289,57 @@ async function configureAndStart(tabId, ctx) {
   await pause(2000, 3000);
 }
 
+/**
+ * After the website is in (the "Create project" dialog, or the start page's "Start SEO Audit"): the Name box,
+ * "Create" until the audit settings open, then the settings and Start audit. The start page may also go
+ * straight to the settings (not seen yet -- so either is fine).
+ */
+async function finishCreate(tabId, ctx, name, domain) {
+  // The Name box appears once Semrush has checked the website (and Semrush fills it in).
+  const named = await waitFor(tabId, nameOrWizard, [name], 30_000);
+  if (named === "exists") {
+    throw new AgentError("FAILED", `Semrush says a Site Audit project for ${domain} already exists (only one per website is allowed). Delete it in Semrush's Site Audit list, then run this again.`);
+  }
+  if (named !== "ok" && named !== "wizard") {
+    const seen = await run(tabId, pageSummary).catch(() => "?");
+    throw new AgentError("FAILED", `Semrush didn't accept the website ${domain} (no Name box appeared). Page shows: ${seen}`.slice(0, 480));
+  }
+  if (named === "ok") {
+    await pause(1500, 2500);
+    // The first click on Create sometimes only validates (seen in the recording) -- press until the wizard opens.
+    for (let i = 0; i < 3 && !(await run(tabId, wizardOpen)); i++) {
+      await run(tabId, clickByText, [["Create"]]);
+      await sleep(3000);
+    }
+  }
+  if (!(await waitFor(tabId, wizardOpen, [], 30_000))) {
+    const msg = await run(tabId, exportError).catch(() => null);
+    throw new AgentError("FAILED", `Semrush didn't open the audit settings after creating the project${msg ? ` (${msg})` : ""} -- the shared account may have hit its project limit.`);
+  }
+  await configureAndStart(tabId, ctx);
+}
+
+/**
+ * In-page, self-contained (executeScript ships only this function). "wizard" if the audit settings are already
+ * open; else the Name box -- it appears after Semrush has checked the website, and Semrush fills it with the
+ * domain itself (seen 2026-10-22), so it's only filled if empty: "ok", "exists" (a project with this website
+ * already exists) or null (not there yet).
+ */
+function nameOrWizard(name) {
+  if (/General settings/.test(document.body?.innerText ?? "") && document.querySelector('[data-name="pageLimit"]')) return "wizard";
+  if (/project with this website already exists/i.test(document.body?.innerText ?? "")) return "exists";
+  const input = document.querySelector("input#name") || [...document.querySelectorAll("input")].find((i) => /business name|project name/i.test(i.placeholder || ""));
+  if (!input) return null;
+  if (input.value.trim()) return "ok";
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  input.focus();
+  setter.call(input, name);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  input.blur();
+  return "ok";
+}
+
 // ---- the flow ----
 
 /**
@@ -291,23 +355,39 @@ export async function runSiteAudit(task, ctx) {
   await ctx.progress("Opening Site Audit");
   await navigate(tabId, SITE_AUDIT);
   await waitForHuman(tabId, ctx, "Semrush");
-  if (!(await waitFor(tabId, listReady, [], 60_000))) throw new AgentError("TIMEOUT", "Semrush Site Audit didn't load.");
+  const page = await waitFor(tabId, siteAuditPage, [], 60_000);
+  if (!page) {
+    const seen = await run(tabId, pageSummary).catch(() => "?");
+    throw new AgentError("TIMEOUT", `Semrush Site Audit didn't load. Page shows: ${seen}`.slice(0, 480));
+  }
   await pause();
 
   let campaignId = null;
-  // A project left at "Set up" (created, audit never started) is finished off instead of creating another.
-  await run(tabId, searchProjects, [task.domain]);
-  await sleep(2500);
-  const existing = await waitFor(tabId, projectRow, [task.domain], 6_000);
-  if (existing?.id) {
+  let existing = null;
+  if (page === "list") {
+    await run(tabId, searchProjects, [task.domain]);
+    await sleep(2500);
+    existing = await waitFor(tabId, projectRow, [task.domain], 6_000);
+  }
+  if (page === "start") {
+    // No projects on the account at all: Semrush's start page creates the first one.
+    await ctx.progress(`No Site Audit projects yet -- starting one for ${domain} from Semrush's start page`);
+    if (!(await run(tabId, startFromStartPage, [domain]))) throw new AgentError("FAILED", 'Couldn\'t use Semrush\'s "Start SEO Audit" box.');
+    await finishCreate(tabId, ctx, name, domain);
+  } else if (existing?.id) {
     // A finished project for this website already exists (Semrush allows only one per website): use it.
     campaignId = existing.id;
     await ctx.progress("Using the finished Site Audit project that already exists");
   } else if (existing?.setUp) {
+    // A project left at "Set up" (created, audit never started) is finished off instead of creating another.
     await ctx.progress('Found the project at "Set up" -- starting its audit');
     await run(tabId, pressSetUp, [task.domain]);
     if (!(await waitFor(tabId, wizardOpen, [], 30_000))) throw new AgentError("FAILED", 'Semrush didn\'t open the audit settings from "Set up".');
     await configureAndStart(tabId, ctx);
+  } else if (existing?.text) {
+    // Already crawling (started by a person, or by an earlier try): wait for it -- creating another would be
+    // refused ("a project with this website already exists").
+    await ctx.progress("A Site Audit for this website is already crawling -- waiting for it");
   } else {
     await ctx.progress(`Creating the Site Audit project "${name}"`);
     if (!(await run(tabId, pressSelector, ["#cpmButton"]))) await run(tabId, clickByText, [["Create project"]]);
@@ -321,26 +401,7 @@ export async function runSiteAudit(task, ctx) {
       const seen = await run(tabId, pageSummary).catch(() => "?");
       throw new AgentError("FAILED", `Semrush's "Create project" dialog didn't open. Page shows: ${seen}`.slice(0, 480));
     }
-    // The Name box appears once Semrush has checked the website (and Semrush fills it in).
-    const named = await waitFor(tabId, fillName, [name], 20_000);
-    if (named === "exists") {
-      throw new AgentError("FAILED", `Semrush says a Site Audit project for ${domain} already exists (only one per website is allowed). Delete it in Semrush's Site Audit list, then run this again.`);
-    }
-    if (named !== "ok") {
-      const seen = await run(tabId, pageSummary).catch(() => "?");
-      throw new AgentError("FAILED", `Semrush didn't accept the website ${domain} (no Name box appeared). Page shows: ${seen}`.slice(0, 480));
-    }
-    await pause(1500, 2500);
-    // The first click on Create sometimes only validates (seen in the recording) -- press until the wizard opens.
-    for (let i = 0; i < 3 && !(await run(tabId, wizardOpen)); i++) {
-      await run(tabId, clickByText, [["Create"]]);
-      await sleep(3000);
-    }
-    if (!(await waitFor(tabId, wizardOpen, [], 30_000))) {
-      const msg = await run(tabId, exportError).catch(() => null);
-      throw new AgentError("FAILED", `Semrush didn't open the audit settings after creating the project${msg ? ` (${msg})` : ""} -- the shared account may have hit its project limit.`);
-    }
-    await configureAndStart(tabId, ctx);
+    await finishCreate(tabId, ctx, name, domain);
   }
 
   {
