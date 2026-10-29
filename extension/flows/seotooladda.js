@@ -167,17 +167,30 @@ export async function openTool(ctx, tool, toolHost) {
     tabId = await ctx.openTab(accessPage(tool));
   }
   await waitForHuman(tabId, ctx, "seotooladda");
-  // Signed out: a person signs in in this window and the report carries on (it used to fail here).
-  await waitForSignIn(tabId, ctx, { where: "seotooladda", signedOut: isSeotooladdaSignIn, reopenUrl: accessPage(tool) });
-  await assertSignedIn(tabId);
-  if (!(await waitFor(tabId, hasRedirectButton, [], 30_000))) {
-    await assertSignedIn(tabId);
-    throw new AgentError("FAILED", `seotooladda's ${tool} access page has no "Go" button -- is the ${tool} subscription active?`);
+  // Signed out -- on the access page, or only after "Go" (seen 2026-10-29 with WooRank: Semrush's own session
+  // still worked while seotooladda's had ended) -- a person signs in in this window and the report carries on.
+  const signIn = { where: "seotooladda", signedOut: isSeotooladdaSignIn, reopenUrl: accessPage(tool) };
+  let arrived = false;
+  for (let attempt = 0; attempt < 3 && !arrived; attempt++) {
+    await waitForSignIn(tabId, ctx, signIn);
+    if (!(await waitFor(tabId, hasRedirectButton, [], 30_000))) {
+      if (await waitForSignIn(tabId, ctx, signIn)) continue;
+      throw new AgentError("FAILED", `seotooladda's ${tool} access page has no "Go" button -- is the ${tool} subscription active?`);
+    }
+    await pause();
+    await ctx.progress(`Opening ${TOOL_NAMES[tool] ?? tool}`);
+    await run(tabId, clickRedirectButton);
+    // The tool's site -- or seotooladda's sign-in page, which means: wait for a person, then "Go" again.
+    const landed = await waitFor(
+      tabId,
+      (host) => (location.hostname === host ? "tool" : /(^|\.)seotooladda\.com$/.test(location.hostname) && /login/i.test(location.pathname) ? "signin" : null),
+      [toolHost],
+      60_000,
+    );
+    if (landed === "signin") continue;
+    arrived = landed === "tool";
+    if (!arrived) break;
   }
-  await pause();
-  await ctx.progress(`Opening ${TOOL_NAMES[tool] ?? tool}`);
-  await run(tabId, clickRedirectButton);
-  const arrived = await waitFor(tabId, (host) => location.hostname === host, [toolHost], 60_000);
   await waitForHuman(tabId, ctx, tool);
   await assertSignedIn(tabId);
   if (!arrived) throw new AgentError("FAILED", `${tool} didn't open from seotooladda.`);
