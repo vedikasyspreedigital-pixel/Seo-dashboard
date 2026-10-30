@@ -466,12 +466,13 @@ export function createClickUpEmailSender({
         }
 
         // Confirmed real, auto-focused input -- no toggle click.
-        const toFilled = await fillFirstMatch(
+        const toFilled = await fillRecipients(
           page,
           [() => page.locator('.cu-email-communicators__field-row--to input.cu-search__input')],
-          params.to.join(", "),
+          params.to,
         );
         if (!toFilled) throw new Error('Could not find/fill the "To" input (.cu-email-communicators__field-row--to input.cu-search__input).');
+        await assertRecipientsShown(page.locator(".cu-email-communicators__field-row--to"), params.to, "To");
 
         // CC -- ONLY attempted when cc recipients are actually configured, so a
         // report with no cc never touches this UI at all. Confirmed live
@@ -502,16 +503,18 @@ export function createClickUpEmailSender({
             await page.waitForTimeout(300);
           }
 
-          const ccFilled = await fillFirstMatch(
+          const ccFilled = await fillRecipients(
             page,
             [() => composerRoot.locator('[id^="cc-"] input.cu-search_input'), () => composerRoot.locator('[id^="cc-"] input')],
-            params.cc.join(", "),
+            params.cc,
           );
           if (!ccFilled) {
             throw new Error(
               'Cc recipients are configured for this report, but the Cc input could not be found/filled after opening it -- refusing to send without cc.',
             );
           }
+          // The whole Cc row: each line of chips is its own [id="cc-N"] container (cc-0, cc-1, ...).
+          await assertRecipientsShown(composerRoot.locator('.cu-email-communicators__field-row:has([id^="cc-"])').first(), params.cc, "Cc");
         }
 
         // Confirmed attribute: data-test (not data-testid).
@@ -1017,6 +1020,46 @@ export async function firstMatch(page: Page, candidates: Array<() => Locator>): 
     if (await locator.count().catch(() => 0)) return locator;
   }
   return null;
+}
+
+/**
+ * Types recipients into a To/Cc field ONE AT A TIME, each followed by Enter
+ * and a pause for ClickUp to turn it into a chip. Typing them all as
+ * "a, b" lost the first letters of every address after the first while
+ * ClickUp was still making the previous chip -- on 2026-10-30
+ * "sanjeev@eaglelawandintegrity.com" landed as "jeev@..." on AKT's email,
+ * and "leosyspree@gmail.com" as "eosyspree@..." in a test.
+ */
+export async function fillRecipients(page: Page, candidates: Array<() => Locator>, addresses: string[]): Promise<boolean> {
+  for (const candidate of candidates) {
+    const input = candidate();
+    // ClickUp may still be drawing the field right after the Email tab opens -- wait, don't just count.
+    await input.first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+    if (!(await input.count().catch(() => 0))) continue;
+    try {
+      for (const [i, address] of addresses.entries()) {
+        await input.first().click({ timeout: 3000 });
+        // First address only: replace anything a draft left in the input (same reason as fillFirstMatch).
+        if (i === 0) await page.keyboard.press("Control+A");
+        await page.keyboard.type(address.trim(), { delay: 20 });
+        await page.keyboard.press("Enter");
+        await page.waitForTimeout(600);
+      }
+      return true;
+    } catch {
+      // try next candidate
+    }
+  }
+  return false;
+}
+
+/** Refuses to send unless every recipient shows up, whole, in its field -- a mangled address would silently go to the wrong person. */
+export async function assertRecipientsShown(row: Locator, addresses: string[], field: "To" | "Cc"): Promise<void> {
+  const text = ((await row.textContent({ timeout: 3000 }).catch(() => "")) ?? "").toLowerCase();
+  const missing = addresses.filter((a) => !text.includes(a.trim().toLowerCase()));
+  if (missing.length) {
+    throw new Error(`The ${field} field didn't take ${missing.join(", ")} correctly -- refusing to send to a wrong or incomplete address list. Nothing was sent.`);
+  }
 }
 
 async function fillFirstMatch(page: Page, candidates: Array<() => Locator>, value: string, options: { settleMs?: number } = {}): Promise<boolean> {
