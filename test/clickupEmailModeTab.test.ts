@@ -53,6 +53,27 @@ test("email mode tab: the new Comment | Post | Email tab row -> marks the compos
   });
 });
 
+// Shape of the live page from the 2026-10-30 failure snapshot: role="tab" + data-test on each tab,
+// with the tab row 11 levels above the Send button (the first fix only looked 8 levels up).
+const nest = (inner: string, levels: number) => "<div>".repeat(levels) + inner + "</div>".repeat(levels);
+const liveLayout = `
+  ${history}
+  <div class="comment-bar">
+    <div role="tablist">
+      <button role="tab" data-test="comment-bar__compose-tab-message">Comment</button>
+      <button role="tab" data-test="comment-bar__compose-tab-post">Post</button>
+      <button role="tab" id="email-tab" data-test="comment-bar__compose-tab-email"><span class="tab-label"> Email </span></button>
+    </div>
+    ${nest(`<div class="ql-editor" contenteditable="true"></div><button data-test="comment-bar__send-btn">Send</button>`, 10)}
+  </div>`;
+
+test("email mode tab: ClickUp's live tab row (data-test, 11 levels above Send) -> marks the Email tab", async () => {
+  await withPage(liveLayout, async (page) => {
+    assert.equal(await page.evaluate(markEmailModeTab, MARKER), true);
+    assert.equal(await page.locator(`[${MARKER}]`).getAttribute("id"), "email-tab");
+  });
+});
+
 test("email mode tab: the old dropdown layout -> finds nothing, so the sender falls back to the menu", async () => {
   await withPage(dropdownLayout, async (page) => {
     assert.equal(await page.evaluate(markEmailModeTab, MARKER), false, "not the history's Email, the typed body, or the overlay menu");

@@ -880,16 +880,24 @@ async function performClientWorkflowActions(_page: Page, _params: SendEmailParam
 /**
  * Runs IN the page: marks ClickUp's "Email" mode tab (2026-10-30 layout -- Comment | Post | Email
  * sit as tabs above the composer instead of inside a Comment dropdown) and returns whether it found
- * one. Walks up from the composer's Send button at most a few levels, so it can only ever match the
- * composer's own tab -- never "Email" text in the task history, a sidebar or the composer's body.
+ * one. First by its data-test, CONFIRMED in the live failure snapshot of 2026-10-30:
+ * <button role="tab" data-test="comment-bar__compose-tab-email">, 11 levels above the Send button.
+ * Fallback: walks up from the composer's Send button (a bounded number of levels) for a tab whose
+ * text is "Email", so it can only ever match the composer's own tab -- never "Email" text in the
+ * task history, a sidebar or the composer's body.
  * Self-contained on purpose (no helpers, no named inner functions) -- it is shipped into the browser.
  */
 export function markEmailModeTab(marker: string): boolean {
   const doc = (globalThis as any).document;
+  const tagged = doc.querySelectorAll('[data-test="comment-bar__compose-tab-email"]');
+  if (tagged.length === 1) {
+    tagged[0].setAttribute(marker, "true");
+    return true;
+  }
   const send = doc.querySelector('[data-test="comment-bar__send-btn"]');
   if (!send) return false;
   let node = send.parentElement;
-  for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+  for (let depth = 0; node && depth < 14; depth++, node = node.parentElement) {
     for (const el of node.querySelectorAll('button, [role="tab"], [role="radio"], [role="option"], [tabindex]')) {
       if (el.closest('[data-comment-id], [contenteditable="true"], .cdk-overlay-container')) continue;
       if ((el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() !== "email") continue;
