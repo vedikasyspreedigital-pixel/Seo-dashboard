@@ -941,6 +941,10 @@ export async function getComposerBarRoot(page: Page, timeoutMs = 8000): Promise<
  * contains it. Text in the composer, any editable box or any input never counts: the old check matched
  * the subject anywhere on the page, so an email that never went out could be reported as sent
  * (audit 2026-10-27; the same bug the comment poster had on 2026-10-26).
+ * Two history layouts: the older activity stream's [data-comment-id], and
+ * ClickUp's chat-style list (2026-10-30), where a newly sent email shows up as a chat item whose
+ * wrapper carries the same comment id as data-id -- the email that went out at 12:47 that day only
+ * existed there, so the check missed it.
  * Self-contained on purpose (no helpers, no named inner functions) -- it is shipped into the browser.
  */
 export function postedEntryIdsWithSubject(args: { subject: string; exact: boolean }): string[] {
@@ -948,7 +952,7 @@ export function postedEntryIdsWithSubject(args: { subject: string; exact: boolea
   const want = args.subject.replace(/\s+/g, " ").trim();
   const ids: string[] = [];
   if (!want) return ids;
-  for (const entry of doc.querySelectorAll("[data-comment-id]")) {
+  for (const entry of doc.querySelectorAll('[data-comment-id], [data-test="chat-room-items-list"] [data-id]:has([data-test="chat-item-presentational__container"])')) {
     if (entry.closest("[data-clickup-agent-composer-root]")) continue;
     if (entry.querySelector('[data-clickup-agent-composer-root], [data-test="comment-bar__send-btn"]')) continue;
     const clone = entry.cloneNode(true);
@@ -964,16 +968,18 @@ export function postedEntryIdsWithSubject(args: { subject: string; exact: boolea
     } else {
       hit = (clone.textContent || "").replace(/\s+/g, " ").includes(want);
     }
-    const id = entry.getAttribute("data-comment-id");
+    const id = entry.getAttribute("data-comment-id") || entry.getAttribute("data-id");
     if (hit && id && !ids.includes(id)) ids.push(id);
   }
   return ids;
 }
 
-/** Runs IN the page: every data-comment-id in the task history right now (the "before Send" snapshot). */
+/** Runs IN the page: every history entry id right now, both layouts (the "before Send" snapshot). */
 export function allPostedEntryIds(): string[] {
   const doc = (globalThis as any).document;
-  return [...doc.querySelectorAll("[data-comment-id]")].map((e: any) => e.getAttribute("data-comment-id")).filter(Boolean);
+  return [...doc.querySelectorAll('[data-comment-id], [data-test="chat-room-items-list"] [data-id]:has([data-test="chat-item-presentational__container"])')]
+    .map((e: any) => e.getAttribute("data-comment-id") || e.getAttribute("data-id"))
+    .filter(Boolean);
 }
 
 async function getComposerRoot(page: Page, timeoutMs = 8000): Promise<Locator | null> {

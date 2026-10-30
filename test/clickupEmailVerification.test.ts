@@ -65,3 +65,33 @@ test("email verification: a NEW posted entry with the subject confirms the send;
     assert.deepEqual(await page.evaluate(postedEntryIdsWithSubject, { subject: SUBJECT, exact: true }), ["c2"]);
   });
 });
+
+// 2026-10-30: ClickUp's chat-style history -- a newly sent email shows up as a chat item whose wrapper has
+// the comment id as data-id (no data-comment-id), so a real send at 12:47 was reported "could not confirm".
+const chatHistory = (items: [string, string][]) => `
+  <div data-test="chat-room-items-list"><div data-testid="virtuoso-item-list">
+    ${items.map(([id, subject], i) => `<div data-index="${i}"><div data-id="${id}"><div data-test="chat-item-presentational__container"><cu-comment-email-meta><div class="cu-comment-email-meta__subject">${subject}</div></cu-comment-email-meta><span data-id="att-${id}">report.pdf</span></div></div></div>`).join("")}
+  </div></div>
+  <div data-clickup-agent-composer-root="true">
+    <input data-test="email-communicators__subject" value="" />
+    <div class="ql-editor" contenteditable="true"></div>
+    <button data-test="comment-bar__send-btn">Send</button>
+  </div>`;
+
+test("email verification: ClickUp's chat-style history -- a NEW chat item with the subject confirms the send", async () => {
+  await withPage(chatHistory([["c1", "Older update"]]), async (page) => {
+    const before = new Set(await page.evaluate(allPostedEntryIds));
+    assert.deepEqual([...before], ["c1"], "only the chat item wrapper counts, not data-id inside it");
+    await page.evaluate((subject) => {
+      const doc = (globalThis as any).document;
+      const item = doc.createElement("div");
+      item.innerHTML = `<div data-id="c2"><div data-test="chat-item-presentational__container"><div class="cu-comment-email-meta__subject"></div></div></div>`;
+      item.querySelector(".cu-comment-email-meta__subject").textContent = subject;
+      doc.querySelector('[data-testid="virtuoso-item-list"]').appendChild(item);
+    }, SUBJECT);
+    const ids = await page.evaluate(postedEntryIdsWithSubject, { subject: SUBJECT, exact: false });
+    assert.deepEqual(ids, ["c2"]);
+    assert.equal(ids.some((id) => !before.has(id)), true);
+    assert.deepEqual(await page.evaluate(postedEntryIdsWithSubject, { subject: SUBJECT, exact: true }), ["c2"], "and a retry's duplicate guard sees it");
+  });
+});
