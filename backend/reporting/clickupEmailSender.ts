@@ -338,7 +338,15 @@ export function createClickUpEmailSender({
           .isVisible()
           .catch(() => false);
 
-        if (!alreadyInEmailMode) {
+        // ClickUp's newer layout (seen 2026-10-30) shows Comment | Post |
+        // Email as tabs above the composer -- no dropdown to open. Click
+        // that tab when it's there; otherwise fall back to the old menu.
+        const emailTab = alreadyInEmailMode ? null : await findEmailModeTab(page);
+        if (emailTab) {
+          await captureDebugArtifactsBefore(page, sessionStatePath, "email-tab-click");
+          await emailTab.dispatchEvent("click");
+          await page.waitForTimeout(1000);
+        } else if (!alreadyInEmailMode) {
           // Scoped to the composer bar (anchored on the confirmed-stable
           // Send button + cdk-menu-trigger attributes -- see
           // getComposerBarRoot) instead of an unscoped page-wide search, so
@@ -869,6 +877,35 @@ async function performClientWorkflowActions(_page: Page, _params: SendEmailParam
  * getByText("Comment") that could match unrelated "Comment" text anywhere
  * on the page.
  */
+/**
+ * Runs IN the page: marks ClickUp's "Email" mode tab (2026-10-30 layout -- Comment | Post | Email
+ * sit as tabs above the composer instead of inside a Comment dropdown) and returns whether it found
+ * one. Walks up from the composer's Send button at most a few levels, so it can only ever match the
+ * composer's own tab -- never "Email" text in the task history, a sidebar or the composer's body.
+ * Self-contained on purpose (no helpers, no named inner functions) -- it is shipped into the browser.
+ */
+export function markEmailModeTab(marker: string): boolean {
+  const doc = (globalThis as any).document;
+  const send = doc.querySelector('[data-test="comment-bar__send-btn"]');
+  if (!send) return false;
+  let node = send.parentElement;
+  for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+    for (const el of node.querySelectorAll('button, [role="tab"], [role="radio"], [role="option"], [tabindex]')) {
+      if (el.closest('[data-comment-id], [contenteditable="true"], .cdk-overlay-container')) continue;
+      if ((el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() !== "email") continue;
+      el.setAttribute(marker, "true");
+      return true;
+    }
+  }
+  return false;
+}
+
+async function findEmailModeTab(page: Page): Promise<Locator | null> {
+  const marker = "data-clickup-agent-email-tab";
+  const found = await page.evaluate(markEmailModeTab, marker).catch(() => false);
+  return found ? page.locator(`[${marker}]`).first() : null;
+}
+
 export async function getComposerBarRoot(page: Page, timeoutMs = 8000): Promise<Locator | null> {
   const marker = "data-clickup-agent-composer-bar-root";
   const send = page.locator('[data-test="comment-bar__send-btn"]').first();
