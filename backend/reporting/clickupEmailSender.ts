@@ -290,7 +290,12 @@ export function createClickUpEmailSender({
         browser.on("disconnected", () => {
           console.error(`[clickupEmailSender] attempt ${attempt}: browser 'disconnected' event at ${new Date().toISOString()} | ${readContainerResourceLimits()}`);
         });
-        const context = await browser.newContext({ storageState: sessionStatePath, reducedMotion: "reduce" });
+        // A tall window on purpose: with Playwright's default 1280x720, an
+        // email with several To/Cc addresses plus "Suggested emails" pushed
+        // the composer's toolbar (paperclip, Send) below the screen, so the
+        // paperclip couldn't be clicked -- AKT's send failed that way on
+        // 2026-10-30 while the Demo task's (fewer addresses) worked.
+        const context = await browser.newContext({ storageState: sessionStatePath, reducedMotion: "reduce", viewport: SENDER_VIEWPORT });
         const page = await context.newPage();
         debugPage = page;
         page.on("crash", () => {
@@ -1069,18 +1074,32 @@ export async function attachFile(page: Page, filePaths: string | string[]): Prom
   return true;
 }
 
+/** The sender's browser window -- see where the context is created in createClickUpEmailSender. */
+export const SENDER_VIEWPORT = { width: 1440, height: 2000 };
+
 async function attachOneFile(page: Page, attachToggle: Locator, filePath: string): Promise<boolean> {
+  // The paperclip sits at the bottom of the composer; a long recipient list can push it out of view.
+  await attachToggle.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   try {
     const [fileChooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 5000 }), attachToggle.click()]);
     await fileChooser.setFiles(filePath);
     return true;
   } catch {
-    // No native file chooser fired directly -- a menu (Upload from
-    // computer / Google Drive / ...) may have opened instead. Look for an
-    // "upload" option inside the newly-opened overlay only.
+    // No native file chooser fired directly -- a menu opened instead. Since
+    // 2026-10-30 it is "Upload file / Dropbox / OneDrive/SharePoint / Box /
+    // Google Drive / New Google Doc" (seen live), drawn inside the paperclip's
+    // own <cu-cloud-buttons-dropdown> rather than the .cdk-overlay-container
+    // the old code searched -- which is why every send failed here that day.
+    // Looked for in that dropdown first, then the overlay, then an open menu;
+    // only ever the "Upload file" option, never Drive/Dropbox/a new Doc.
     await page.waitForTimeout(400);
-    const uploadOption = page.locator(".cdk-overlay-container").getByText(/upload|computer|device/i).first();
-    if (!(await uploadOption.count().catch(() => 0))) return false;
+    const uploadOption = await firstMatch(page, [
+      () => attachToggle.locator("xpath=ancestor::cu-cloud-buttons-dropdown[1]").getByText(/^\s*upload file\s*$/i).first(),
+      () => page.locator(".cdk-overlay-container").getByText(/^\s*upload file\s*$/i).first(),
+      () => page.locator(".cdk-overlay-container").getByText(/upload|computer|device/i).first(),
+      () => page.locator('[role="menu"]:visible, .cu-dropdown__menu:visible').getByText(/^\s*upload file\s*$/i).first(),
+    ]);
+    if (!uploadOption) return false;
     try {
       const [fileChooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 5000 }), uploadOption.click()]);
       await fileChooser.setFiles(filePath);
