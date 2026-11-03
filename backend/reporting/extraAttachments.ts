@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import ExcelJS from "exceljs";
 import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,4 +171,27 @@ export async function loadExtraAttachmentFiles(value: unknown): Promise<{ buffer
     }
   }
   return out;
+}
+
+// The eye button's in-page viewer for an Excel attachment: each sheet's cells
+// as display text (what Excel shows), capped so a huge sheet can't stall the
+// page. Only .xlsx can be read -- an old .xls returns null (download it instead).
+export const PREVIEW_MAX_ROWS = 500;
+export const PREVIEW_MAX_COLS = 30;
+
+export async function previewExcelAttachment(filePath: string): Promise<{ sheets: { name: string; rows: string[][]; truncated: boolean }[] } | null> {
+  if (path.extname(filePath).toLowerCase() !== ".xlsx") return null;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+  return {
+    sheets: workbook.worksheets.map((ws) => {
+      const rows: string[][] = [];
+      const cols = Math.min(ws.columnCount, PREVIEW_MAX_COLS);
+      for (let r = 1; r <= Math.min(ws.rowCount, PREVIEW_MAX_ROWS); r++) {
+        const row = ws.getRow(r);
+        rows.push(Array.from({ length: cols }, (_, c) => row.getCell(c + 1).text ?? ""));
+      }
+      return { name: ws.name, rows, truncated: ws.rowCount > PREVIEW_MAX_ROWS || ws.columnCount > PREVIEW_MAX_COLS };
+    }),
+  };
 }

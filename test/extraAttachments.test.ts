@@ -274,3 +274,77 @@ test("send without the report PDF: only the uploaded files go out; refused when 
     await cleanup(client.id);
   }
 });
+
+test("eye button: each attached file can be opened -- PDF inline, Excel as a download, under the name the client sees", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const { client, report } = await setup();
+  const binary = (res: import("node:http").IncomingMessage, cb: (err: Error | null, body: Buffer) => void) => {
+    const chunks: Buffer[] = [];
+    res.on("data", (c: Buffer) => chunks.push(c));
+    res.on("end", () => cb(null, Buffer.concat(chunks)));
+  };
+  try {
+    const up = await authedApp(app)
+      .post(`/api/reports/${report.id}/extra-attachments`)
+      .attach("files", PDF("ga"), "GA Traffic.pdf")
+      .attach("files", XLSX("ranks"), "Final Rankings.xlsx");
+    assert.equal(up.status, 200);
+    const [pdf, xlsx] = up.body.extraAttachments as { id: string }[];
+
+    const pdfRes = await authedApp(app).get(`/api/reports/${report.id}/extra-attachments/${pdf.id}`).buffer(true).parse(binary as never);
+    assert.equal(pdfRes.status, 200);
+    assert.match(pdfRes.headers["content-type"], /application\/pdf/);
+    assert.equal(pdfRes.headers["content-disposition"], "inline; filename*=UTF-8''GA%20Traffic.pdf");
+    assert.deepEqual(pdfRes.body, PDF("ga"), "the exact stored file");
+
+    const xlsxRes = await authedApp(app).get(`/api/reports/${report.id}/extra-attachments/${xlsx.id}`).buffer(true).parse(binary as never);
+    assert.equal(xlsxRes.status, 200);
+    assert.match(xlsxRes.headers["content-type"], /spreadsheetml/);
+    assert.match(xlsxRes.headers["content-disposition"], /^attachment; filename\*=UTF-8''Final%20Rankings\.xlsx$/);
+
+    assert.equal((await authedApp(app).get(`/api/reports/${report.id}/extra-attachments/nope`)).status, 404);
+    assert.equal((await authedApp(app).get(`/api/reports/${report.id}/custom-pdf`)).status, 404, "no custom PDF uploaded");
+
+    // Viewing still works after the report is sent (read-only), but never for someone outside the workspace.
+    await prisma.rankingReport.update({ where: { id: report.id }, data: { status: ReportStatus.SENT } });
+    assert.equal((await authedApp(app).get(`/api/reports/${report.id}/extra-attachments/${pdf.id}`)).status, 200);
+    const request = (await import("supertest")).default;
+    assert.equal((await request(app).get(`/api/reports/${report.id}/extra-attachments/${pdf.id}`)).status, 401);
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("eye button viewer: an Excel attachment's cells come back as a table; an old .xls says to download it", async () => {
+  const app = createApp(unusedDataForSeoMock, "mock");
+  const { client, report } = await setup();
+  try {
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Ranks").addRows([["Keyword", "Rank"], ["open yard storage", 2]]);
+    wb.addWorksheet("Notes").addRow(["hello"]);
+    const xlsxBuffer = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const up = await authedApp(app)
+      .post(`/api/reports/${report.id}/extra-attachments`)
+      .attach("files", xlsxBuffer, "Final Rankings.xlsx")
+      .attach("files", XLS("old"), "Old.xls");
+    assert.equal(up.status, 200);
+    const [xlsx, xls] = up.body.extraAttachments as { id: string }[];
+
+    const preview = await authedApp(app).get(`/api/reports/${report.id}/extra-attachments/${xlsx.id}/preview`);
+    assert.equal(preview.status, 200);
+    assert.deepEqual(preview.body, {
+      sheets: [
+        { name: "Ranks", rows: [["Keyword", "Rank"], ["open yard storage", "2"]], truncated: false },
+        { name: "Notes", rows: [["hello"]], truncated: false },
+      ],
+    });
+
+    const old = await authedApp(app).get(`/api/reports/${report.id}/extra-attachments/${xls.id}/preview`);
+    assert.equal(old.status, 415);
+    assert.match(old.body.error, /download it to view/);
+  } finally {
+    await cleanup(client.id);
+  }
+});

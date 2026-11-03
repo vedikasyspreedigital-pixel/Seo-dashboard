@@ -655,3 +655,24 @@ test("approval: a failure after the email went out never reverts to APPROVED or 
     await cleanupClient(client.id);
   }
 });
+
+test('"Send anyway" passes allowDuplicateSubject to the sender; a normal send never sets it', async () => {
+  const client = await makeClient(`Approve Send Test - send anyway ${randomUUID()}`);
+  try {
+    const run = await makeRun(client.id);
+    const normal = await makePendingApprovalReport(client.id, run.id, ["ops@example.com"]);
+    const anyway = await makePendingApprovalReport(client.id, run.id, ["ops@example.com"]);
+    const sentCalls: { allowDuplicateSubject?: boolean }[] = [];
+    const sendEmail = createMockEmailSender((params) => sentCalls.push(params));
+
+    assert.equal((await approveAndSendReport(normal.id, { approvedBy: "om@syspreedigital.com", sendEmail })).outcome, "SENT");
+    assert.equal((await approveAndSendReport(anyway.id, { approvedBy: "om@syspreedigital.com", sendEmail, allowDuplicateSubject: true })).outcome, "SENT");
+
+    assert.equal(sentCalls.length, 2);
+    assert.equal("allowDuplicateSubject" in sentCalls[0], false);
+    assert.equal(sentCalls[1].allowDuplicateSubject, true);
+  } finally {
+    await prisma.reportSend.deleteMany({ where: { report: { clientId: client.id } } });
+    await cleanupClient(client.id);
+  }
+});

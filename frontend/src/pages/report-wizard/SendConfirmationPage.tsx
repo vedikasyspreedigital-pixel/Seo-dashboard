@@ -22,6 +22,9 @@ import type { RankingReport } from '../../api/types';
 const SEND_PAGE_STATUSES: RankingReport['status'][] = ['PENDING_APPROVAL', 'APPROVED', 'SENDING', 'REJECTED', 'SENT'];
 const SENDING_CHECK_MS = 10_000;
 
+// The ClickUp sender's same-subject block (clickupEmailSender.ts pre-send duplicate guard).
+const DUPLICATE_SUBJECT_BLOCK = /already appears in this task's history/i;
+
 // The Google Analytics template's placeholders (backend emailDraft.ts buildGaEmailDraft).
 const GA_PLACEHOLDER = /\[(organic search users|event count|month)\]/i;
 const GA_PLACEHOLDER_ALL = /\[(organic search users|event count|month)\]/gi;
@@ -74,12 +77,12 @@ export function SendConfirmationPage() {
       .catch((err: Error) => setLoadError(err.message || 'Something went wrong.'));
   }, [reportId, loadAttempt]);
 
-  async function handleApproveAndSend() {
+  async function handleApproveAndSend(allowDuplicateSubject = false) {
     if (!reportId || sending) return; // guard against double-clicks/duplicate requests
     setSending(true);
     setError(null);
     try {
-      const result = await approveAndSendReport(reportId);
+      const result = await approveAndSendReport(reportId, { allowDuplicateSubject });
       if (result.outcome !== 'SENT') {
         setError(result.errorMessage ?? `Could not send (${result.outcome}).`);
         setSending(false);
@@ -216,6 +219,18 @@ export function SendConfirmationPage() {
 
   const recipients = report.resolvedRecipients ?? [];
   const cc = report.resolvedCc ?? [];
+  // Blocked only because an older email in the task has the same subject -- offer "Send anyway".
+  const duplicateSubjectBlocked = DUPLICATE_SUBJECT_BLOCK.test(error ?? (report.status === 'APPROVED' ? (report.lastErrorMessage ?? '') : ''));
+
+  function handleSendAnyway() {
+    if (
+      !window.confirm(
+        'Open the ClickUp task and check: has THIS report already been emailed?\n\nOnly click OK if the email with this subject is an older report (e.g. last period). OK sends it now.',
+      )
+    )
+      return;
+    void handleApproveAndSend(true);
+  }
 
   return (
     <AppShell>
@@ -282,11 +297,30 @@ export function SendConfirmationPage() {
 
         <InlineError message={error} className="mt-4" />
 
+        {duplicateSubjectBlocked && (
+          <AlertPanel tone="warning" className="mt-4">
+            <p className="text-sm text-amber-300">
+              The ClickUp task already has an email with this same subject. If that one is an older report (some clients get the same subject every
+              time), check the task and use <strong>Send anyway</strong>.
+            </p>
+            {report.resolvedClickupTaskUrl && (
+              <a href={report.resolvedClickupTaskUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-brand-300 hover:text-brand-200">
+                Open the ClickUp task
+              </a>
+            )}
+          </AlertPanel>
+        )}
+
         <div className="mt-6 flex items-center gap-3">
-          <Button disabled={sending || recipients.length === 0} onClick={handleApproveAndSend}>
+          <Button disabled={sending || recipients.length === 0} onClick={() => void handleApproveAndSend()}>
             {sending && <Spinner />}
             Approve &amp; Send
           </Button>
+          {duplicateSubjectBlocked && (
+            <Button variant="secondary" disabled={sending || recipients.length === 0} onClick={handleSendAnyway}>
+              Send anyway
+            </Button>
+          )}
           <Link to={`/reports/${reportId}/email`}>
             <Button variant="ghost">Cancel</Button>
           </Link>

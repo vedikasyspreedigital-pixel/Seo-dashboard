@@ -32,6 +32,11 @@ export interface SendEmailParams {
   // Extra PDFs attached ALONGSIDE the report PDF (e.g. Google Analytics
   // reports uploaded on the email draft page), in upload order.
   extraAttachments?: { buffer: Buffer; filename: string }[];
+  // "Send anyway": a person checked the ClickUp task and confirmed this
+  // report wasn't sent yet, so an older email with the same subject (some
+  // clients use the same subject every time) must not block it. Only the
+  // ClickUp sender reads this; it skips just the pre-send duplicate guard.
+  allowDuplicateSubject?: boolean;
 }
 
 export interface SendEmailResult {

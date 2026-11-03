@@ -9,7 +9,7 @@ import { rejectReport } from "../../reporting/reportTransitions.js";
 import { updateReportDraft, setCustomPdfAttachment } from "../../reporting/editReportDraft.js";
 import { approveAndSendReport } from "../../reporting/approveAndSend.js";
 import { generateEmailDraft, regenerateEmailDraft, setEmailVariant } from "../../reporting/generateEmailDraft.js";
-import { addExtraAttachments, removeExtraAttachment, ExtraAttachmentError, MAX_EXTRA_ATTACHMENTS, MAX_EXTRA_ATTACHMENT_BYTES } from "../../reporting/extraAttachments.js";
+import { addExtraAttachments, removeExtraAttachment, readExtraAttachments, previewExcelAttachment, ExtraAttachmentError, MAX_EXTRA_ATTACHMENTS, MAX_EXTRA_ATTACHMENT_BYTES } from "../../reporting/extraAttachments.js";
 import { createReportForRun } from "../../reporting/createReport.js";
 import { buildReport } from "../../reporting/buildReport.js";
 import { changeReportBaseline, regenerateReport, describeRegenerationBlock, describeReportGeneration } from "../../reporting/processVerifiedExcelUpload.js";
@@ -27,6 +27,26 @@ import { expensiveActionRateLimit } from "../rateLimit.js";
 // so a malformed address can't reach the database (and therefore the
 // eventual send) via a direct API call that skips the UI.
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const ATTACHMENT_TYPES: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".xls": "application/vnd.ms-excel",
+};
+
+// A stored attachment, under the name the client sees: a PDF inline (opens in
+// the tab), anything else as a download. A file gone from disk is a 404.
+function sendAttachmentForViewing(res: express.Response, filePath: string, filename: string) {
+  const ext = path.extname(filePath).toLowerCase();
+  res.setHeader("Content-Type", ATTACHMENT_TYPES[ext] ?? "application/octet-stream");
+  res.setHeader("Content-Disposition", `${ext === ".pdf" ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.sendFile(path.resolve(filePath), (err) => {
+    if (!err || res.headersSent) return;
+    res.removeHeader("Content-Disposition");
+    res.status(404).json({ error: "This file is missing on the server -- remove it and upload it again." });
+  });
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Same env-var/fallback convention as buildReport.ts and runs.ts -- a
@@ -317,6 +337,50 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     }
   });
 
+  // The eye buttons on the Attachments card: open the exact stored file. A PDF
+  // opens in the browser tab; an Excel file (browsers can't show it) downloads.
+  router.get("/:id/custom-pdf", async (req, res) => {
+    const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
+    if (!report) return;
+    if (!report.customPdfPath) {
+      res.status(404).json({ error: "No custom PDF has been uploaded for this report." });
+      return;
+    }
+    sendAttachmentForViewing(res, report.customPdfPath, report.customPdfFilename ?? path.basename(report.customPdfPath));
+  });
+
+  router.get("/:id/extra-attachments/:attachmentId", async (req, res) => {
+    const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
+    if (!report) return;
+    const attachment = readExtraAttachments(report.extraAttachments).find((a) => a.id === req.params.attachmentId);
+    if (!attachment) {
+      res.status(404).json({ error: "Attachment not found." });
+      return;
+    }
+    sendAttachmentForViewing(res, attachment.path, attachment.filename);
+  });
+
+  // Excel attachments can't be shown by the browser, so the viewer gets the cells as JSON.
+  router.get("/:id/extra-attachments/:attachmentId/preview", async (req, res) => {
+    const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
+    if (!report) return;
+    const attachment = readExtraAttachments(report.extraAttachments).find((a) => a.id === req.params.attachmentId);
+    if (!attachment) {
+      res.status(404).json({ error: "Attachment not found." });
+      return;
+    }
+    try {
+      const preview = await previewExcelAttachment(attachment.path);
+      if (!preview) {
+        res.status(415).json({ error: "This file type can't be previewed here -- download it to view." });
+        return;
+      }
+      res.json(preview);
+    } catch {
+      res.status(422).json({ error: "This Excel file couldn't be read for the preview -- download it to view." });
+    }
+  });
+
   router.delete("/:id/extra-attachments/:attachmentId", async (req, res) => {
     const reportId = req.params.id as string;
     if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
@@ -366,7 +430,9 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   router.post("/:id/approve-and-send", expensiveActionRateLimit, async (req, res) => {
     if (!(await findOwnedReportOrRespond(req, res, req.params.id as string, { requireActive: true }))) return;
     const approvedBy = req.authUser!.email;
-    const result = await approveAndSendReport(req.params.id as string, { approvedBy, sendEmail, generateExcelAttachment });
+    // "Send anyway" after a same-subject block -- only a literal true counts.
+    const allowDuplicateSubject = req.body?.allowDuplicateSubject === true;
+    const result = await approveAndSendReport(req.params.id as string, { approvedBy, sendEmail, generateExcelAttachment, allowDuplicateSubject });
     const statusCode =
       result.outcome === "SENT"
         ? 200

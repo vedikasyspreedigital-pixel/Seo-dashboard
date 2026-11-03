@@ -27,7 +27,8 @@ export async function approveAndSendReport(
     approvedBy,
     sendEmail,
     generateExcelAttachment,
-  }: { approvedBy: string; sendEmail: SendEmailFn; generateExcelAttachment?: GenerateExcelAttachmentFn },
+    allowDuplicateSubject = false,
+  }: { approvedBy: string; sendEmail: SendEmailFn; generateExcelAttachment?: GenerateExcelAttachmentFn; allowDuplicateSubject?: boolean },
 ): Promise<ApproveAndSendResult> {
   const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId } });
 
@@ -162,6 +163,8 @@ export async function approveAndSendReport(
       excelPdfFilename,
       // Only present when there are extras -- a send without them is unchanged.
       ...(extraAttachments.length > 0 ? { extraAttachments } : {}),
+      // Only present for "Send anyway" -- a normal send is unchanged.
+      ...(allowDuplicateSubject ? { allowDuplicateSubject: true } : {}),
     });
   } catch (err) {
     // Logged server-side (with stack -- the message alone doesn't say WHICH

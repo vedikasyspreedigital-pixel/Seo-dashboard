@@ -16,6 +16,7 @@ export function Modal({
   children,
   footer,
   closeOnBackdropClick = true,
+  wide = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -23,6 +24,8 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   closeOnBackdropClick?: boolean;
+  /** A large panel, e.g. for previewing a document. */
+  wide?: boolean;
 }) {
   const titleId = useId();
   useEffect(() => {
@@ -43,7 +46,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="glass-surface flex max-h-[85vh] w-full max-w-md flex-col rounded-[22px] border border-[var(--color-border)] shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset,0_8px_30px_rgba(0,0,0,0.25)]"
+        className={`glass-surface flex max-h-[85vh] w-full ${wide ? 'h-[85vh] max-w-5xl' : 'max-w-md'} flex-col rounded-[22px] border border-[var(--color-border)] shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset,0_8px_30px_rgba(0,0,0,0.25)]`}
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id={titleId} className="shrink-0 px-6 pt-6 text-lg font-semibold text-[var(--color-ink)]">{title}</h2>

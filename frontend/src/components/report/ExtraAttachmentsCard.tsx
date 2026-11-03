@@ -2,12 +2,28 @@ import { useRef, useState } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Spinner } from '../ui/Spinner';
-import { DocumentIcon, TrashIcon, UploadIcon } from '../ui/icons';
-import { removeExtraAttachment, updateReportDraft, uploadExtraAttachments } from '../../api/client';
+import { DocumentIcon, EyeIcon, TrashIcon, UploadIcon } from '../ui/icons';
+import { getCustomPdfUrl, getExtraAttachmentUrl, getReportPdfUrl, removeExtraAttachment, updateReportDraft, uploadExtraAttachments } from '../../api/client';
 import type { RankingReport } from '../../api/types';
+import { AttachmentViewerModal, type ViewedAttachment } from './AttachmentViewerModal';
 
 const MAX_FILES = 5;
 const ACCEPTED = 'application/pdf,.pdf,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+
+// Opens the attached file in the viewer on this same page.
+function ViewButton({ filename, onView }: { filename: string; onView: () => void }) {
+  return (
+    <button
+      type="button"
+      title={`View ${filename}`}
+      aria-label={`View ${filename}`}
+      onClick={onView}
+      className="shrink-0 rounded-full p-1.5 text-[var(--color-ink-faint)] transition-colors hover:bg-brand-500/10 hover:text-brand-300"
+    >
+      <EyeIcon className="h-4 w-4" />
+    </button>
+  );
+}
 
 function formatSize(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -23,6 +39,7 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<ViewedAttachment | null>(null);
   const extras = report.extraAttachments ?? [];
   const reportPdfOff = report.attachmentSource === 'none';
   const reportPdfLabel = report.attachmentSource === 'custom' && report.customPdfFilename ? `${report.customPdfFilename} (custom report PDF)` : 'Ranking report PDF (generated)';
@@ -94,6 +111,11 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
           <DocumentIcon className="h-4 w-4 shrink-0 text-brand-300" />
           <span className={`truncate text-[var(--color-ink)] ${reportPdfOff ? 'line-through' : ''}`}>{reportPdfLabel}</span>
           <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-[var(--color-ink-faint)]">{reportPdfOff ? 'not attached' : 'attached'}</span>
+          {report.attachmentSource === 'custom' && report.customPdfFilename ? (
+            <ViewButton filename={report.customPdfFilename} onView={() => setViewing({ filename: report.customPdfFilename!, url: getCustomPdfUrl(report.id) })} />
+          ) : (
+            report.clientPdfPath && <ViewButton filename="the report PDF" onView={() => setViewing({ filename: 'Ranking report.pdf', url: getReportPdfUrl(report.id) })} />
+          )}
           {editable &&
             (reportPdfOff ? (
               <button
@@ -124,6 +146,7 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
               {a.filename}
             </span>
             <span className="ml-auto shrink-0 text-xs text-[var(--color-ink-faint)]">{formatSize(a.size)}</span>
+            <ViewButton filename={a.filename} onView={() => setViewing({ filename: a.filename, url: getExtraAttachmentUrl(report.id, a.id), reportId: report.id, attachmentId: a.id })} />
             {editable && (
               <button
                 type="button"
@@ -147,6 +170,7 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
       )}
       {reportPdfOff && extras.length === 0 && <p className="mt-3 text-sm text-amber-300">Nothing will be attached. Add a file, or attach the report PDF again, before sending.</p>}
       {error && <p className="mt-3 text-sm text-rose-300">{error}</p>}
+      <AttachmentViewerModal attachment={viewing} onClose={() => setViewing(null)} />
     </Card>
   );
 }

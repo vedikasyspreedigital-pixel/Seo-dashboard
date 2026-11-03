@@ -456,7 +456,13 @@ export function createClickUpEmailSender({
         //
         // Only POSTED history entries count (postedEntryIdsWithSubject) -- a draft
         // ClickUp kept in the composer with this subject is not "already sent".
-        const existingCommentIds = await page.evaluate(postedEntryIdsWithSubject, { subject: params.subject, exact: true }).catch(() => [] as string[]);
+        //
+        // Skipped only for "Send anyway" (allowDuplicateSubject): a person
+        // checked the task and the match is an OLDER report with the same
+        // subject. The post-send check below still needs a NEW entry.
+        const existingCommentIds = params.allowDuplicateSubject
+          ? []
+          : await page.evaluate(postedEntryIdsWithSubject, { subject: params.subject, exact: true }).catch(() => [] as string[]);
         if (existingCommentIds.length > 0) {
           throw new Error(
             `An email with this exact subject ("${params.subject}") already appears in this task's history` +

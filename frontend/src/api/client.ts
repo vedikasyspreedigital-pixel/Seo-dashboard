@@ -358,6 +358,25 @@ export function getReportPdfUrl(reportId: string): string {
   return `${BASE}/reports/${reportId}/pdf`;
 }
 
+/** The uploaded custom report PDF, and each extra attachment (a PDF opens in the tab, Excel downloads). */
+export function getCustomPdfUrl(reportId: string): string {
+  return `${BASE}/reports/${reportId}/custom-pdf`;
+}
+
+export function getExtraAttachmentUrl(reportId: string, attachmentId: string): string {
+  return `${BASE}/reports/${reportId}/extra-attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+export interface ExcelPreview {
+  sheets: { name: string; rows: string[][]; truncated: boolean }[];
+}
+
+/** An Excel attachment's cells for the in-page viewer (browsers can't show .xlsx themselves). */
+export async function getExtraAttachmentPreview(reportId: string, attachmentId: string): Promise<ExcelPreview> {
+  const res = await apiFetch(`/reports/${reportId}/extra-attachments/${encodeURIComponent(attachmentId)}/preview`);
+  return handle<ExcelPreview>(res);
+}
+
 export async function generateEmailDraft(reportId: string): Promise<DraftGenerationResult> {
   const res = await apiFetch(`/reports/${reportId}/generate-email-draft`, { method: 'POST' });
   return handle<DraftGenerationResult>(res);
@@ -484,9 +503,12 @@ export interface ApproveAndSendResult {
 // approvedBy is no longer a request param -- the backend derives it from the
 // authenticated session (req.authUser.email) so it can't be spoofed by
 // whatever a request body happens to send.
-export async function approveAndSendReport(reportId: string): Promise<ApproveAndSendResult> {
+// allowDuplicateSubject = "Send anyway": the user checked ClickUp after a
+// same-subject block and confirmed this report wasn't sent yet.
+export async function approveAndSendReport(reportId: string, { allowDuplicateSubject = false }: { allowDuplicateSubject?: boolean } = {}): Promise<ApproveAndSendResult> {
   const res = await apiFetch(`/reports/${reportId}/approve-and-send`, {
     method: 'POST',
+    ...(allowDuplicateSubject ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ allowDuplicateSubject: true }) } : {}),
   });
   // Every outcome (SENT/NO_RECIPIENTS/ALREADY_PROCESSED/SEND_FAILED) is a
   // meaningful JSON body, not a generic failure -- read it directly instead
