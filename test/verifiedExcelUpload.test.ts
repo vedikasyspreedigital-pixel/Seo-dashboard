@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import { prisma } from "../backend/db/client.js";
 import { ingestExcelRun } from "../backend/runs/ingestExcelRun.js";
-import { processVerifiedExcelUpload, promoteMissingBaselines, regenerateReport } from "../backend/reporting/processVerifiedExcelUpload.js";
+import { changeReportBaseline, processVerifiedExcelUpload, promoteMissingBaselines, regenerateReport } from "../backend/reporting/processVerifiedExcelUpload.js";
 import { formatOrdinalDate } from "../backend/reporting/formatOrdinalDate.js";
 import { buildRowsAndSummary, groupRowsByLocation } from "../backend/reporting/generateClientReportPdf.js";
 import { loadRowLocations } from "../backend/reporting/buildReport.js";
@@ -748,4 +748,57 @@ test("POST /api/runs/:id/verified-excel: the actual HTTP route wires auth + mult
 
 test.after(async () => {
   await prisma.$disconnect();
+});
+
+test("changeReportBaseline: 'Compare against' re-pins an unsent report to a later-uploaded baseline and rebuilds it; refuses other clients', future and sent ones", async () => {
+  const client = await makeClient();
+  const other = await makeClient();
+  try {
+    await createBaselineFromRows(client.id, {
+      sourceFilename: "30-sep.pdf",
+      sourceType: "PDF",
+      baselineDate: new Date("2026-09-30"),
+      rows: [{ keyword: "car wreckers mandurah", rankValue: 20, rankDisplay: "20" }],
+    });
+    const run = await makeCompletedRun(client.id, [{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+    const buffer = await buildWorkbookBuffer([{ keyword: "car wreckers mandurah", targetUrl: "/mandurah", rank: "12" }]);
+    const first = await processVerifiedExcelUpload(run.id, buffer, "verified.xlsx", null);
+    assert.equal(first.outcome, "SUCCESS");
+    if (first.outcome !== "SUCCESS") return;
+
+    // The report the team sent by hand on 15 Oct is uploaded only now.
+    const oct15 = await createBaselineFromRows(client.id, {
+      sourceFilename: "15-oct.xlsx",
+      sourceType: "EXCEL",
+      baselineDate: new Date("2026-10-15"),
+      rows: [{ keyword: "car wreckers mandurah", rankValue: 14, rankDisplay: "14" }],
+    });
+    const changed = await changeReportBaseline(first.report.id, oct15.id, "qa@example.com");
+    assert.equal(changed.outcome, "SUCCESS");
+    if (changed.outcome !== "SUCCESS") return;
+    assert.equal(changed.report.id, first.report.id, "same report, rebuilt in place");
+    assert.equal(changed.report.previousBaselineId, oct15.id);
+    assert.equal((changed.report.analyticsJson as any).movements.improved[0].previousRank, 14);
+    const again = await regenerateReport(first.report.id, null);
+    assert.equal(again.outcome === "SUCCESS" && again.report.previousBaselineId, oct15.id, "the new choice stays pinned");
+
+    const otherClients = await createBaselineFromRows(other.id, {
+      sourceFilename: "other.xlsx", sourceType: "EXCEL", baselineDate: new Date("2026-10-01"),
+      rows: [{ keyword: "car wreckers mandurah", rankValue: 1, rankDisplay: "1" }],
+    });
+    assert.equal((await changeReportBaseline(first.report.id, otherClients.id, null)).outcome, "BASELINE_NOT_ALLOWED");
+    const future = await createBaselineFromRows(client.id, {
+      sourceFilename: "future.xlsx", sourceType: "EXCEL", baselineDate: new Date(Date.now() + 5 * 86_400_000),
+      rows: [{ keyword: "car wreckers mandurah", rankValue: 1, rankDisplay: "1" }],
+    });
+    assert.equal((await changeReportBaseline(first.report.id, future.id, null)).outcome, "BASELINE_NOT_ALLOWED", "not dated before the run");
+
+    const sent = await sendReport(first.report.id);
+    assert.equal(sent.outcome, "SENT");
+    const afterSend = await changeReportBaseline(first.report.id, oct15.id, null);
+    assert.equal(afterSend.outcome, "BASELINE_NOT_ALLOWED", "a sent report keeps the comparison the client received");
+  } finally {
+    await cleanup(client.id);
+    await cleanup(other.id);
+  }
 });

@@ -8,7 +8,7 @@ import { notifyReportSent, notifyReportSendFailed } from "../notifications/creat
 import { promoteSentReportToBaseline } from "./processVerifiedExcelUpload.js";
 import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
-import { loadExtraAttachmentFiles } from "./extraAttachments.js";
+import { loadExtraAttachmentFiles, readExtraAttachments } from "./extraAttachments.js";
 
 // Ties the approval decision to the actual send, with recipients resolved
 // entirely from what was already persisted at draft time (ClientReportConfig,
@@ -54,6 +54,12 @@ export async function approveAndSendReport(
   const cc = Array.isArray(report.resolvedCc) ? (report.resolvedCc as string[]) : [];
   if (recipients.length === 0) {
     return { outcome: "NO_RECIPIENTS", errorMessage: "Cannot send: no recipients configured for this report." };
+  }
+
+  // Checked BEFORE approval, so the report stays editable and a file can
+  // still be added (the same check below covers a retry of an APPROVED report).
+  if (report.attachmentSource === "none" && readExtraAttachments(report.extraAttachments).length === 0) {
+    return { outcome: "SEND_FAILED", errorMessage: "Cannot send: the report PDF is turned off and no other file is attached -- add a PDF/Excel file or attach the report PDF again." };
   }
 
   let current = report;
@@ -109,9 +115,18 @@ export async function approveAndSendReport(
     // ordinary SEND_FAILED (report reverts to APPROVED, safe to retry
     // after re-uploading or switching back to "generated"), same as any
     // other send failure.
+    // "none" (2026-11-03): the report PDF is deliberately left off and only
+    // the human-uploaded extra files go out -- the dashboard used purely as
+    // email automation. Refused without any extra file, so a send can never
+    // reach the client with nothing attached by accident.
+    const withoutReportPdf = current.attachmentSource === "none";
     let excelPdfBuffer: Buffer | undefined;
     let excelPdfFilename: string | undefined;
-    if (current.attachmentSource === "custom") {
+    if (withoutReportPdf) {
+      if (readExtraAttachments(current.extraAttachments).length === 0) {
+        throw new Error(`Report ${reportId} is set to send without the report PDF, but has no other attachment -- add a PDF/Excel file or attach the report PDF again before sending.`);
+      }
+    } else if (current.attachmentSource === "custom") {
       if (!current.customPdfPath) {
         throw new Error(`Report ${reportId} has attachmentSource "custom" but no customPdfPath is set -- upload a custom PDF or switch back to "Use generated report PDF" before sending.`);
       }
@@ -141,8 +156,8 @@ export async function approveAndSendReport(
       bodyHtml: current.emailBodyHtml ?? undefined,
       clickupTaskUrl: current.resolvedClickupTaskUrl ?? undefined,
       workspaceSlug,
-      attachmentHtml: current.reportHtml ?? undefined,
-      attachmentFilename: current.reportHtml ? `seo-report-${reportId}.html` : undefined,
+      attachmentHtml: withoutReportPdf ? undefined : (current.reportHtml ?? undefined),
+      attachmentFilename: !withoutReportPdf && current.reportHtml ? `seo-report-${reportId}.html` : undefined,
       excelPdfBuffer,
       excelPdfFilename,
       // Only present when there are extras -- a send without them is unchanged.

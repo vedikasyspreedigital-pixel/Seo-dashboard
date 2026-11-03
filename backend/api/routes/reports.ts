@@ -12,7 +12,7 @@ import { generateEmailDraft, regenerateEmailDraft, setEmailVariant } from "../..
 import { addExtraAttachments, removeExtraAttachment, ExtraAttachmentError, MAX_EXTRA_ATTACHMENTS, MAX_EXTRA_ATTACHMENT_BYTES } from "../../reporting/extraAttachments.js";
 import { createReportForRun } from "../../reporting/createReport.js";
 import { buildReport } from "../../reporting/buildReport.js";
-import { regenerateReport, describeRegenerationBlock, describeReportGeneration } from "../../reporting/processVerifiedExcelUpload.js";
+import { changeReportBaseline, regenerateReport, describeRegenerationBlock, describeReportGeneration } from "../../reporting/processVerifiedExcelUpload.js";
 import { InvalidReportTransitionError } from "../../reporting/errors.js";
 import type { SendEmailFn } from "../../reporting/emailSender.js";
 import { isClickUpTaskUrl } from "../../reporting/clickupEmailSender.js";
@@ -180,8 +180,9 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
   router.patch("/:id", async (req, res) => {
     if (!(await findOwnedReportOrRespond(req, res, req.params.id, { requireActive: true }))) return;
     const { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedCc, resolvedClickupTaskUrl, attachmentSource } = req.body ?? {};
-    if (attachmentSource !== undefined && attachmentSource !== "generated" && attachmentSource !== "custom") {
-      res.status(400).json({ error: 'attachmentSource must be "generated" or "custom"' });
+    // "none": send only the extra files, without the report PDF (2026-11-03).
+    if (attachmentSource !== undefined && attachmentSource !== "generated" && attachmentSource !== "custom" && attachmentSource !== "none") {
+      res.status(400).json({ error: 'attachmentSource must be "generated", "custom" or "none"' });
       return;
     }
     if (attachmentSource === "custom") {
@@ -278,17 +279,17 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     }
   });
 
-  // Extra PDFs sent TOGETHER WITH the report PDF (e.g. Google Analytics
-  // reports) -- upload one or more, or remove one. Only while the report
-  // awaits approval, like every draft edit.
+  // Extra PDF/Excel files sent TOGETHER WITH the report PDF (e.g. Google
+  // Analytics reports) -- upload one or more, or remove one. Only while the
+  // report awaits approval, like every draft edit.
   const receiveExtraPdfs: express.RequestHandler = (req, res, next) =>
     uploadExtraPdfs.array("files", MAX_EXTRA_ATTACHMENTS)(req, res, (err: unknown) => {
       if (err instanceof multer.MulterError) {
         const message =
           err.code === "LIMIT_FILE_SIZE"
-            ? "Each PDF must be 15 MB or smaller."
+            ? "Each file must be 15 MB or smaller."
             : err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE"
-              ? `Upload at most ${MAX_EXTRA_ATTACHMENTS} PDFs at a time.`
+              ? `Upload at most ${MAX_EXTRA_ATTACHMENTS} files at a time.`
               : err.message;
         res.status(400).json({ error: message });
         return;
@@ -422,6 +423,44 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
       case "REPORT_NOT_FOUND":
       case "RUN_NOT_FOUND":
         res.status(404).json({ error: "Report not found" });
+        return;
+      case "RUN_NOT_COMPLETED":
+        res.status(409).json({ error: "This report's run hasn't finished fetching rankings." });
+        return;
+      case "REPORT_LOCKED":
+      case "RESEND_CONFIRMATION_REQUIRED":
+      case "BASELINE_IN_USE": {
+        const { status, body } = describeRegenerationBlock(result);
+        res.status(status).json(body);
+        return;
+      }
+      case "DUPLICATE_REPORT":
+        res.status(409).json({ error: "This report is already being regenerated. Refresh and try again." });
+        return;
+      case "SUCCESS":
+        res.json(describeReportGeneration(result));
+        return;
+    }
+  });
+
+  // "Compare against": pick which of the client's earlier rankings an unsent
+  // report compares with, then rebuild it (see changeReportBaseline).
+  router.post("/:id/previous-baseline", expensiveActionRateLimit, async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    const baselineId = req.body?.baselineId;
+    if (typeof baselineId !== "string" || baselineId.length === 0) {
+      res.status(400).json({ error: "baselineId is required" });
+      return;
+    }
+    const result = await changeReportBaseline(reportId, baselineId, req.authUser!.email);
+    switch (result.outcome) {
+      case "REPORT_NOT_FOUND":
+      case "RUN_NOT_FOUND":
+        res.status(404).json({ error: "Report not found" });
+        return;
+      case "BASELINE_NOT_ALLOWED":
+        res.status(400).json({ error: result.error });
         return;
       case "RUN_NOT_COMPLETED":
         res.status(409).json({ error: "This report's run hasn't finished fetching rankings." });

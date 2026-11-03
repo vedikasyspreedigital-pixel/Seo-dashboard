@@ -392,6 +392,18 @@ export async function regenerateReport(
   };
 }
 
+/** "Compare against": re-pin an unsent report to another of the client's baselines, then rebuild it. */
+export async function changeReportBaseline(reportId: string, baselineId: string): Promise<ReportGenerationSummary> {
+  const res = await apiFetch(`/reports/${reportId}/previous-baseline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ baselineId }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `Request failed with status ${res.status}`);
+  return { regenerated: Boolean(body.regenerated), rowsChanged: body.rowsChanged ?? null, previousBaseline: body.previousBaseline ?? null };
+}
+
 export async function regenerateEmailDraft(reportId: string): Promise<DraftGenerationResult> {
   const res = await apiFetch(`/reports/${reportId}/regenerate`, { method: 'POST' });
   return handle<DraftGenerationResult>(res);
@@ -404,7 +416,8 @@ export interface UpdateReportDraftInput {
   resolvedRecipients?: string[];
   resolvedCc?: string[];
   resolvedClickupTaskUrl?: string | null;
-  attachmentSource?: 'generated' | 'custom';
+  /** "none" sends only the extra attachments, without the report PDF. */
+  attachmentSource?: 'generated' | 'custom' | 'none';
 }
 
 export async function updateReportDraft(reportId: string, edits: UpdateReportDraftInput): Promise<RankingReport> {

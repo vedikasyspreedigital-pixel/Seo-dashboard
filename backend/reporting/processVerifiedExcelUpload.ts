@@ -212,6 +212,46 @@ export async function regenerateReport(
 }
 
 /**
+ * "Compare against": re-pins an unsent report to another of the client's
+ * baselines, then regenerates it (2026-11-03). For when the right previous
+ * report was uploaded only after this report was first built -- e.g. a report
+ * the team sent by hand (OSS, AVN) -- which used to need a manual database fix.
+ * Only baselines the automatic choice could have picked are allowed: this
+ * client's, dated before this run (same day/time rule as
+ * selectPreviousBaseline), never the run's own. A sent report can't be
+ * re-pinned -- the client already has that comparison.
+ */
+export async function changeReportBaseline(
+  reportId: string,
+  baselineId: string,
+  createdBy: string | null,
+): Promise<RegenerateReportResult | { outcome: "BASELINE_NOT_ALLOWED"; error: string }> {
+  const report = await prisma.rankingReport.findUnique({ where: { id: reportId } });
+  if (!report) return { outcome: "REPORT_NOT_FOUND" };
+  if (report.status === ReportStatus.SENDING) return { outcome: "REPORT_LOCKED", reason: "SENDING", existingReportId: report.id };
+  if (!REGENERABLE_REPORT_STATUSES.includes(report.status)) {
+    return { outcome: "BASELINE_NOT_ALLOWED", error: "Only a report that hasn't been sent can change what it compares against." };
+  }
+  const run = await prisma.rankingRun.findUniqueOrThrow({ where: { id: report.runId } });
+  const baseline = await prisma.rankingBaseline.findUnique({ where: { id: baselineId } });
+  const runEnd = run.completedAt ?? run.createdAt;
+  const runDay = new Date(Date.UTC(runEnd.getUTCFullYear(), runEnd.getUTCMonth(), runEnd.getUTCDate()));
+  const beforeRun = baseline && (baseline.sourceRunId === null ? baseline.baselineDate < runDay : baseline.sourceRunId !== run.id && baseline.baselineDate < runEnd);
+  if (!baseline || baseline.clientId !== report.clientId || !beforeRun) {
+    return { outcome: "BASELINE_NOT_ALLOWED", error: "That ranking can't be used: it must be this client's, dated before this report's run." };
+  }
+  if (report.previousBaselineId !== baseline.id) {
+    // Guarded on status, so a report that started sending in the meantime is never re-pinned.
+    const { count } = await prisma.rankingReport.updateMany({
+      where: { id: report.id, status: { in: REGENERABLE_REPORT_STATUSES } },
+      data: { previousBaselineId: baseline.id, previousRunId: null },
+    });
+    if (count === 0) return { outcome: "REPORT_LOCKED", reason: "SENDING", existingReportId: report.id };
+  }
+  return regenerateReport(report.id, createdBy);
+}
+
+/**
  * Called once, right after a report is successfully SENT (approveAndSend.ts):
  * the ranks the client just received become the client's newest baseline,
  * dated the same day as the PDF they received. This is the ONLY place a

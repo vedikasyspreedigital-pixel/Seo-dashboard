@@ -243,7 +243,10 @@ export function SendConfirmationPage() {
           <div className="flex justify-between gap-4">
             <span className="text-[var(--color-ink-faint)]">Attachments</span>
             <span className="text-right text-[var(--color-ink)]">
-              {[report.attachmentSource === 'custom' && report.customPdfFilename ? report.customPdfFilename : 'Ranking report PDF', ...(report.extraAttachments ?? []).map((a) => a.filename)].join(', ')}
+              {[
+                ...(report.attachmentSource === 'none' ? [] : [report.attachmentSource === 'custom' && report.customPdfFilename ? report.customPdfFilename : 'Ranking report PDF']),
+                ...(report.extraAttachments ?? []).map((a) => a.filename),
+              ].join(', ') || 'None'}
             </span>
           </div>
         </div>

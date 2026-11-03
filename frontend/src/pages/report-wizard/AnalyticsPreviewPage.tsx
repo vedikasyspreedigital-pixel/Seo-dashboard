@@ -15,9 +15,10 @@ import { AlertPanel } from '../../components/ui/AlertPanel';
 import { VerifiedExcelUploadModal } from '../../components/report/VerifiedExcelUploadModal';
 import { ResendConfirmModal } from '../../components/report/ResendConfirmModal';
 import { describeReportGeneration, type ReportGenerationNoticeState } from '../../components/report/reportGenerationNotice';
-import { buildReport, getReport, regenerateReport } from '../../api/client';
+import { Select } from '../../components/ui/Select';
+import { buildReport, changeReportBaseline, getBaselines, getReport, regenerateReport } from '../../api/client';
 import { formatReportDate } from '../../utils/formatters';
-import type { RankingReport, ReportStatus } from '../../api/types';
+import type { BaselineRecord, RankingReport, ReportStatus } from '../../api/types';
 
 /** A report can't be changed while it's being sent, or once it was rejected. A SENT one can -- after the re-send warning. */
 const LOCKED_STATUSES: ReportStatus[] = ['SENDING', 'REJECTED'];
@@ -36,6 +37,17 @@ export function AnalyticsPreviewPage() {
   const [resendPrompt, setResendPrompt] = useState<{ sendCount: number; lastSentAt: string | null } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  // The client's earlier rankings, for "Compare against" (unsent reports only).
+  const [baselines, setBaselines] = useState<BaselineRecord[]>([]);
+  const [changingBaseline, setChangingBaseline] = useState(false);
+  const clientId = report?.clientId;
+
+  useEffect(() => {
+    if (!clientId) return;
+    getBaselines(clientId)
+      .then(setBaselines)
+      .catch(() => setBaselines([]));
+  }, [clientId]);
 
   useEffect(() => {
     if (!reportId) return;
@@ -80,6 +92,27 @@ export function AnalyticsPreviewPage() {
     }
   }
 
+  async function handleChangeBaseline(baselineId: string) {
+    if (!reportId || baselineId === report?.previousBaselineId) return;
+    const picked = baselines.find((b) => b.id === baselineId);
+    const ok = window.confirm(
+      `Compare this report against ${picked ? formatReportDate(picked.baselineDate) : 'this ranking'} instead?\n\nThe comparison, PDF and email subject/body are rebuilt with today’s date. Recipients and CC stay as they are.`,
+    );
+    if (!ok) return;
+    setChangingBaseline(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await changeReportBaseline(reportId, baselineId);
+      setReport(await getReport(reportId));
+      setNotice(`Now comparing against ${picked ? formatReportDate(picked.baselineDate) : 'the selected ranking'}. Report rebuilt.`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setChangingBaseline(false);
+    }
+  }
+
   async function handleUploaded(updated: RankingReport, summary: Parameters<typeof describeReportGeneration>[0]) {
     setUploadOpen(false);
     setError(null);
@@ -116,7 +149,12 @@ export function AnalyticsPreviewPage() {
   // the approval queue, so offer a direct shortcut there alongside the PDF.
   const emailAlreadyDrafted = report.status !== 'PENDING_ANALYSIS' && report.status !== 'ANALYSIS_FAILED' && report.status !== 'ANALYSIS_READY' && report.status !== 'REPORT_READY';
   const locked = LOCKED_STATUSES.includes(report.status);
-  const busy = regenerating || generating;
+  const busy = regenerating || generating || changingBaseline;
+  // Imported rankings plus earlier sent reports; newest ranking date first. The server refuses any dated after this run.
+  const baselineOptions = [...baselines]
+    .sort((a, b) => b.baselineDate.localeCompare(a.baselineDate))
+    .map((b) => ({ value: b.id, label: `${formatReportDate(b.baselineDate)} · ${b.sourceFilename} (${b.rowCount} keywords)` }));
+  const canChangeBaseline = alreadyBuilt && !locked && report.status !== 'SENT' && baselineOptions.length > 0;
   const currentDateLabel = report.reportDate ? formatReportDate(report.reportDate) : 'the latest run';
   const sends = report.sends ?? [];
   const sendHistoryLabel =
@@ -188,6 +226,21 @@ export function AnalyticsPreviewPage() {
           </p>
         ) : (
           <p>No earlier ranking found for this client, so this first report shows current ranks only.</p>
+        )}
+        {canChangeBaseline && (
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <span className="text-xs font-medium text-[var(--color-ink-muted)]">Compare against</span>
+            <div className="min-w-[16rem] max-w-md flex-1">
+              <Select
+                options={baselineOptions}
+                value={report.previousBaselineId ?? ''}
+                onChange={(id) => void handleChangeBaseline(id)}
+                placeholder="Pick an earlier ranking…"
+                disabled={busy}
+              />
+            </div>
+            {changingBaseline && <Spinner />}
+          </div>
         )}
         {sendHistoryLabel && <p className="mt-1 text-xs font-semibold text-[var(--color-ink)]">{sendHistoryLabel}</p>}
         <p className="mt-1 text-xs text-[var(--color-ink-faint)]">

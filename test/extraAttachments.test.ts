@@ -198,3 +198,79 @@ test("email template toggle: GA body with the period and placeholders; subject a
     await cleanup(client.id);
   }
 });
+
+// Excel files as extra attachments, and sending WITHOUT the report PDF (2026-11-03).
+const XLSX = (label: string) => Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(` ${label}`)]);
+const XLS = (label: string) => Buffer.concat([Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]), Buffer.from(` ${label}`)]);
+
+test("extra files: Excel (.xlsx/.xls) is accepted with its own extension; a renamed non-Excel file is refused", async () => {
+  const sent: SendEmailParams[] = [];
+  const app = createApp(unusedDataForSeoMock, "mock", undefined, {
+    sendEmail: createMockEmailSender((p) => sent.push(p)),
+    generateExcelAttachment: async () => ({ buffer: PDF("report"), filename: "Client - Keyword Ranking Report.pdf" }),
+  });
+  const { client, report } = await setup();
+  try {
+    const fake = await authedApp(app).post(`/api/reports/${report.id}/extra-attachments`).attach("files", Buffer.from("hello"), "ranks.xlsx");
+    assert.equal(fake.status, 400);
+    assert.match(fake.body.error, /not a PDF or Excel/);
+
+    const up = await authedApp(app)
+      .post(`/api/reports/${report.id}/extra-attachments`)
+      .attach("files", XLSX("ranks"), "Final Rankings.xlsx")
+      .attach("files", XLS("old"), "Old Rankings.xls")
+      .attach("files", PDF("ga"), "GA.pdf");
+    assert.equal(up.status, 200);
+    assert.deepEqual(up.body.extraAttachments.map((a: { filename: string }) => a.filename), ["Final Rankings.xlsx", "Old Rankings.xls", "GA.pdf"]);
+    const stored = await storedAttachments(report.id);
+    assert.match(stored[0].path, /\.xlsx$/, "stored with its real extension");
+
+    const again = await authedApp(app).post(`/api/reports/${report.id}/extra-attachments`).attach("files", XLSX("ranks2"), "Final Rankings.xlsx");
+    assert.equal(again.body.extraAttachments[3].filename, "Final Rankings (2).xlsx", "same name made unique, extension kept");
+
+    const sendRes = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
+    assert.equal(sendRes.status, 200);
+    assert.equal(sent[0].excelPdfFilename, "Client - Keyword Ranking Report.pdf", "report PDF still attached by default");
+    assert.deepEqual(sent[0].extraAttachments?.map((a) => a.filename), ["Final Rankings.xlsx", "Old Rankings.xls", "GA.pdf", "Final Rankings (2).xlsx"]);
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("send without the report PDF: only the uploaded files go out; refused when nothing else is attached", async () => {
+  const sent: SendEmailParams[] = [];
+  let generated = 0;
+  const app = createApp(unusedDataForSeoMock, "mock", undefined, {
+    sendEmail: createMockEmailSender((p) => sent.push(p)),
+    generateExcelAttachment: async () => {
+      generated++;
+      return { buffer: PDF("report"), filename: "Client - Keyword Ranking Report.pdf" };
+    },
+  });
+  const { client, report } = await setup();
+  try {
+    assert.equal((await authedApp(app).patch(`/api/reports/${report.id}`).send({ attachmentSource: "bogus" })).status, 400);
+    const off = await authedApp(app).patch(`/api/reports/${report.id}`).send({ attachmentSource: "none" });
+    assert.equal(off.status, 200);
+    assert.equal(off.body.attachmentSource, "none");
+
+    const empty = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
+    assert.equal(empty.body.outcome, "SEND_FAILED");
+    assert.match(empty.body.errorMessage, /report PDF is turned off and no other file is attached/);
+    assert.equal(sent.length, 0, "nothing was sent");
+    const still = await prisma.rankingReport.findUniqueOrThrow({ where: { id: report.id } });
+    assert.equal(still.status, ReportStatus.PENDING_APPROVAL, "refused before approval, so a file can still be added");
+
+    await authedApp(app).post(`/api/reports/${report.id}/extra-attachments`).attach("files", XLSX("mine"), "My Rankings.xlsx");
+    const res = await authedApp(app).post(`/api/reports/${report.id}/approve-and-send`).send({});
+    assert.equal(res.status, 200);
+    assert.equal(res.body.outcome, "SENT");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].excelPdfBuffer, undefined, "no report PDF attached");
+    assert.equal(sent[0].attachmentHtml, undefined, "no report HTML attached");
+    assert.equal(generated, 0, "the report PDF was not even generated");
+    assert.deepEqual(sent[0].extraAttachments?.map((a) => a.filename), ["My Rankings.xlsx"]);
+  } finally {
+    await cleanup(client.id);
+  }
+});
