@@ -26,6 +26,8 @@ export function RunAllPanel({
   onStart,
   onPostReady,
   posting,
+  onStop,
+  stopping,
 }: {
   bundle: DomainBundle | null;
   /** The reports ticked for the next run. */
@@ -39,6 +41,9 @@ export function RunAllPanel({
   onStart: () => void;
   onPostReady: () => void;
   posting: boolean;
+  /** Stop the running run (what's running ends, nothing more starts, nothing is posted). */
+  onStop: () => void;
+  stopping: boolean;
 }) {
   const running = bundle?.state === 'running';
   const canPostReady = bundle && bundle.state === 'attention' && bundle.reportId && (bundle.parts.post.state === 'waiting' || bundle.parts.post.state === 'failed');
@@ -70,6 +75,11 @@ export function RunAllPanel({
             label
           )}
         </Button>
+        {running && (
+          <Button variant="danger" disabled={stopping || bundle?.parts.post.state === 'running'} onClick={onStop}>
+            {stopping ? 'Stopping…' : 'Stop the run'}
+          </Button>
+        )}
       </div>
 
       {!running && (

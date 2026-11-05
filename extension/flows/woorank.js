@@ -79,6 +79,25 @@ function submitCreateReview(how) {
   return true;
 }
 
+/**
+ * MAIN world, before pressing Create Review: make the review open in THIS tab. The page opens it in a
+ * NEW tab, and Chrome's popup blocker silently stops a new tab that a script (not a real mouse click)
+ * opens -- the job ended on the create page with nothing opened (2026-11-04), though the same button
+ * works by hand. A same-tab navigation is never blocked.
+ */
+function openReviewInThisTab() {
+  for (const form of document.forms) if (form.target && form.target !== "_self") form.target = "_self";
+  for (const el of document.querySelectorAll("[formtarget]")) el.setAttribute("formtarget", "_self");
+  for (const a of document.querySelectorAll('a[target="_blank"]')) if (/create review/i.test(a.textContent || "")) a.target = "_self";
+  const open = window.open;
+  window.open = function (url, ...rest) {
+    if (!url) return open.call(window, url, ...rest);
+    window.location.assign(url);
+    return window;
+  };
+  return true;
+}
+
 /** For the error message: what the "Create Review" controls on the page actually are. */
 function createButtonHtml() {
   return [...document.querySelectorAll("button, a, input[type=submit], [role=button]")]
@@ -173,14 +192,17 @@ export async function runWooRank(task, ctx) {
   const createTab = tabId;
   const { windowId } = await chrome.tabs.get(createTab);
   let reviewTab = null;
+  await run(createTab, openReviewInThisTab, [], "MAIN");
   for (const how of ["press", "submit", "click"]) {
     const done = await run(createTab, submitCreateReview, [how]);
     if (!done && how === "press") throw new AgentError("FAILED", 'Couldn\'t find WooRank\'s "Create Review" button.');
     if (done && (reviewTab = await findReviewTab(windowId, 30_000))) break;
   }
   if (!reviewTab) {
+    // Any message the page shows (a limit, an error) says more than the button does.
+    const said = await run(createTab, errorText).catch(() => null);
     const html = await run(createTab, createButtonHtml).catch(() => "?");
-    throw new AgentError("FAILED", `WooRank's "Create Review" didn't open the review. Button: ${html}`.slice(0, 480));
+    throw new AgentError("FAILED", `WooRank's "Create Review" didn't open the review.${said ? ` Page says: "${said}".` : ""} Button: ${html}`.slice(0, 480));
   }
   tabId = reviewTab;
   await chrome.tabs.update(tabId, { active: true });

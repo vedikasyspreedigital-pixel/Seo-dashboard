@@ -10,7 +10,7 @@ import { clearFetchJobs } from "../backend/domainIntel/fetchJob.js";
 import { clearCompetitorSearches } from "../backend/domainIntel/competitorJob.js";
 import { clearAuditJobs } from "../backend/domainIntel/auditJob.js";
 import { clearBundles, startBundle, type BundleReport } from "../backend/domainIntel/bundleJob.js";
-import { FetchError, type FetchExportFn } from "../backend/domainIntel/fetchers/flikoverAhrefs.js";
+import { FetchError, cancelledError, type FetchExportFn } from "../backend/domainIntel/fetchers/flikoverAhrefs.js";
 import type { PostCommentParams } from "../backend/domainIntel/clickupCommentPoster.js";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
 
@@ -30,7 +30,7 @@ const PAGES: Record<string, [string, number, number][]> = {
   "c3.com.au": [["prenatal yoga", 5, 20]],
 };
 
-async function setup(opts: { woorankFails?: boolean; woorankCalls?: number; ahrefsSignedOut?: boolean; clientName?: string } = {}) {
+async function setup(opts: { woorankFails?: boolean; woorankHangs?: boolean; woorankCalls?: number; ahrefsSignedOut?: boolean; clientName?: string } = {}) {
   clearFetchJobs();
   clearCompetitorSearches();
   clearAuditJobs();
@@ -59,9 +59,11 @@ async function setup(opts: { woorankFails?: boolean; woorankCalls?: number; ahre
     competitorFetcher,
     auditFetchers: {
       siteaudit: async () => (calls.siteaudit++, pdf("site-audit.pdf")),
-      woorank: async () => {
+      woorank: async ({ signal }) => {
         opts.woorankCalls = (opts.woorankCalls ?? 0) + 1;
         calls.woorank++;
+        // Like the office Chrome agent stuck on a page: only Stop ends it.
+        if (opts.woorankHangs) return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(cancelledError(signal)), { once: true }));
         if (opts.woorankFails) throw new Error("seotooladda is signed out");
         return pdf("woorank.pdf");
       },
@@ -348,6 +350,44 @@ test("Pick reports: the AI SEO Audit without both the Site Audit and WooRank is 
       assert.throws(() => startBundle({ ...input, reports }, deps), /tick both of them too/, JSON.stringify(reports));
     }
     assert.throws(() => startBundle({ ...input, reports: [] }, deps), /Tick at least one report/);
+  } finally {
+    await t.cleanup();
+  }
+});
+test("Stop the run: what's running ends as stopped, it's not retried, nothing is posted; a finished run can't be stopped", async () => {
+  const tools = { woorankHangs: true, woorankCalls: 0 };
+  const t = await setup(tools);
+  try {
+    const started = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, sources: [], reports: ["siteaudit", "woorank"] });
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    let body = started.body;
+    for (let i = 0; i < 200 && !(body.parts.siteaudit.state === "done" && body.parts.woorank.state === "running"); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      body = (await t.api.get(`/api/domain-intel/bundles/${started.body.id}`)).body;
+    }
+    assert.equal(body.parts.woorank.state, "running", "WooRank is stuck, the Site Audit is done");
+
+    const stopped = await t.api.post(`/api/domain-intel/bundles/${started.body.id}/cancel`);
+    assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+    assert.equal(stopped.body.state, "attention");
+    assert.equal(stopped.body.parts.woorank.state, "failed");
+    assert.match(stopped.body.parts.woorank.error, /^Stopped by /);
+    assert.equal(stopped.body.parts.siteaudit.state, "done", "what finished stays");
+    assert.equal(stopped.body.parts.post.state, "skipped");
+
+    await new Promise((r) => setTimeout(r, 150)); // the run's own loop notices -- and must not change any of it
+    const after = (await t.api.get(`/api/domain-intel/bundles/${started.body.id}`)).body;
+    assert.equal(after.parts.woorank.state, "failed");
+    assert.equal(after.parts.post.state, "skipped");
+    assert.equal(tools.woorankCalls, 1, "a stopped audit is not retried");
+    assert.equal(t.posted.length, 0, "nothing is posted");
+    const audit = (await t.api.get(`/api/domain-intel/audits/${after.auditIds.woorank}`)).body;
+    assert.equal(audit.state, "failed");
+    assert.match(audit.error, /^Stopped by /, "the WooRank card says it was stopped too");
+
+    const again = await t.api.post(`/api/domain-intel/bundles/${started.body.id}/cancel`);
+    assert.equal(again.status, 409);
+    assert.match(again.body.error, /already finished/);
   } finally {
     await t.cleanup();
   }

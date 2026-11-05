@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { domainReportDir } from "./createDomainReport.js";
-import { FetchError, bareDomain, type FetchExportFn } from "./fetchers/flikoverAhrefs.js";
+import { FetchError, bareDomain, cancelledError, type FetchExportFn } from "./fetchers/flikoverAhrefs.js";
 import type { AiAuditWriter } from "./aiSeoAudit.js";
 
 // Domain Intelligence report PDFs made by the office Chrome agent (user's plan,
@@ -42,6 +42,8 @@ export interface AuditJob {
 // A week: the AI SEO Audit reads the latest Site Audit / WooRank, and a Site Audit's crawl takes many minutes.
 const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const jobs = new Map<string, AuditJob>();
+/** Running jobs' Stop switches. */
+const stoppers = new Map<string, AbortController>();
 const auditDir = () => domainReportDir("audits");
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
 
@@ -130,6 +132,10 @@ export async function startAudit(
     updatedAt: now,
   };
   jobs.set(job.id, job);
+  const stopper = new AbortController();
+  stoppers.set(job.id, stopper);
+  const { signal } = stopper;
+  const onStep = (step: string) => !signal.aborted && update(job, { state: "running", step });
   const make: () => Promise<{ buffer: Buffer; fileName: string }> =
     input.kind === "aiaudit"
       ? async () =>
@@ -139,21 +145,34 @@ export async function startAudit(
             sources: await Promise.all(
               sources().map(async (s) => ({ label: AUDIT_LABELS[s.kind], fileName: s.fileName ?? `${s.kind}.pdf`, buffer: await readFile(s.filePath!) })),
             ),
-            onStep: (step) => update(job, { state: "running", step }),
+            onStep,
           })
       : () =>
           fetcher!({
             domain: bareDomain(job.websiteUrl),
             location: null,
-            onStep: (step) => update(job, { state: "running", step }),
+            onStep,
+            signal,
           });
-  void run(job, make);
+  void run(job, make, signal).finally(() => stoppers.delete(job.id));
   return job;
 }
 
-async function run(job: AuditJob, make: () => Promise<{ buffer: Buffer; fileName: string }>) {
+/** Stop on the page: the job ends at once as "Stopped by <who>" (the agent quits within seconds). */
+export function cancelAudit(id: string, by: string): AuditJob | undefined {
+  const job = jobs.get(id);
+  if (!job || (job.state !== "queued" && job.state !== "running")) return job;
+  const reason = `Stopped by ${by}.`;
+  update(job, { state: "failed", step: undefined, code: "CANCELLED", error: reason });
+  stoppers.get(id)?.abort(reason);
+  return job;
+}
+
+async function run(job: AuditJob, make: () => Promise<{ buffer: Buffer; fileName: string }>, signal: AbortSignal) {
   try {
+    if (signal.aborted) throw cancelledError(signal);
     const result = await make();
+    if (signal.aborted) return; // stopped while it finished -- the file is dropped
     // The agent's reports are PDFs; the AI SEO Audit is an Excel workbook (.xlsx = a zip, "PK").
     const xlsx = result.fileName.toLowerCase().endsWith(".xlsx");
     if (result.buffer.subarray(0, xlsx ? 2 : 4).toString("latin1") !== (xlsx ? "PK" : "%PDF")) {
@@ -165,6 +184,7 @@ async function run(job: AuditJob, make: () => Promise<{ buffer: Buffer; fileName
     update(job, { state: "done", step: undefined, fileName: result.fileName, sizeBytes: result.buffer.length, filePath });
     await writeFile(metaPath(job.id), JSON.stringify(job)).catch(() => {});
   } catch (err) {
+    if (signal.aborted) return; // already shown as stopped
     const code = err instanceof FetchError ? err.code : "FAILED";
     if (!(err instanceof FetchError)) console.error(`[domainIntel] ${job.kind} ${job.id} failed:`, err);
     update(job, { state: "failed", step: undefined, code, error: (err as Error).message.slice(0, 500) });

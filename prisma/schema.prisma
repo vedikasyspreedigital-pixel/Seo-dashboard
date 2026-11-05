@@ -29,6 +29,39 @@ enum AttemptOutcome {
   MAPPING_ERROR
 }
 
+// One DataForSEO Standard task (task_post -> tasks_ready -> task_get) for one
+// try of one ranking row -- see backend/worker/standardQueue.ts. Live runs
+// never create these.
+enum DataforseoTaskStatus {
+  POSTING    // saved, about to be posted (a crash here leaves it for startup recovery)
+  SUBMITTED  // DataForSEO accepted it; waiting in their queue
+  COLLECTING // claimed by the collector while it fetches the result
+  COLLECTED  // result recorded as an attempt on the row
+  FAILED     // DataForSEO refused it at post time (recorded as an attempt)
+  ABANDONED  // given up (post outcome unknown, run cancelled, or result lost); never applied
+}
+
+model DataforseoTask {
+  id               String               @id @default(uuid()) // also sent to DataForSEO as `tag`
+  rankingRowId     String               @map("ranking_row_id")
+  rankingRow       RankingRow           @relation(fields: [rankingRowId], references: [id])
+  runId            String               @map("run_id")
+  dataforseoTaskId String?              @unique @map("dataforseo_task_id")
+  status           DataforseoTaskStatus @default(POSTING)
+  requestPayload   Json                 @map("request_payload")
+  submittedAt      DateTime?            @map("submitted_at")
+  collectedAt      DateTime?            @map("collected_at")
+  lastCheckedAt    DateTime?            @map("last_checked_at")
+  errorMessage     String?              @map("error_message")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([runId, status])
+  @@index([rankingRowId])
+  @@map("dataforseo_tasks")
+}
+
 // Reporting-layer state machine only -- completely separate from
 // RunStatus/RowStatus. Nothing here can transition a ranking_run/ranking_row,
 // and nothing in backend/statemachine or backend/worker references it.
@@ -246,6 +279,9 @@ model RankingRun {
   sourceFilePath String    @map("source_file_path")
   resultFilePath String?   @map("result_file_path")
   status         RunStatus @default(UPLOADED)
+  // "live" | "standard" -- which DataForSEO method checks this run's rows,
+  // fixed when the run is started or rerun (see backend/dataforseo/engine.ts).
+  engine         String    @default("live")
   totalRows      Int       @map("total_rows")
   createdBy      String?   @map("created_by")
   startedAt      DateTime? @map("started_at")
@@ -357,6 +393,7 @@ model RankingRow {
   lastAttempt   RankingRowAttempt? @relation("LastAttempt", fields: [lastAttemptId], references: [id])
 
   attempts RankingRowAttempt[] @relation("RowAttempts")
+  dataforseoTasks DataforseoTask[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Spinner } from '../ui/Spinner';
@@ -18,8 +17,6 @@ export interface ViewedAttachment {
  * The eye button's viewer: shows an attached file on the same page. A PDF in
  * the browser's own PDF viewer; an Excel file as a table of its cells (first
  * 500 rows / 30 columns of each sheet). Download is always there too.
- * Rendered into <body>: inside the Attachments card, the card's styling would
- * pin the "fixed" overlay to the card instead of the screen.
  */
 export function AttachmentViewerModal({ attachment, onClose }: { attachment: ViewedAttachment | null; onClose: () => void }) {
   const isPdf = !!attachment && /\.pdf$/i.test(attachment.filename);
@@ -47,7 +44,7 @@ export function AttachmentViewerModal({ attachment, onClose }: { attachment: Vie
 
   const current = preview?.sheets[sheet];
 
-  return createPortal(
+  return (
     <Modal
       open={attachment !== null}
       onClose={onClose}
@@ -113,7 +110,6 @@ export function AttachmentViewerModal({ attachment, onClose }: { attachment: Vie
           {current?.truncated && <p className="mt-2 text-xs text-[var(--color-ink-faint)]">Showing the first 500 rows and 30 columns -- download the file to see all of it.</p>}
         </>
       )}
-    </Modal>,
-    document.body,
+    </Modal>
   );
 }

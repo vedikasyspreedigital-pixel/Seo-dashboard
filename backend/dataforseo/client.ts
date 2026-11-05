@@ -4,7 +4,8 @@
 
 export interface DataForSeoRequestPayload {
   keyword: string;
-  target: string;
+  /** Not sent since 2026-11-05 (buildLiveRequest) unless DATAFORSEO_LIVE_SEND_TARGET=1. */
+  target?: string;
   location_name: string;
   se_domain: string;
   language_name: string;

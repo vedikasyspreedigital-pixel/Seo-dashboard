@@ -96,3 +96,37 @@ test("parseRecipientsInput: empty input produces no recipients and no invalid en
   assert.deepEqual(result.recipients, []);
   assert.deepEqual(result.invalid, []);
 });
+
+// Unsaved email-draft changes (shown under the editor and before going to Send).
+import { describeDraftChanges, diffLines } from '../src/components/report/draftChanges';
+
+const savedDraft = { subject: 'Ranking Report', body: 'Dear Client,\nHere is your report.\nThanks', recipients: ['a@x.com'], cc: [], clickupTaskUrl: '' };
+
+test('draft changes: nothing changed -> empty', () => {
+  assert.deepEqual(describeDraftChanges(savedDraft, { ...savedDraft }), []);
+});
+
+test('draft changes: subject old -> new, addresses added/removed (case-insensitive), body lines, ClickUp task', () => {
+  const changes = describeDraftChanges(savedDraft, {
+    subject: 'Ranking Report - Oct',
+    body: 'Dear Client,\nHere is your October report.\nThanks',
+    recipients: ['A@X.com', 'b@x.com'],
+    cc: ['m@x.com'],
+    clickupTaskUrl: ' https://app.clickup.com/t/1 ',
+  });
+  assert.deepEqual(changes, [
+    { field: 'Subject', before: 'Ranking Report', after: 'Ranking Report - Oct' },
+    { field: 'Body', lines: [{ kind: 'removed', text: 'Here is your report.' }, { kind: 'added', text: 'Here is your October report.' }] },
+    { field: 'Recipients', added: ['b@x.com'], removed: [] },
+    { field: 'Cc', added: ['m@x.com'], removed: [] },
+    { field: 'ClickUp task', before: '', after: 'https://app.clickup.com/t/1' },
+  ]);
+});
+
+test('draft changes: body diff keeps unchanged lines out and catches added/removed lines', () => {
+  assert.deepEqual(diffLines('a\nb\nc', 'a\nc\nd'), [
+    { kind: 'removed', text: 'b' },
+    { kind: 'added', text: 'd' },
+  ]);
+  assert.deepEqual(diffLines('same', 'same'), []);
+});

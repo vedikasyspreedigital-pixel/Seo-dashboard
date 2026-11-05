@@ -234,3 +234,51 @@ test("a job queued behind a long one waits while the agent works -- it's not 'di
     resetAgentQueue();
   }
 });
+
+test("Stop: on the dashboard the job ends at once and the agent's check-ins get 410; a queued job is never handed out", async () => {
+  clearAuditJobs();
+  const t = await setup();
+  try {
+    // A fetch stopped before the agent picked it up: it never reaches the agent.
+    const queued = await t.api.post("/api/domain-intel/fetches").send({ source: "ahrefs", clientId: t.client.id, location: "au" });
+    const stoppedQueued = await t.api.post(`/api/domain-intel/fetches/${queued.body.id}/cancel`);
+    assert.equal(stoppedQueued.status, 200);
+    assert.equal(stoppedQueued.body.state, "failed");
+    assert.match(stoppedQueued.body.error, /^Stopped by /);
+    assert.equal((await t.agent("get", "/tasks/next")).status, 204, "the stopped job is not handed to the agent");
+
+    // A fetch the agent is working on.
+    const started = await t.api.post("/api/domain-intel/fetches").send({ source: "ahrefs", clientId: t.client.id, location: "au" });
+    const task = (await t.agent("get", "/tasks/next")).body;
+    assert.equal((await t.agent("get", `/tasks/${task.id}`)).status, 200, "still running: the agent carries on");
+    const stopped = await t.api.post(`/api/domain-intel/fetches/${started.body.id}/cancel`);
+    assert.equal(stopped.body.state, "failed");
+    assert.equal(stopped.body.code, "CANCELLED");
+    assert.equal((await t.agent("get", `/tasks/${task.id}`)).status, 410, "the agent's next check-in tells it to quit");
+    assert.equal((await t.agent("post", `/tasks/${task.id}/progress`).send({ step: "Exporting" })).status, 410);
+    assert.equal((await t.agent("post", `/tasks/${task.id}/result`).attach("file", ahrefsExport(), "late.csv")).status, 410, "a late file is refused");
+    const job = await t.job(started.body.id);
+    assert.equal(job.state, "failed", "and the job stays stopped");
+    assert.match(job.error, /^Stopped by /);
+
+    // Stopping a finished job changes nothing.
+    assert.equal((await t.api.post(`/api/domain-intel/fetches/${started.body.id}/cancel`)).body.error, job.error);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("Stop / Reset in the agent's popup: the dashboard shows the job as stopped on the office computer", async () => {
+  const t = await setup();
+  try {
+    const started = await t.api.post("/api/domain-intel/fetches").send({ source: "ahrefs", clientId: t.client.id, location: "au" });
+    const task = (await t.agent("get", "/tasks/next")).body;
+    await t.agent("post", `/tasks/${task.id}/fail`).send({ code: "CANCELLED", message: "Stopped on the office computer (the agent's Stop button)." });
+    const job = await t.job(started.body.id);
+    assert.equal(job.state, "failed");
+    assert.equal(job.code, "CANCELLED");
+    assert.match(job.error, /Stopped on the office computer/);
+  } finally {
+    await t.cleanup();
+  }
+});

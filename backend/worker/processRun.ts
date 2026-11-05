@@ -1,5 +1,6 @@
 import { prisma } from '../db/client.js';
-import { buildDataForSeoRequest } from '../dataforseo/buildRequest.js';
+import { buildLiveRequest, liveSendsTarget } from '../dataforseo/buildRequest.js';
+import { applyTargetFilter } from '../dataforseo/targetMatch.js';
 import { recordAttemptAndApply } from '../dataforseo/recordAttemptAndApply.js';
 import { dequeueRow } from '../statemachine/rowTransitions.js';
 import { InvalidRowTransitionError } from '../statemachine/errors.js';
@@ -103,7 +104,8 @@ export async function processRun(
         if (err instanceof InvalidRowTransitionError) break; // another worker already has this row
         throw err;
       }
-      const requestPayload = buildDataForSeoRequest(row);
+      // The whole top 100, matched to the client here (buildLiveRequest's comment).
+      const requestPayload = buildLiveRequest(row);
       const { httpStatus, body, transportError } = await callDataForSeo(requestPayload);
 
       const { row: updatedRow } = await recordAttemptAndApply(row.id, {
@@ -111,6 +113,7 @@ export async function processRun(
         httpStatus,
         responseBody: body,
         transportError,
+        mappingBody: body && !transportError && !liveSendsTarget() ? applyTargetFilter(body, row.targetUrl) : undefined,
       });
 
       if (updatedRow.status !== 'ERROR_RETRY') break; // COMPLETED or FAILED -- this row is done

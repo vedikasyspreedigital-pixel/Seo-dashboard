@@ -6,9 +6,9 @@ import type { KeywordSource } from "./readKeywordExport.js";
 import { SOURCE_LABELS } from "./readKeywordExport.js";
 import type { FetchExportFn } from "./fetchers/flikoverAhrefs.js";
 import { bareDomain } from "./fetchers/flikoverAhrefs.js";
-import { fetchedCompetitorExport, fetchedExport, getJob, startFetch } from "./fetchJob.js";
-import { COMPETITOR_COUNT, getCompetitorSearch, startCompetitorSearch } from "./competitorJob.js";
-import { AUDIT_LABELS, AuditJobError, getAudit, latestAudits, startAudit, type AuditKind } from "./auditJob.js";
+import { cancelFetch, fetchedCompetitorExport, fetchedExport, getJob, startFetch } from "./fetchJob.js";
+import { COMPETITOR_COUNT, cancelCompetitorSearch, getCompetitorSearch, startCompetitorSearch } from "./competitorJob.js";
+import { AUDIT_LABELS, AuditJobError, cancelAudit, getAudit, latestAudits, startAudit, type AuditKind } from "./auditJob.js";
 import { attachFilesToReport, createAuditsOnlyReport, createDomainReport, domainReportDir, keepReportFiles, postDomainReport, type ReportMode } from "./createDomainReport.js";
 import type { ClassifyWithAiFn } from "./classifyIntent.js";
 import type { GapAdvisor } from "./gapReport.js";
@@ -65,6 +65,11 @@ export interface BundleJob {
   attachedAudits: AuditKind[];
   /** The DomainReport holding every file (download + posting). */
   reportId?: string;
+  /** Stop pressed on the page ("Stopped by <who>"): nothing more starts and nothing is posted. */
+  stoppedBy?: string;
+  /** The keyword fetches and competitor search this run started -- so Stop can stop them too. */
+  fetchIds?: string[];
+  competitorSearchId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -142,8 +147,32 @@ export async function loadSavedBundles() {
   }
 }
 function setPart(job: BundleJob, part: BundlePart, patch: BundleJob["parts"][BundlePart]) {
+  if (job.stoppedBy) return; // a stopped run keeps what Stop showed
   job.parts[part] = patch;
   touch(job);
+}
+
+/**
+ * Stop on the page: every part still waiting or running ends as "Stopped by <who>", the jobs it started
+ * (keyword fetches, competitor search, audits) are stopped -- the agent quits within seconds -- and
+ * nothing is posted. What already finished stays, and can still be posted from the panel.
+ */
+export function cancelBundle(job: BundleJob, by: string): BundleJob {
+  if (job.state !== "running") throw new BundleJobError("This run has already finished.");
+  // The comment may already be on its way -- "Not posted" would be wrong.
+  if (job.parts.post.state === "running") throw new BundleJobError("It's posting to ClickUp right now -- too late to stop.");
+  const reason = `Stopped by ${by}`;
+  job.stoppedBy = by;
+  for (const p of BUNDLE_PARTS) {
+    const s = job.parts[p].state;
+    if (s === "running" || s === "waiting") job.parts[p] = p === "post" ? { state: "skipped", step: `Not posted -- ${reason}` } : { state: "failed", error: reason };
+  }
+  for (const id of job.fetchIds ?? []) cancelFetch(id, by);
+  if (job.competitorSearchId) cancelCompetitorSearch(job.competitorSearchId, by);
+  for (const id of Object.values(job.auditIds)) if (id) cancelAudit(id, by);
+  job.state = "attention";
+  touch(job);
+  return job;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -226,10 +255,13 @@ async function run(job: BundleJob, input: BundleInput, deps: BundleDeps) {
     }
   }
 
+  if (job.stoppedBy) return;
+
   // 2. Keyword report (+ gap) on the server, while the agent does 3 + 4.
   const audits = (["siteaudit", "woorank"] as const).filter((kind) => selected.includes(kind)).map((kind) => runAudit(job, kind, client, input.websiteUrl, deps, pollMs));
   const report = fetched ? buildKeywordReport(job, input, deps, fetched) : Promise.resolve(null);
   const [reportId] = await Promise.all([report, ...audits]);
+  if (job.stoppedBy) return;
 
   // 5. AI SEO Audit from THIS run's Site Audit and WooRank -- both (the user's choice, 2026-10-27). It used to
   // run from either, and quietly picked up an older audit for the one that failed.
@@ -243,6 +275,7 @@ async function run(job: BundleJob, input: BundleInput, deps: BundleDeps) {
   }
 
   // Everything into one report -> one ClickUp comment.
+  if (job.stoppedBy) return;
   await finish(job, input, deps, reportId ?? null);
 }
 
@@ -255,6 +288,7 @@ async function fetchKeywords(job: BundleJob, input: BundleInput, deps: BundleDep
     } else {
       setPart(job, "keywords", { state: "running", step: "Finding competitors in Semrush" });
       const search = startCompetitorSearch({ client, websiteUrl: input.websiteUrl, location: input.location }, deps.competitorFetcher);
+      job.competitorSearchId = search.id;
       const found = await until(() => getCompetitorSearch(search.id), (s) => s.state === "done" || s.state === "failed", pollMs);
       competitors = found.state === "done" ? (found.competitors ?? []).slice(0, COMPETITOR_COUNT).map((c) => c.domain) : [];
     }
@@ -262,6 +296,7 @@ async function fetchKeywords(job: BundleJob, input: BundleInput, deps: BundleDep
   job.competitors = competitors;
   if (!input.sources.includes("semrush") || !deps.fetchers.semrush) competitors = []; // competitors are compared on Semrush data
 
+  if (job.stoppedBy) throw new Error(`Stopped by ${job.stoppedBy}`);
   const sourceJobs = [];
   for (const source of input.sources) {
     sourceJobs.push({ source, job: await startFetch({ source, client, websiteUrl: input.websiteUrl, location: input.location }, deps.fetchers) });
@@ -270,6 +305,8 @@ async function fetchKeywords(job: BundleJob, input: BundleInput, deps: BundleDep
   for (const domain of competitors) {
     competitorJobs.push({ domain, job: await startFetch({ source: "semrush", client, websiteUrl: domain, location: input.location }, deps.fetchers) });
   }
+  job.fetchIds = [...sourceJobs, ...competitorJobs].map((s) => s.job.id);
+  if (job.stoppedBy) for (const id of job.fetchIds) cancelFetch(id, job.stoppedBy); // Stop pressed while they were starting
   const all = [...sourceJobs.map((s) => ({ label: SOURCE_LABELS[s.source], id: s.job.id })), ...competitorJobs.map((c) => ({ label: c.domain, id: c.job.id }))];
   const states = new Map<string, string>();
   for (const { label, id } of all) {
@@ -363,9 +400,11 @@ async function runAudit(
   setPart(job, kind, { state: "running", step: "Queued" });
   let lastError = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
+    if (job.stoppedBy) return; // no retry after Stop
     try {
       const started = await startAudit({ kind, client, websiteUrl, sourceIds }, deps.auditFetchers, deps.aiAuditWriter);
       job.auditIds[kind] = started.id;
+      if (job.stoppedBy) cancelAudit(started.id, job.stoppedBy); // Stop pressed while it was starting
       const prefix = attempt > 1 ? "Retrying -- " : "";
       const done = await until(() => getAudit(started.id), (a) => a.state === "done" || a.state === "failed", pollMs, (a) =>
         setPart(job, kind, { state: "running", step: `${prefix}${a.step ?? "Working"}` }),
@@ -375,6 +414,7 @@ async function runAudit(
         return;
       }
       lastError = done.error ?? `${AUDIT_LABELS[kind]} failed.`;
+      if (done.code === "CANCELLED") break; // stopped on its card -- not retried
     } catch (err) {
       lastError = (err as Error).message;
       if (err instanceof AuditJobError) break; // e.g. "not available on this server" -- a retry won't help

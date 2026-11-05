@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { timingSafeEqual } from "node:crypto";
-import { AgentTaskGone, claimNext, completeTask, failTask, reportProgress } from "../../domainIntel/agentQueue.js";
+import { AgentTaskGone, checkTask, claimNext, completeTask, failTask, reportProgress } from "../../domainIntel/agentQueue.js";
 
 // The office Chrome agent's API (extension/ in this repo). NOT for people:
 // there is no session cookie here -- every call carries the shared secret
@@ -52,6 +52,16 @@ export function createAgentRouter(getToken: () => string | undefined = () => pro
       return;
     }
     res.json({ id: task.id, tool: task.tool, domain: task.domain, location: task.location });
+  });
+
+  // Asked every few seconds while a job runs: 410 = stopped on the page (or timed out) -- the agent quits.
+  router.get("/tasks/:id", (req, res) => {
+    try {
+      checkTask(req.params.id as string);
+      res.json({ ok: true });
+    } catch (err) {
+      if (!gone(res, err)) throw err;
+    }
   });
 
   router.post("/tasks/:id/progress", (req, res) => {

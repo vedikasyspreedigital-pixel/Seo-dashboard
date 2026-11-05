@@ -1,7 +1,7 @@
 import { ProgressBar } from './ProgressBar';
 import type { RunProgress } from '../../api/types';
 
-const TILES: { key: keyof Omit<RunProgress, 'runStatus'>; label: string; accent: string }[] = [
+const TILES: { key: keyof Omit<RunProgress, 'runStatus' | 'engine' | 'waitingAtDataForSeo'>; label: string; accent: string }[] = [
   { key: 'total', label: 'Total', accent: 'text-[var(--color-ink)]' },
   { key: 'pending', label: 'Pending', accent: 'text-[var(--color-ink)]' },
   { key: 'processing', label: 'Processing', accent: 'text-brand-300' },
@@ -42,6 +42,13 @@ export function ProcessingSummary({ progress }: { progress: RunProgress }) {
             <span className={`font-bold ${tile.accent}`}>{progress[tile.key]}</span>
           </span>
         ))}
+        {/* Standard runs: "Processing" rows are mostly searches queued at DataForSEO (a few minutes each). */}
+        {progress.engine === 'standard' && (
+          <span className="font-mono text-sm" title="Sent to DataForSEO's queue and waiting for the result -- usually a few minutes">
+            <span className="mr-1.5 eyebrow-label">At DataForSEO</span>
+            <span className="font-bold text-brand-300">{progress.waitingAtDataForSeo ?? 0}</span>
+          </span>
+        )}
       </div>
     </div>
   );

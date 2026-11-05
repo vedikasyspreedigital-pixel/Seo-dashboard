@@ -12,11 +12,15 @@ import { mapDataForSeoResponse } from './mapResponse.js';
  * Row must already be PROCESSING (i.e. dequeueRow was already called) --
  * that's enforced by completeRow/failRowAttempt themselves.
  *
+ * `mappingBody` (Standard only): what the mapper reads when it differs from
+ * the raw response -- the task_get result narrowed to the client's items
+ * (targetMatch.js). The full raw response is still what gets saved.
+ *
  * @param {string} rowId
- * @param {{ requestPayload: object, transportError?: Error, httpStatus?: number, responseBody?: any }} input
+ * @param {{ requestPayload: object, transportError?: Error, httpStatus?: number, responseBody?: any, mappingBody?: any }} input
  */
-export async function recordAttemptAndApply(rowId, { requestPayload, transportError, httpStatus, responseBody }) {
-  const mapped = mapDataForSeoResponse({ transportError, httpStatus, body: responseBody, requestPayload });
+export async function recordAttemptAndApply(rowId, { requestPayload, transportError, httpStatus, responseBody, mappingBody }) {
+  const mapped = mapDataForSeoResponse({ transportError, httpStatus, body: mappingBody ?? responseBody, requestPayload });
 
   const attemptNumber = (await prisma.rankingRowAttempt.count({ where: { rankingRowId: rowId } })) + 1;
 

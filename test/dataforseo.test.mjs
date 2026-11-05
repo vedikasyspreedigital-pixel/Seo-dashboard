@@ -632,3 +632,64 @@ test("callDataForSeoLive: a call that exceeds the timeout is aborted into a retr
     assert.equal(mapped.rankDisplay, null, "a timeout must never become 'Not in 100'");
   });
 });
+
+// "Too high" ranks (2026-11-05): a wildcard target like "*cash-for-cars-perth.*" also matches other
+// websites. Only the client's own website (the Full URL domain, sent as stop_crawl_on_match) counts.
+const CLIENT_PAYLOAD = buildDataForSeoRequest(CASH_FOR_CARS_ROW);
+const otherSite = (rank) =>
+  organicItem({ rank_group: rank, rank_absolute: rank, domain: "cash-for-cars-perth-wa.com", url: "https://cash-for-cars-perth-wa.com/sell", breadcrumb: "cash-for-cars-perth-wa.com" });
+
+test("another website matching the wildcard target before the client is skipped: the client's own rank counts", () => {
+  const mapped = mapDataForSeoResponse({ body: successBody([otherSite(3), organicItem({ rank_group: 61, rank_absolute: 64 })]), requestPayload: CLIENT_PAYLOAD });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.rankValue, 61);
+  assert.equal(mapped.rankingUrl, "https://www.cash-for-cars-perth.com.au/");
+  assert.equal(mapped.matchedItemCount, 1);
+});
+
+test("only other websites matched the target: Not in 100 (after a full crawl), not their rank", () => {
+  const mapped = mapDataForSeoResponse({ body: successBody([otherSite(2)]), requestPayload: CLIENT_PAYLOAD });
+  assert.equal(mapped.outcome, "SUCCESS");
+  assert.equal(mapped.rankValue, null);
+  assert.equal(mapped.rankDisplay, "Not in 100");
+});
+
+test("only other websites matched, but the crawl stopped early: retried, not a confident Not in 100", () => {
+  const mapped = mapDataForSeoResponse({ body: successBody([otherSite(2)], 3), requestPayload: CLIENT_PAYLOAD });
+  assert.equal(mapped.outcome, "API_ERROR");
+  assert.equal(mapped.retryable, true);
+});
+
+test("client subdomains count; a Google redirect link is judged by its breadcrumb, and kept when it can't be told", () => {
+  const sub = organicItem({ rank_group: 4, domain: "shop.cash-for-cars-perth.com.au", url: "https://shop.cash-for-cars-perth.com.au/x" });
+  assert.equal(mapDataForSeoResponse({ body: successBody([otherSite(1), sub]), requestPayload: CLIENT_PAYLOAD }).rankValue, 4);
+
+  const redirectOther = organicItem({ rank_group: 2, domain: "www.google.com.au", url: "https://www.google.com.au/goto?url=x", breadcrumb: "https://cash-for-cars-perth-wa.com › sell" });
+  const redirectClient = organicItem({ rank_group: 7, domain: "www.google.com.au", url: "https://www.google.com.au/goto?url=y", breadcrumb: "https://www.cash-for-cars-perth.com.au › sell" });
+  assert.equal(mapDataForSeoResponse({ body: successBody([redirectOther, redirectClient]), requestPayload: CLIENT_PAYLOAD }).rankValue, 7);
+
+  const redirectUnknown = organicItem({ rank_group: 5, domain: "www.google.com.au", url: "https://www.google.com.au/goto?url=z", breadcrumb: "" });
+  assert.equal(mapDataForSeoResponse({ body: successBody([redirectUnknown]), requestPayload: CLIENT_PAYLOAD }).rankValue, 5);
+});
+
+test("a row without a usable Full URL keeps the old rule (first matched result)", () => {
+  const payload = buildDataForSeoRequest({ ...CASH_FOR_CARS_ROW, fullUrl: "" });
+  assert.equal(mapDataForSeoResponse({ body: successBody([otherSite(3), organicItem({ rank_group: 61 })]), requestPayload: payload }).rankValue, 3);
+});
+
+test("40106 partial results: other websites are skipped there too", () => {
+  const body = successBody([otherSite(1)]);
+  body.tasks[0].status_code = 40106;
+  body.tasks[0].status_message = "Task Completed with Partial Results.";
+  const mapped = mapDataForSeoResponse({ body, requestPayload: CLIENT_PAYLOAD });
+  assert.equal(mapped.outcome, "API_ERROR", "no client match in the partial crawl -> retried, not rank 1");
+});
+
+test("buildLiveRequest: no target (Live is matched locally); DATAFORSEO_LIVE_SEND_TARGET=1 sends the old request", async () => {
+  const { buildLiveRequest } = await import("../backend/dataforseo/buildRequest.js");
+  const live = buildLiveRequest(CASH_FOR_CARS_ROW, {});
+  assert.equal(live.target, undefined);
+  assert.equal(live.keyword, "cash for cars perth");
+  assert.deepEqual(live.stop_crawl_on_match, [{ match_type: "with_subdomains", match_value: "cash-for-cars-perth.com.au" }]);
+  assert.equal(buildLiveRequest(CASH_FOR_CARS_ROW, { DATAFORSEO_LIVE_SEND_TARGET: "1" }).target, "*cash-for-cars-perth.*");
+});

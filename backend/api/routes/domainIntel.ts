@@ -10,18 +10,19 @@ import { LOCATIONS, REPORT_MODES, SOURCES, createDomainReport, isPostingNow, pos
 import type { PostCommentFn } from "../../domainIntel/clickupCommentPoster.js";
 import type { ClassifyWithAiFn } from "../../domainIntel/classifyIntent.js";
 import { bareDomain, type FetchExportFn } from "../../domainIntel/fetchers/flikoverAhrefs.js";
-import { FetchJobError, fetchedCompetitorExport, fetchedExport, getJob, latestLoginProblem, publicJob, startFetch } from "../../domainIntel/fetchJob.js";
+import { FetchJobError, cancelFetch, fetchedCompetitorExport, fetchedExport, getJob, latestLoginProblem, publicJob, startFetch } from "../../domainIntel/fetchJob.js";
 import {
   COMPETITOR_COUNT,
   CompetitorJobError,
+  cancelCompetitorSearch,
   getCompetitorSearch,
   publicCompetitorSearch,
   startCompetitorSearch,
 } from "../../domainIntel/competitorJob.js";
 import type { AiAuditWriter } from "../../domainIntel/aiSeoAudit.js";
 import type { GapAdvisor } from "../../domainIntel/gapReport.js";
-import { AUDIT_KINDS, AuditJobError, auditFile, getAudit, latestAudits, publicAudit, startAudit, type AuditKind } from "../../domainIntel/auditJob.js";
-import { BUNDLE_REPORTS, BundleJobError, getBundle, latestBundle, myLatestBundle, postBundle, publicBundle, startBundle, syncBundle } from "../../domainIntel/bundleJob.js";
+import { AUDIT_KINDS, AuditJobError, auditFile, cancelAudit, getAudit, latestAudits, publicAudit, startAudit, type AuditKind } from "../../domainIntel/auditJob.js";
+import { BUNDLE_REPORTS, BundleJobError, cancelBundle, getBundle, latestBundle, myLatestBundle, postBundle, publicBundle, startBundle, syncBundle } from "../../domainIntel/bundleJob.js";
 import { ProspectClientError, findOrCreateProspectClient } from "../../domainIntel/prospectClient.js";
 
 // "Domain Intelligence" tab: a client's Semrush / Ubersuggest / Ahrefs keyword
@@ -94,6 +95,9 @@ async function findOwnedReportOrRespond(req: Request, res: Response, id: string)
   }
   return report;
 }
+
+/** "Stopped by <name>" on a stopped job. */
+const stopper = (req: Request) => req.authUser!.name || req.authUser!.email;
 
 export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
   const router = Router();
@@ -226,6 +230,17 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
       return;
     }
     res.json(publicCompetitorSearch(job));
+  });
+
+  // Stop buttons: the job ends at once as "Stopped by <name>"; the office Chrome agent quits within seconds.
+  // Stopping a job that already finished just returns it as it is.
+  router.post("/competitors/:id/cancel", (req, res) => {
+    const job = getCompetitorSearch(req.params.id as string);
+    if (!job || !job.workspaceId || !req.authUser!.workspaceIds.includes(job.workspaceId)) {
+      res.status(404).json({ error: "This competitor search is no longer available." });
+      return;
+    }
+    res.json(publicCompetitorSearch(cancelCompetitorSearch(job.id, stopper(req)) ?? job));
   });
 
   const ownedAudit = (req: Request, res: Response) => {
@@ -366,6 +381,25 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
     if (job) res.json(publicAudit(job));
   });
 
+  router.post("/audits/:id/cancel", (req, res) => {
+    const job = ownedAudit(req, res);
+    if (job) res.json(publicAudit(cancelAudit(job.id, stopper(req)) ?? job));
+  });
+
+  router.post("/bundles/:id/cancel", (req, res) => {
+    const job = ownedBundle(req, res);
+    if (!job) return;
+    try {
+      res.json(publicBundle(cancelBundle(job, stopper(req))));
+    } catch (err) {
+      if (err instanceof BundleJobError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
   router.get("/audits/:id/file", async (req, res) => {
     const job = ownedAudit(req, res);
     if (!job) return;
@@ -386,6 +420,15 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
       return;
     }
     res.json(publicJob(job));
+  });
+
+  router.post("/fetches/:id/cancel", (req, res) => {
+    const job = getJob(req.params.id as string);
+    if (!job || !job.workspaceId || !req.authUser!.workspaceIds.includes(job.workspaceId)) {
+      res.status(404).json({ error: "This fetch is no longer available." });
+      return;
+    }
+    res.json(publicJob(cancelFetch(job.id, stopper(req)) ?? job));
   });
 
   router.post(

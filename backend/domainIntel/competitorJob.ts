@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { FetchError, bareDomain, runExclusive, type FetchExportFn } from "./fetchers/flikoverAhrefs.js";
+import { FetchError, bareDomain, cancelledError, runExclusive, type FetchExportFn } from "./fetchers/flikoverAhrefs.js";
 
 // "Find competitors" for the Keyword Analysis report (team's decision,
 // 2026-10-23: the client's keywords + 3 competitors' side by side). The office
@@ -35,6 +35,8 @@ export interface CompetitorJob {
 export const COMPETITOR_COUNT = 3;
 const KEEP_MS = 24 * 60 * 60 * 1000;
 const jobs = new Map<string, CompetitorJob>();
+/** Running searches' Stop switches. */
+const stoppers = new Map<string, AbortController>();
 
 function update(job: CompetitorJob, patch: Partial<CompetitorJob>) {
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
@@ -85,21 +87,37 @@ export function startCompetitorSearch(
     updatedAt: now,
   };
   jobs.set(job.id, job);
+  const stopper = new AbortController();
+  stoppers.set(job.id, stopper);
+  const { signal } = stopper;
   void (async () => {
     try {
       const result = await runExclusive(() => {
+        if (signal.aborted) throw cancelledError(signal);
         update(job, { state: "running" });
-        return fetcher({ domain: bareDomain(job.websiteUrl), location: job.location, onStep: (step) => update(job, { step }) });
+        return fetcher({ domain: bareDomain(job.websiteUrl), location: job.location, onStep: (step) => !signal.aborted && update(job, { step }), signal });
       });
+      if (signal.aborted) return;
       const competitors = parseCompetitorsCsv(result.buffer.toString("utf8"), job.websiteUrl);
       if (competitors.length === 0) throw new FetchError("FAILED", "Semrush listed no organic competitors for this site -- type them instead.");
       update(job, { state: "done", step: undefined, competitors });
     } catch (err) {
+      if (signal.aborted) return; // already shown as stopped
       const code = err instanceof FetchError ? err.code : "FAILED";
       if (!(err instanceof FetchError)) console.error(`[domainIntel] competitor search ${job.id} failed:`, err);
       update(job, { state: "failed", step: undefined, code, error: (err as Error).message.slice(0, 500) });
     }
-  })();
+  })().finally(() => stoppers.delete(job.id));
+  return job;
+}
+
+/** Stop on the page: the search ends at once as "Stopped by <who>". */
+export function cancelCompetitorSearch(id: string, by: string): CompetitorJob | undefined {
+  const job = jobs.get(id);
+  if (!job || (job.state !== "queued" && job.state !== "running")) return job;
+  const reason = `Stopped by ${by}.`;
+  update(job, { state: "failed", step: undefined, code: "CANCELLED", error: reason });
+  stoppers.get(id)?.abort(reason);
   return job;
 }
 

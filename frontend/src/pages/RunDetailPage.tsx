@@ -12,6 +12,7 @@ import { FilterPills } from '../components/ui/FilterPills';
 import { StatusBadge } from '../components/run/StatusBadge';
 import { ProcessingSummary } from '../components/run/ProcessingSummary';
 import { CompletedSummary } from '../components/run/CompletedSummary';
+import { RunDebugPanel } from '../components/run/RunDebugPanel';
 import { RefreshIcon } from '../components/ui/icons';
 import { VerifiedExcelUploadModal } from '../components/report/VerifiedExcelUploadModal';
 import { describeReportGeneration, type ReportGenerationNoticeState } from '../components/report/reportGenerationNotice';
@@ -399,6 +400,8 @@ export function RunDetailPage() {
           </tbody>
         </table>
       </Card>
+
+      {runId && <RunDebugPanel runId={runId} />}
 
       <p className="mt-3 text-xs text-[var(--color-ink-faint)]">
         <Link to="/runs" className="hover:text-[var(--color-ink-muted)]">

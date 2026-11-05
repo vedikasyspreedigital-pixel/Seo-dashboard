@@ -11,7 +11,9 @@ import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { deleteExtraAttachmentFiles } from '../../reporting/extraAttachments.js';
 import { processVerifiedExcelUpload, describeRegenerationBlock, describeReportGeneration } from '../../reporting/processVerifiedExcelUpload.js';
-import { processRun, type CallDataForSeoFn } from '../../worker/processRun.js';
+import type { CallDataForSeoFn } from '../../worker/processRun.js';
+import { startRunProcessing } from '../../dataforseo/engine.js';
+import { diagnoseRun } from '../../dataforseo/runDiagnostics.js';
 import { callDataForSeoLive, hasDataForSeoCredentials, MISSING_CREDENTIALS_MESSAGE } from '../../dataforseo/client.js';
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
@@ -180,13 +182,13 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     try {
       const run = await startRun(req.params.id as string);
       // Fire-and-forget: the HTTP response returns immediately, the
-      // dashboard polls /progress. A failure here is logged, not thrown at
-      // the client -- the affected rows simply stay in whatever state
-      // processRun left them (their own transition guards protect them).
-      processRun(run.id, callDataForSeo).catch((err) => {
-        console.error(`processRun failed for run ${run.id}:`, err);
-      });
-      res.json(run);
+      // dashboard polls /progress. Live (processRun) or the Standard queue,
+      // per the run's workspace -- see dataforseo/engine.ts. A failure in
+      // processRun is logged, not thrown at the client -- the affected rows
+      // simply stay in whatever state it left them (their own transition
+      // guards protect them).
+      const engine = await startRunProcessing(run.id, callDataForSeo);
+      res.json({ ...run, engine });
     } catch (err) {
       // 409 only when the run is in the wrong state; a database failure is a real error, not a "conflict".
       if (!(err instanceof InvalidRunTransitionError)) throw err;
@@ -209,10 +211,8 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     if (cantCheckRankings(res)) return;
     try {
       const { run, resetCount } = await rerunFailedRows(runId);
-      processRun(run.id, callDataForSeo).catch((err) => {
-        console.error(`processRun failed for run ${run.id} (rerun failed):`, err);
-      });
-      res.json({ ...run, resetCount });
+      const engine = await startRunProcessing(run.id, callDataForSeo, ' (rerun failed)');
+      res.json({ ...run, engine, resetCount });
     } catch (err) {
       if (err instanceof InvalidRunTransitionError) {
         res.status(409).json({ error: 'Only a finished run with failed keywords can be rerun.' });
@@ -264,6 +264,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       await tx.rankingReport.deleteMany({ where: { runId: run.id } });
       await tx.rankingRow.updateMany({ where: { runId: run.id }, data: { lastAttemptId: null } });
       await tx.rankingRowAttempt.deleteMany({ where: { rankingRow: { runId: run.id } } });
+      await tx.dataforseoTask.deleteMany({ where: { runId: run.id } });
       await tx.rankingRow.deleteMany({ where: { runId: run.id } });
       await tx.rankingRun.delete({ where: { id: run.id } });
     });
@@ -322,21 +323,33 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     res.json(rows);
   });
 
+  // "Debug details" on the run page: every try's DataForSEO status code, pages crawled, redirect links and
+  // the URL counted as the client (flagged when it's another website). Read-only.
+  router.get('/:id/debug', async (req, res) => {
+    const run = await findOwnedRunOrRespond(req, res, req.params.id);
+    if (!run) return;
+    res.json(await diagnoseRun(run.id));
+  });
+
   router.get('/:id/progress', async (req, res) => {
     const runId = req.params.id;
     const run = await findOwnedRunOrRespond(req, res, runId);
     if (!run) return;
 
     const counts = await prisma.rankingRow.groupBy({ by: ['status'], where: { runId }, _count: { _all: true } });
+    // Standard runs: how many of the PROCESSING rows are searches waiting in DataForSEO's queue.
+    const waitingAtDataForSeo = run.engine === 'standard' ? await prisma.dataforseoTask.count({ where: { runId, status: { in: ['SUBMITTED', 'COLLECTING'] } } }) : 0;
 
     res.json({
       runStatus: run.status,
+      engine: run.engine,
       total: run.totalRows,
       pending: countFor(counts, 'PENDING'),
       processing: countFor(counts, 'PROCESSING'),
       completed: countFor(counts, 'COMPLETED'),
       errorRetry: countFor(counts, 'ERROR_RETRY'),
       failed: countFor(counts, 'FAILED'),
+      waitingAtDataForSeo,
     });
   });
 

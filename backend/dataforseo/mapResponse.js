@@ -1,4 +1,5 @@
 import { NOT_IN_100 } from '../excel/mapping.js';
+import { itemAddress } from './targetMatch.js';
 
 // DataForSEO status codes (docs.dataforseo.com/v3/appendix/errors, and
 // confirmed per-code against dataforseo.com/help-center/what-does-the-*
@@ -112,6 +113,42 @@ function incompleteDepthCoverage(task, result, requestPayload) {
   };
 }
 
+// Client's own website only (2026-11-05). `target` is a wildcard like "*clientname.*", so DataForSEO
+// (and targetMatch.js for Standard) also returns OTHER websites whose address contains that word --
+// e.g. "clientnametools.com" at #3 while the client's own site is #61. items[0] then reported #3
+// ("too high": concrete trowel 3 vs verified 61). When the row has a Full URL (sent as
+// stop_crawl_on_match's match_value), only items on that domain or its subdomains count. A Google
+// redirect item is judged by the address in its breadcrumb; one whose website can't be told at all
+// is kept, as before. Rows without a usable Full URL keep the old behaviour.
+function clientDomainOf(requestPayload) {
+  const value = requestPayload?.stop_crawl_on_match?.[0]?.match_value;
+  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase().replace(/^www\./, '') : null;
+}
+
+function hostOf(address) {
+  try {
+    return new URL(/^https?:\/\//i.test(address) ? address : `https://${address}`).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+function isOnClientSite(item, domain) {
+  const hosts = [];
+  const address = itemAddress(item);
+  if (address) hosts.push(hostOf(address));
+  if (typeof item?.domain === 'string' && !/^(www\.)?google\./i.test(item.domain)) hosts.push(item.domain.toLowerCase().replace(/^www\./, ''));
+  const known = hosts.filter(Boolean);
+  if (known.length === 0) return true; // can't tell which website it is -- keep it, as before
+  return known.some((host) => host === domain || host.endsWith(`.${domain}`));
+}
+
+/** Exported for tests: the organic items that are on the client's own website. */
+export function clientItems(items, requestPayload) {
+  const domain = clientDomainOf(requestPayload);
+  return domain ? items.filter((item) => isOnClientSite(item, domain)) : items;
+}
+
 function matchFromItems(task, items) {
   const best = items[0];
   if (typeof best.rank_group !== 'number') return null;
@@ -223,7 +260,7 @@ export function mapDataForSeoResponse({ transportError, httpStatus, body, reques
     // ran out). Accept a match if the existing matcher finds one; only
     // fall through to the normal retryable-error handling when it doesn't.
     const partialResult = Array.isArray(task.result) ? task.result[0] : null;
-    const partialOrganicItems = organicItems(partialResult?.items);
+    const partialOrganicItems = clientItems(organicItems(partialResult?.items), requestPayload);
     if (partialOrganicItems.length > 0) {
       const matched = matchFromItems(task, partialOrganicItems);
       if (matched) return matched;
@@ -251,7 +288,8 @@ export function mapDataForSeoResponse({ transportError, httpStatus, body, reques
   // `result.items` can be genuinely empty (nothing matched `target` at all)
   // or non-empty but entirely non-organic (e.g. the target domain running a
   // paid ad); both must be treated identically to "no organic match yet".
-  const items = organicItems(result?.items);
+  // ...and then to the client's own website (clientItems): only other websites matched -> not found.
+  const items = clientItems(organicItems(result?.items), requestPayload);
   if (items.length === 0) {
     // Same rule as the 40102 path: a status_code 20000 + no organic items is
     // only trustworthy as "not found" if the crawl actually reached the

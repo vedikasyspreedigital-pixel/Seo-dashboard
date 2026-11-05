@@ -1,4 +1,5 @@
 import { useEffect, useId, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * Generic modal: backdrop + centered glass-surface panel, matching this app's existing Card look.
@@ -8,6 +9,9 @@ import { useEffect, useId, type ReactNode } from 'react';
  * the backdrop-click close, so a stray click outside the dialog can never silently discard
  * whatever the user has already typed -- Escape still works, since that's a deliberate keypress,
  * not an easy-to-trigger accidental click just outside the panel.
+ *
+ * Rendered into <body>: inside a card or the page layout, their styling pins the "fixed" overlay
+ * to that box instead of the screen, which pushed the dialog off-centre or off-screen (2026-11-04).
  */
 export function Modal({
   open,
@@ -39,7 +43,7 @@ export function Modal({
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={closeOnBackdropClick ? onClose : undefined}>
       <div
         // Announced as a dialog with its title by screen readers (audit 2026-10-27).
@@ -52,8 +56,9 @@ export function Modal({
         <h2 id={titleId} className="shrink-0 px-6 pt-6 text-lg font-semibold text-[var(--color-ink)]">{title}</h2>
         {/* min-h-0 is required for a flex child to actually become scrollable instead of stretching the whole panel past the viewport -- without it, a tall form (like Client Management's) pushes the footer's Save button off-screen entirely. */}
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">{children}</div>
-        {footer && <div className="shrink-0 flex items-center justify-end gap-3 px-6 pb-6">{footer}</div>}
+        {footer && <div className="shrink-0 flex flex-wrap items-center justify-end gap-3 px-6 pb-6">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -99,3 +99,28 @@ export function buildDataForSeoRequest(row) {
   }
   return payload;
 }
+
+/**
+ * Live without `target` (2026-11-05). Google now hides most results behind
+ * google.<tld>/goto?... redirect links, and DataForSEO's `target` filter only
+ * reads the link -- so a client sitting at #1 came back "No Search Results"
+ * (Wayfarer Footprints, "central asia road trip kyrgyzstan kazakhstan": Google
+ * #1, Live+target 40102 after 10 pages; the same search without target had it
+ * at rank_group 1 as a goto link whose breadcrumb is the client's site). Same
+ * price either way ($0.0155 both). So Live now asks for the whole top 100 and
+ * the rows are matched here, exactly like the queue (targetMatch.js: target
+ * wildcard + breadcrumb for redirect links, then mapResponse.js: client's own
+ * domain only). stop_crawl_on_match is kept -- it still ends the crawl early
+ * when the client shows up as a plain link.
+ * DATAFORSEO_LIVE_SEND_TARGET=1 switches back to the old request.
+ */
+export function liveSendsTarget(env = process.env) {
+  return env.DATAFORSEO_LIVE_SEND_TARGET === '1';
+}
+
+export function buildLiveRequest(row, env = process.env) {
+  const payload = buildDataForSeoRequest(row);
+  if (liveSendsTarget(env)) return payload;
+  const { target: _target, ...rest } = payload;
+  return rest;
+}

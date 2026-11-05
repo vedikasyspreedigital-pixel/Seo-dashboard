@@ -67,7 +67,8 @@ export function createMockDataForSeoClient({
     );
 
     const r = pseudoRandom(payload.keyword);
-    const domain = payload.target.replace(/\*/g, "");
+    // The client's site: its Full URL (stop_crawl_on_match), else the target wildcard without the "*"s.
+    const domain = payload.stop_crawl_on_match?.[0]?.match_value ?? (payload.target ?? "").replace(/\*/g, "");
 
     if (r < 0.15) {
       return { httpStatus: 200, body: notFoundBody(payload.keyword) };

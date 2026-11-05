@@ -2,16 +2,37 @@
 // to). Nothing here types passwords, logs in/out, or touches a "verify you
 // are human" check: waitForHuman() only waits for a person to tick it.
 
-export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/** A short, human-paced pause between steps. */
-export const pause = (min = 1200, max = 2800) => sleep(min + Math.random() * (max - min));
-
 export class AgentError extends Error {
   constructor(code, message) {
     super(message);
     this.code = code;
   }
 }
+
+// Stop (on the dashboard, or the popup's "Stop / Reset"): background.js sets this, and the next wait in the
+// running flow -- every flow waits through sleep(), waitFor() included -- ends the job with CANCELLED.
+let stopReason = null;
+export function requestStop(reason) {
+  stopReason = reason;
+}
+export function clearStop() {
+  stopReason = null;
+}
+export function throwIfStopped() {
+  if (stopReason) throw new AgentError("CANCELLED", stopReason);
+}
+
+export async function sleep(ms) {
+  const end = Date.now() + ms;
+  for (;;) {
+    throwIfStopped();
+    const left = end - Date.now();
+    if (left <= 0) return;
+    await new Promise((r) => setTimeout(r, Math.min(left, 500)));
+  }
+}
+/** A short, human-paced pause between steps. */
+export const pause = (min = 1200, max = 2800) => sleep(min + Math.random() * (max - min));
 
 /** Runs func(...args) inside the tab and returns its (JSON-serialisable) result. world: "ISOLATED" | "MAIN". */
 export async function run(tabId, func, args = [], world = "ISOLATED") {

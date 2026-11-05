@@ -21,6 +21,9 @@ import {
   downloadDomainReportFile,
   getDomainBundle,
   getDomainFetch,
+  cancelDomainAudit,
+  cancelDomainBundle,
+  cancelDomainFetch,
   getDomainFetchStatus,
   getDomainHistory,
   getLatestDomainAudits,
@@ -123,6 +126,7 @@ function FetchSlot({
   canStart,
   disabled,
   onStart,
+  onStop,
   onFile,
 }: {
   label: string;
@@ -134,6 +138,8 @@ function FetchSlot({
   canStart: boolean;
   disabled: boolean;
   onStart: () => void;
+  /** Stop the running fetch. */
+  onStop: () => void;
   onFile: (f: File | null) => void;
 }) {
   const [showUpload, setShowUpload] = useState(false);
@@ -177,6 +183,9 @@ function FetchSlot({
           <span>
             Fetching from {label}…{job?.step ? ` ${job.step}` : ''}
           </span>
+          <button type="button" className="ml-auto shrink-0 text-xs font-medium text-rose-300 hover:underline" onClick={onStop}>
+            Stop
+          </button>
         </div>
       )}
       {job?.state === 'done' && (
@@ -366,6 +375,7 @@ export function DomainIntelligencePage() {
   const [compJobs, setCompJobs] = useState<(DomainFetchJob | null)[]>(() => Array(COMPETITOR_COUNT).fill(null));
   const [bundle, setBundle] = useState<DomainBundle | null>(null);
   const [bundleStarting, setBundleStarting] = useState(false);
+  const [stoppingRun, setStoppingRun] = useState(false);
   // The reports to make in the next run (all 5 by default; the team can untick some -- 2026-10-27).
   const [bundleReports, setBundleReports] = useState<DomainBundleReport[]>(DOMAIN_BUNDLE_REPORTS);
   const [postingReady, setPostingReady] = useState(false);
@@ -614,6 +624,47 @@ export function DomainIntelligencePage() {
       setError((err as Error).message);
     } finally {
       setPostingReady(false);
+    }
+  }
+
+  // Stop buttons. The job ends at once as "Stopped by <you>"; the office Chrome agent quits within seconds.
+  async function handleStopFetch(job: DomainFetchJob) {
+    try {
+      const stopped = await cancelDomainFetch(job.id);
+      setJobs((prev) => (prev[stopped.source]?.id === stopped.id ? { ...prev, [stopped.source]: stopped } : prev));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleStopCompetitorFetch(id: string) {
+    try {
+      const stopped = await cancelDomainFetch(id);
+      setCompJobs((prev) => prev.map((j) => (j?.id === stopped.id ? stopped : j)));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleStopAudit(job: DomainAuditJob) {
+    try {
+      const stopped = await cancelDomainAudit(job.id);
+      setAudits((prev) => (prev[stopped.kind]?.id === stopped.id ? { ...prev, [stopped.kind]: stopped } : prev));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleStopRun() {
+    if (!bundle || !window.confirm('Stop this run? What is running now stops, nothing more starts, and nothing is posted to ClickUp. Finished reports stay.')) return;
+    setStoppingRun(true);
+    setError(null);
+    try {
+      setBundle(await cancelDomainBundle(bundle.id));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setStoppingRun(false);
     }
   }
 
@@ -898,6 +949,10 @@ export function DomainIntelligencePage() {
                       canStart={formReady}
                       disabled={busy}
                       onStart={() => void handleStartFetch(s.value)}
+                      onStop={() => {
+                        const running = jobs[s.value];
+                        if (running) void handleStopFetch(running);
+                      }}
                       onFile={(f) =>
                         setFiles((prev) => {
                           const next = { ...prev };
@@ -926,6 +981,9 @@ export function DomainIntelligencePage() {
                           {(job?.state === 'queued' || job?.state === 'fetching') && (
                             <span className="flex items-center gap-1.5 text-brand-300">
                               <Spinner className="h-3 w-3" /> {job.step ?? 'Fetching…'}
+                              <button type="button" className="font-medium text-rose-300 hover:underline" onClick={() => void handleStopCompetitorFetch(job.id)}>
+                                Stop
+                              </button>
                             </span>
                           )}
                           {job?.state === 'done' && <span className="text-emerald-300">✓ {job.keywords} keywords</span>}
@@ -984,6 +1042,8 @@ export function DomainIntelligencePage() {
             onStart={() => void handleRunAll()}
             onPostReady={() => void handlePostReady()}
             posting={postingReady}
+            onStop={() => void handleStopRun()}
+            stopping={stoppingRun}
           />
 
           <InlineError message={error} />
@@ -997,6 +1057,7 @@ export function DomainIntelligencePage() {
           canStart={formReady}
           disabled={bundleRunning}
           onRun={(kind) => void handleRunAudit(kind)}
+          onStop={(job) => void handleStopAudit(job)}
           onDownload={(job) => void handleDownloadAudit(job)}
         />
       </Card>

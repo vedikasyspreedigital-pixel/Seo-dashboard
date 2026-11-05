@@ -56,7 +56,13 @@ function projectRow(domain) {
     if (m && isSite(row?.innerText || row?.textContent || a.textContent || "") && (!newest || Number(m[1]) > Number(newest))) newest = m[1];
   }
   if (newest) return { id: newest };
-  const rows = [...document.querySelectorAll('[data-ui-name="Row"], tr, [role="row"]')].filter((r) => isSite(r.innerText || r.textContent || ""));
+  // Not the empty list's message -- 'Your search "site.com" did not match any projects' sits in a row too, and
+  // was taken for a project already crawling: no project was ever created, the agent only searched (2026-11-04).
+  const emptyNote = (t) => /nothing found|did not match any projects/i.test(t);
+  const rows = [...document.querySelectorAll('[data-ui-name="Row"], tr, [role="row"]')].filter((r) => {
+    const t = r.innerText || r.textContent || "";
+    return isSite(t) && !emptyNote(t);
+  });
   if (rows.length) {
     const text = (rows[0].innerText || rows[0].textContent || "").replace(/\s+/g, " ").trim();
     // "Set up" = the project exists but its audit was never started.

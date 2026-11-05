@@ -4,8 +4,17 @@ import { Button } from '../ui/Button';
 import { Spinner } from '../ui/Spinner';
 import { TextInput, Textarea } from '../ui/TextInput';
 import { isDraftEditable, parseRecipientsInput, resolveSaveButtonLabel } from './reportStatus';
+import { describeDraftChanges, type DraftChange } from './draftChanges';
+import { DraftChangesList } from './DraftChangesList';
 import type { RankingReport } from '../../api/types';
 import type { UpdateReportDraftInput } from '../../api/client';
+
+/** What the page needs to warn before leaving with unsaved edits (and to save them for the user). */
+export interface PendingDraft {
+  changes: DraftChange[];
+  /** The edits as Save Changes would send them, or null when they can't be saved (e.g. an invalid address). */
+  edits: UpdateReportDraftInput | null;
+}
 
 interface Props {
   report: RankingReport;
@@ -16,9 +25,11 @@ interface Props {
   disabled: boolean;
   /** True right after a successful Save Changes call, until the user edits anything else. */
   justSaved: boolean;
+  /** Called whenever the unsaved edits change; null once everything is saved. */
+  onPendingChange?: (pending: PendingDraft | null) => void;
 }
 
-export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }: Props) {
+export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved, onPendingChange }: Props) {
   const [subject, setSubject] = useState(report.emailSubject ?? '');
   const [body, setBody] = useState(report.emailBody ?? '');
   const [recipientsInput, setRecipientsInput] = useState((report.resolvedRecipients ?? []).join(', '));
@@ -61,6 +72,33 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
     ccInput !== (report.resolvedCc ?? []).join(', ') ||
     clickupTaskUrl !== (report.resolvedClickupTaskUrl ?? '');
   const saveLabel = resolveSaveButtonLabel({ saving, justSaved, isDirty });
+
+  // The same edits, field by field -- shown below and handed to the page for its leave-without-saving check.
+  const changes = isDirty
+    ? describeDraftChanges(
+        {
+          subject: report.emailSubject ?? '',
+          body: report.emailBody ?? '',
+          recipients: report.resolvedRecipients ?? [],
+          cc: report.resolvedCc ?? [],
+          clickupTaskUrl: report.resolvedClickupTaskUrl ?? '',
+        },
+        { subject, body, recipients, cc, clickupTaskUrl },
+      )
+    : [];
+  const edits: UpdateReportDraftInput = {
+    emailSubject: subject,
+    emailBody: body,
+    resolvedRecipients: recipients,
+    resolvedCc: cc,
+    resolvedClickupTaskUrl: clickupTaskUrl.trim() || null,
+  };
+  const pendingKey = isDirty ? JSON.stringify([changes, edits, canSave]) : '';
+  useEffect(() => {
+    onPendingChange?.(pendingKey ? { changes, edits: canSave ? edits : null } : null);
+    // Keyed on the serialized edits, so it fires when they change, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKey]);
 
   return (
     <Card className="p-6">
@@ -131,21 +169,20 @@ export function EmailDraftEditor({ report, onSave, saving, disabled, justSaved }
             <Button
               variant="secondary"
               disabled={!canSave}
-              onClick={() =>
-                onSave({
-                  emailSubject: subject,
-                  emailBody: body,
-                  resolvedRecipients: recipients,
-                  resolvedCc: cc,
-                  resolvedClickupTaskUrl: clickupTaskUrl.trim() || null,
-                })
-              }
+              onClick={() => onSave(edits)}
             >
               {saving && <Spinner />}
               {saveLabel}
             </Button>
             {!saving && isDirty && <span className="text-xs font-medium text-amber-300">Unsaved changes</span>}
             {!saving && !isDirty && justSaved && <span className="text-xs font-medium text-brand-300">Changes saved</span>}
+          </div>
+        )}
+
+        {editable && changes.length > 0 && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-300">Not saved yet</p>
+            <DraftChangesList changes={changes} />
           </div>
         )}
       </div>

@@ -46,6 +46,14 @@ $("record").addEventListener("click", async () => {
 });
 
 $("poll").addEventListener("click", () => chrome.runtime.sendMessage({ type: "poll-now" }).then(render, render));
+$("stop").addEventListener("click", async () => {
+  const { status = {} } = await chrome.storage.local.get("status");
+  if (status.job && !confirm(`Stop ${status.job}? The dashboard shows it as stopped; run it again from there.`)) return;
+  $("stopInfo").textContent = "Stopping…";
+  const res = await chrome.runtime.sendMessage({ type: "stop-reset" }).catch((err) => ({ text: err?.message || String(err) }));
+  $("stopInfo").textContent = res?.text ?? "";
+  render();
+});
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 chrome.storage.onChanged.addListener(render);
 render();

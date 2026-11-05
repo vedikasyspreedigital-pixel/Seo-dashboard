@@ -211,6 +211,36 @@ export async function getRunRows(runId: string): Promise<RunRow[]> {
   return handle<RunRow[]>(res);
 }
 
+/** "Debug details" on the run page: what DataForSEO answered for each keyword (backend/dataforseo/runDiagnostics.ts). */
+export interface RunDiagnostics {
+  engine: string;
+  rows: {
+    keyword: string;
+    location: string;
+    status: string;
+    rank: string | null;
+    rankingUrl: string | null;
+    clientDomain: string | null;
+    otherSite: boolean;
+    attempts: { attempt: number; statusCode: number | null; outcome: string; pages: number | null; organic: number | null; redirects: number | null; error: string | null; at: string }[];
+  }[];
+  summary: {
+    keywords: number;
+    tries: number;
+    byStatusCode: { code: number | null; meaning: string; tries: number; avgPages: number | null }[];
+    earlyStops: number;
+    otherSiteMatches: number;
+    redirects: number;
+    organic: number;
+    rawGone: number;
+  };
+}
+
+export async function getRunDebug(runId: string): Promise<RunDiagnostics> {
+  const res = await apiFetch(`/runs/${runId}/debug`);
+  return handle<RunDiagnostics>(res);
+}
+
 export async function getRunProgress(runId: string): Promise<RunProgress> {
   const res = await apiFetch(`/runs/${runId}/progress`);
   return handle<RunProgress>(res);
@@ -718,6 +748,12 @@ export async function getDomainFetch(id: string): Promise<DomainFetchJob> {
   return handle<DomainFetchJob>(res);
 }
 
+/** Stop buttons: the job ends as "Stopped by <you>" and the office Chrome agent quits within seconds. */
+export async function cancelDomainFetch(id: string): Promise<DomainFetchJob> {
+  const res = await apiFetch(`/domain-intel/fetches/${id}/cancel`, { method: 'POST' });
+  return handle<DomainFetchJob>(res);
+}
+
 /** Upload the tool exports; the report is generated right away and posted to ClickUp in the background. */
 export async function createDomainReport(input: {
   clientId: string;
@@ -809,6 +845,11 @@ export async function getDomainAudit(id: string): Promise<DomainAuditJob> {
   return handle<DomainAuditJob>(res);
 }
 
+export async function cancelDomainAudit(id: string): Promise<DomainAuditJob> {
+  const res = await apiFetch(`/domain-intel/audits/${id}/cancel`, { method: 'POST' });
+  return handle<DomainAuditJob>(res);
+}
+
 /** The client's newest audit of each kind (any state). */
 export async function getLatestDomainAudits(clientId: string): Promise<Partial<Record<DomainAuditKind, DomainAuditJob>>> {
   const res = await apiFetch(`/domain-intel/audits?clientId=${encodeURIComponent(clientId)}`);
@@ -869,6 +910,12 @@ export async function startDomainBundle(input: {
 /** Post a finished run: adds audits retried since (Audits section), then one ClickUp comment. */
 export async function postDomainBundle(id: string): Promise<DomainBundle> {
   const res = await apiFetch(`/domain-intel/bundles/${id}/post`, { method: 'POST' });
+  return handle<DomainBundle>(res);
+}
+
+/** Stops a whole run: what's running ends as "Stopped by <you>", nothing more starts, nothing is posted. */
+export async function cancelDomainBundle(id: string): Promise<DomainBundle> {
+  const res = await apiFetch(`/domain-intel/bundles/${id}/cancel`, { method: 'POST' });
   return handle<DomainBundle>(res);
 }
 

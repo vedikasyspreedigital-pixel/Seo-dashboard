@@ -28,8 +28,10 @@ import { processRun, type CallDataForSeoFn } from './processRun.js';
  * `onlyClientId` limits the sweep to one client (tests share one database).
  */
 export async function recoverStaleProcessingRows(callDataForSeo: CallDataForSeoFn, { onlyClientId }: { onlyClientId?: string } = {}): Promise<void> {
+  // Standard runs belong to the Standard queue (recoverStandardTasksOnStartup) -- their PROCESSING
+  // rows may be searches still waiting at DataForSEO, which must not be reset or re-sent.
   const runs = await prisma.rankingRun.findMany({
-    where: { status: 'PROCESSING', ...(onlyClientId ? { clientId: onlyClientId } : {}) },
+    where: { status: 'PROCESSING', engine: 'live', ...(onlyClientId ? { clientId: onlyClientId } : {}) },
     select: { id: true },
   });
   if (runs.length === 0) return;

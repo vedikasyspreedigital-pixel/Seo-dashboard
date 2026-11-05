@@ -6,6 +6,10 @@ import { createMockEmailSender } from './reporting/mockEmailSender.js';
 import { createClickUpEmailSender, verifyChromiumLaunch } from './reporting/clickupEmailSender.js';
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
 import { recoverStaleProcessingRows } from './worker/recoverStaleRuns.js';
+import { recoverStandardTasksOnStartup, startStandardQueue } from './worker/standardQueue.js';
+import { createStandardClient } from './dataforseo/standardClient.js';
+import { createMockStandardClient } from './dataforseo/mockStandardClient.js';
+import { standardWorkspaceSlugs } from './dataforseo/engine.js';
 import { recoverInterruptedDeliveries } from './worker/recoverInterruptedDeliveries.js';
 import { createClickUpCommentPoster, createMockCommentPoster } from './domainIntel/clickupCommentPoster.js';
 import { createFlikoverAhrefsFetcher, createMockAhrefsFetcher } from './domainIntel/fetchers/flikoverAhrefs.js';
@@ -48,6 +52,9 @@ const PORT = Number(process.env.PORT ?? 3001);
 // This is the actual gate on real API calls/spend, not just a convention.
 const useLive = process.env.DATAFORSEO_LIVE === 'true';
 const callDataForSeo = useLive ? callDataForSeoLive : createMockDataForSeoClient();
+
+const standardWorkspaces = [...standardWorkspaceSlugs()];
+if (standardWorkspaces.length) console.log(`DataForSEO: Standard (queue) method for workspace(s): ${standardWorkspaces.join(', ')}; Live for the rest.`);
 
 if (useLive) {
   console.log('DataForSEO: LIVE mode -- real API calls will be made and billed.');
@@ -189,7 +196,13 @@ async function start() {
   // accepting requests; the actual resumed DataForSEO calls run in the
   // background and don't block startup.
   // Not without DataForSEO's login in live mode: resuming would hang on the first keyword. Runs wait until it's set.
-  if (!useLive || hasDataForSeoCredentials()) await recoverStaleProcessingRows(callDataForSeo);
+  if (!useLive || hasDataForSeoCredentials()) {
+    await recoverStaleProcessingRows(callDataForSeo);
+    // Standard runs (workspaces in DATAFORSEO_STANDARD_WORKSPACES): searches still waiting at
+    // DataForSEO carry on; the queue's timer keeps submitting and collecting from here.
+    await recoverStandardTasksOnStartup();
+    startStandardQueue(useLive ? createStandardClient() : createMockStandardClient());
+  }
   // Report emails / Domain Intelligence comments cut off mid-send: retryable, with "check ClickUp first".
   await recoverInterruptedDeliveries();
   await loadSavedAudits();

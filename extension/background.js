@@ -1,4 +1,4 @@
-import { AgentError, waitForLoad } from "./lib/browser.js";
+import { AgentError, clearStop, requestStop, waitForLoad } from "./lib/browser.js";
 import { runAhrefs } from "./flows/ahrefs.js";
 import { runSemrush, runSemrushCompetitors, runUbersuggest } from "./flows/seotooladda.js";
 import { runSiteAudit } from "./flows/siteaudit.js";
@@ -65,13 +65,37 @@ const json = (body) => ({ method: "POST", headers: { "Content-Type": "applicatio
 let busy = false;
 let jobWindowId = null;
 let activeTool = null;
+// The job being run, and a counter that a forced reset bumps -- a job it gave up on then leaves the
+// agent's state (window, status, busy) alone when it finally ends.
+let currentTask = null;
+let runId = 0;
+let pollId = 0;
+let checkTimer = null;
+/** How often a running job asks the dashboard whether it was stopped there. */
+const STOP_CHECK_MS = 5000;
+const STOPPED_ON_DASHBOARD = "Stopped on the dashboard.";
 
 async function runTask(task) {
   const flow = FLOWS[task.tool];
+  const myRun = ++runId;
+  let myWindow = null;
+  currentTask = task;
+  clearStop();
+  // Stop on the dashboard: the server answers 410 for this job from then on.
+  clearInterval(checkTimer);
+  checkTimer = setInterval(() => {
+    api(`/tasks/${task.id}`)
+      .then((res) => res.status === 410 && requestStop(STOPPED_ON_DASHBOARD))
+      .catch(() => {});
+  }, STOP_CHECK_MS);
   const ctx = {
     progress: async (step, needsHuman = false) => {
       await setStatus({ state: needsHuman ? "needs_human" : "working", job: `${task.tool} · ${task.domain}`, step });
-      await api(`/tasks/${task.id}/progress`, json({ step, needsHuman }));
+      const res = await api(`/tasks/${task.id}/progress`, json({ step, needsHuman }));
+      if (res.status === 410) {
+        requestStop(STOPPED_ON_DASHBOARD);
+        throw new AgentError("CANCELLED", STOPPED_ON_DASHBOARD);
+      }
     },
     // Each job runs in its own window (not minimised -- pages must render), closed afterwards.
     openTab: async (url) => {
@@ -82,7 +106,7 @@ async function runTask(task) {
       const win = await chrome.windows
         .create({ url, focused: watch, state: "maximized" })
         .catch(() => chrome.windows.create({ url, focused: watch, width: 1400, height: 900 }));
-      jobWindowId = win.id;
+      jobWindowId = myWindow = win.id;
       const tabId = win.tabs[0].id;
       await new Promise((r) => setTimeout(r, 500));
       await waitForLoad(tabId);
@@ -107,21 +131,64 @@ async function runTask(task) {
     await setStatus({ state: "idle", lastResult: `✓ ${task.tool} · ${task.domain} · ${fileName}`, step: null, job: null });
   } catch (err) {
     const code = err instanceof AgentError ? err.code : "FAILED";
+    const stoppedHere = code === "CANCELLED" && err.message !== STOPPED_ON_DASHBOARD;
     // Where the job window was when it failed (2026-10-29: the window closes afterwards, so nobody could see it).
     // (Room kept for it: the server keeps 500 characters.)
-    const message = `${(err?.message || String(err)).slice(0, 400)}${await whereItStopped()}`;
-    await api(`/tasks/${task.id}/fail`, json({ code, message })).catch(() => {});
+    const message = `${(err?.message || String(err)).slice(0, 400)}${code === "CANCELLED" ? "" : await whereItStopped()}`;
+    // Stopped on the dashboard: the server already knows. Stopped here (popup): tell it.
+    if (code !== "CANCELLED" || stoppedHere) await api(`/tasks/${task.id}/fail`, json({ code, message })).catch(() => {});
     // A reused tool session may be what failed: the next report goes through seotooladda's "Go" again.
     await chrome.storage.local.remove("toolOpenedAt").catch(() => {});
-    await setStatus({ state: "idle", lastResult: `✗ ${task.tool} · ${task.domain}: ${message}`, step: null, job: null });
-    // Watching (Settings): leave the failed job's window open on the page where it stopped.
+    if (myRun === runId) await setStatus({ state: "idle", lastResult: `✗ ${task.tool} · ${task.domain}: ${message}`, step: null, job: null });
+    // Watching (Settings): leave a failed job's window open on the page where it stopped (not a stopped one).
     const { watch = false } = await chrome.storage.local.get("watch");
-    if (watch) jobWindowId = null;
+    if (watch && code !== "CANCELLED") myWindow = null;
   } finally {
-    activeTool = null;
-    if (jobWindowId !== null) await chrome.windows.remove(jobWindowId).catch(() => {});
-    jobWindowId = null;
+    if (myWindow !== null) await chrome.windows.remove(myWindow).catch(() => {});
+    if (myRun === runId) {
+      activeTool = null;
+      jobWindowId = null;
+      currentTask = null;
+      clearInterval(checkTimer);
+      clearStop();
+    }
   }
+}
+
+/**
+ * The popup's "Stop / Reset": stops the running job (the dashboard shows it as stopped on the office
+ * computer). A job that doesn't stop within 10 seconds -- stuck on something that never returns -- is
+ * dropped: its window closed, and the agent free for the next job again. With no job, it just clears a
+ * stuck "working" state.
+ */
+async function stopAndReset() {
+  const task = currentTask;
+  if (!task) {
+    pollId++;
+    busy = false;
+    await chrome.storage.local.remove("toolOpenedAt").catch(() => {});
+    await setStatus({ state: "idle", step: null, job: null });
+    return "Nothing was running -- the agent is reset and ready.";
+  }
+  const reason = "Stopped on the office computer (the agent's Stop button).";
+  requestStop(reason);
+  const myRun = runId;
+  for (let i = 0; i < 20 && currentTask === task && runId === myRun; i++) await new Promise((r) => setTimeout(r, 500));
+  if (currentTask !== task || runId !== myRun) return `Stopped ${task.tool} · ${task.domain}.`;
+  // Still stuck: give up on it.
+  runId++;
+  pollId++;
+  await api(`/tasks/${task.id}/fail`, json({ code: "CANCELLED", message: reason })).catch(() => {});
+  if (jobWindowId !== null) await chrome.windows.remove(jobWindowId).catch(() => {});
+  jobWindowId = null;
+  currentTask = null;
+  activeTool = null;
+  busy = false;
+  clearInterval(checkTimer);
+  clearStop();
+  await chrome.storage.local.remove("toolOpenedAt").catch(() => {});
+  await setStatus({ state: "idle", step: null, job: null, lastResult: `✗ ${task.tool} · ${task.domain}: stopped (reset)` });
+  return `Stopped ${task.tool} · ${task.domain} (it was stuck, so it was reset).`;
 }
 
 /**
@@ -149,6 +216,7 @@ async function poll() {
     return;
   }
   busy = true;
+  const myPoll = ++pollId;
   try {
     const res = await api(`/tasks/next?version=${encodeURIComponent(VERSION)}`);
     await setStatus({ connected: true, error: null, lastPollAt: Date.now() });
@@ -161,7 +229,7 @@ async function poll() {
   } catch (err) {
     await setStatus({ connected: false, error: err?.message || String(err) });
   } finally {
-    busy = false;
+    if (myPoll === pollId) busy = false; // a reset already freed the agent for a newer poll
   }
 }
 
@@ -230,6 +298,7 @@ chrome.runtime.onStartup.addListener(poll);
 chrome.runtime.onInstalled.addListener(poll);
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg?.type === "poll-now") poll().then(() => reply({ ok: true }));
+  else if (msg?.type === "stop-reset") stopAndReset().then((text) => reply({ ok: true, text }), (err) => reply({ ok: false, text: err?.message || String(err) }));
   else if (msg?.type === "record" && sender.tab) addRecordEntry(msg.entry, sender.tab).then(() => reply({ ok: true }));
   else if (msg?.type === "record-start")
     chrome.storage.local.set({ recording: true, recordingSteps: [] }).then(() => reply({ ok: true }));

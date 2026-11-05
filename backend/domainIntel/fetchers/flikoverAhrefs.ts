@@ -24,7 +24,7 @@ import type { Browser, Page } from "playwright";
 // - Selectors are scoped to what the user actually clicked (placeholder,
 //   button names, the export dialog) -- no page-wide guesses.
 
-export type FetchErrorCode = "SESSION_EXPIRED" | "MULTIPLE_SESSIONS" | "BOT_CHECK" | "NO_SESSION" | "NO_DATA" | "TIMEOUT" | "FAILED" | "AGENT_OFFLINE";
+export type FetchErrorCode = "SESSION_EXPIRED" | "MULTIPLE_SESSIONS" | "BOT_CHECK" | "NO_SESSION" | "NO_DATA" | "TIMEOUT" | "FAILED" | "AGENT_OFFLINE" | "CANCELLED";
 
 export class FetchError extends Error {
   constructor(
@@ -41,6 +41,13 @@ export interface FetchRequest {
   /** Semrush-style country code from the page ("au", "uk", ...). */
   location: string | null;
   onStep?: (step: string) => void;
+  /** Stop pressed on the page (its reason is the message to show). Only the office Chrome agent acts on it. */
+  signal?: AbortSignal;
+}
+
+/** The error a stopped job ends with -- "Stopped by <who>" (the abort reason). */
+export function cancelledError(signal?: AbortSignal): FetchError {
+  return new FetchError("CANCELLED", typeof signal?.reason === "string" ? signal.reason : "Stopped.");
 }
 
 export interface FetchedExport {

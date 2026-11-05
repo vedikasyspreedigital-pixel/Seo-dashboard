@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { KeywordExportError, SOURCE_LABELS, readKeywordExport, type KeywordSource } from "./readKeywordExport.js";
 import { domainReportDir } from "./createDomainReport.js";
-import { FetchError, bareDomain, runExclusive, type FetchExportFn } from "./fetchers/flikoverAhrefs.js";
+import { FetchError, bareDomain, cancelledError, runExclusive, type FetchExportFn } from "./fetchers/flikoverAhrefs.js";
 
 // Domain Intelligence Phase 2, the user's flow (2026-10-19): "Fetch from
 // Ahrefs" runs in the background while the user uploads the Semrush and
@@ -37,6 +37,8 @@ export interface FetchJob {
 
 const KEEP_MS = 24 * 60 * 60 * 1000;
 const jobs = new Map<string, FetchJob>();
+/** Running jobs' Stop switches. */
+const stoppers = new Map<string, AbortController>();
 const fetchDir = () => path.join(domainReportDir("fetches"));
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
 
@@ -107,22 +109,37 @@ export async function startFetch(
     updatedAt: now,
   };
   jobs.set(job.id, job);
-  void run(job, fetcher);
+  const stopper = new AbortController();
+  stoppers.set(job.id, stopper);
+  void run(job, fetcher, stopper.signal).finally(() => stoppers.delete(job.id));
   return job;
 }
 
-async function run(job: FetchJob, fetcher: FetchExportFn) {
+/** Stop on the page: the job ends at once as "Stopped by <who>"; a job still queued never starts. */
+export function cancelFetch(id: string, by: string): FetchJob | undefined {
+  const job = jobs.get(id);
+  if (!job || (job.state !== "queued" && job.state !== "fetching")) return job;
+  const reason = `Stopped by ${by}.`;
+  update(job, { state: "failed", step: undefined, code: "CANCELLED", error: reason });
+  stoppers.get(id)?.abort(reason);
+  return job;
+}
+
+async function run(job: FetchJob, fetcher: FetchExportFn, signal: AbortSignal) {
   try {
     const fetched = await runExclusive(() => {
+      if (signal.aborted) throw cancelledError(signal);
       update(job, { state: "fetching", step: "Starting" });
-      return fetcher({ domain: bareDomain(job.websiteUrl), location: job.location, onStep: (step) => update(job, { step }) });
+      return fetcher({ domain: bareDomain(job.websiteUrl), location: job.location, onStep: (step) => !signal.aborted && update(job, { step }), signal });
     });
+    if (signal.aborted) return;
     const parsed = await readKeywordExport(job.source, fetched.buffer, fetched.fileName);
     await mkdir(fetchDir(), { recursive: true });
     const filePath = path.join(fetchDir(), `${job.id}-${safeName(fetched.fileName)}`);
     await writeFile(filePath, fetched.buffer);
     update(job, { state: "done", step: undefined, keywords: parsed.rows.length, fileName: fetched.fileName, filePath });
   } catch (err) {
+    if (signal.aborted) return; // already shown as stopped
     const code = err instanceof FetchError ? err.code : err instanceof KeywordExportError ? "BAD_EXPORT" : "FAILED";
     if (!(err instanceof FetchError) && !(err instanceof KeywordExportError)) console.error(`[domainIntel] ${job.source} fetch ${job.id} failed:`, err);
     // Known failures too (signed out, no data, ...) -- one line, so a tool dropping out of a run is traceable.

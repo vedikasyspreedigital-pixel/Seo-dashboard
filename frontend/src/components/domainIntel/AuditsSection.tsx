@@ -19,6 +19,7 @@ export function AuditsSection({
   canStart,
   disabled,
   onRun,
+  onStop,
   onDownload,
 }: {
   audits: Partial<Record<DomainAuditKind, DomainAuditJob>>;
@@ -27,6 +28,8 @@ export function AuditsSection({
   canStart: boolean;
   disabled: boolean;
   onRun: (kind: DomainAuditKind) => void;
+  /** Stop a running audit (the agent quits within seconds). */
+  onStop: (job: DomainAuditJob) => void;
   onDownload: (job: DomainAuditJob) => void;
 }) {
   const sourceDone = audits.siteaudit?.state === 'done' || audits.woorank?.state === 'done';
@@ -62,6 +65,11 @@ export function AuditsSection({
                 <Button variant="secondary" className="!py-1.5 text-xs" disabled={!canStart || disabled || running || needsAgent || needsSource} onClick={() => onRun(kind)}>
                   {job?.state === 'failed' ? 'Try again' : job ? 'Run again' : 'Run'}
                 </Button>
+                {running && job && (
+                  <Button variant="danger" className="!py-1.5 text-xs" onClick={() => onStop(job)}>
+                    Stop
+                  </Button>
+                )}
                 {job?.state === 'done' && (
                   <Button variant="ghost" className="!py-1.5 text-xs" onClick={() => onDownload(job)}>
                     Download

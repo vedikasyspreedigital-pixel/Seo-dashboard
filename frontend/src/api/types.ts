@@ -138,6 +138,10 @@ export interface RunProgress {
   completed: number;
   errorRetry: number;
   failed: number;
+  /** "standard" = checked through DataForSEO's queue (backend dataforseo/engine.ts). */
+  engine?: 'live' | 'standard';
+  /** Standard runs: searches sent and waiting in DataForSEO's queue (always 0 for Live). */
+  waitingAtDataForSeo?: number;
 }
 
 export interface RowError {

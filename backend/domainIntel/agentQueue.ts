@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { FetchError, type FetchExportFn, type FetchedExport } from "./fetchers/flikoverAhrefs.js";
+import { FetchError, cancelledError, type FetchExportFn, type FetchedExport } from "./fetchers/flikoverAhrefs.js";
 import type { KeywordSource } from "./readKeywordExport.js";
 
 // Domain Intelligence: the "office Chrome agent" (user's decision, 2026-10-21).
@@ -93,11 +93,14 @@ function ensureSweeper() {
 
 /** A FetchExportFn whose work is done by the extension. */
 export function createAgentFetcher(tool: AgentTool): FetchExportFn {
-  return ({ domain, location, onStep }) =>
+  return ({ domain, location, onStep, signal }) =>
     new Promise<FetchedExport>((resolve, reject) => {
+      if (signal?.aborted) return reject(cancelledError(signal));
       ensureSweeper();
       const task: AgentTask = { id: randomUUID(), tool, domain, location, state: "pending", createdAt: Date.now() };
       waiting.set(task.id, { task, onStep, resolve, reject });
+      // Stop on the page: the task is gone, so the agent's next check-in (every few seconds) gets 410 and quits.
+      signal?.addEventListener("abort", () => finish(task.id, { error: cancelledError(signal) }), { once: true });
       onStep?.("Waiting for the office Chrome agent");
     });
 }
@@ -135,12 +138,19 @@ export function reportProgress(id: string, step: string, needsHuman = false) {
   w.onStep?.(needsHuman ? humanStep : step);
 }
 
+/** Extension, every few seconds during a job: throws AgentTaskGone once the job was stopped (or timed out). */
+export function checkTask(id: string) {
+  claimed(id);
+  lastSeenAt = Date.now();
+}
+
 export function completeTask(id: string, result: FetchedExport) {
   claimed(id);
   finish(id, { result });
 }
 
-const AGENT_CODES = ["SESSION_EXPIRED", "MULTIPLE_SESSIONS", "BOT_CHECK", "NO_DATA", "TIMEOUT", "FAILED"] as const;
+// CANCELLED: "Stop / Reset" pressed in the agent's own popup on the office computer.
+const AGENT_CODES = ["SESSION_EXPIRED", "MULTIPLE_SESSIONS", "BOT_CHECK", "NO_DATA", "TIMEOUT", "FAILED", "CANCELLED"] as const;
 
 export function failTask(id: string, code: string, message: string) {
   claimed(id);

@@ -7,7 +7,9 @@ import { Spinner } from '../../components/ui/Spinner';
 import { ReportWorkingCard } from '../../components/report/ReportWorkingCard';
 import { ReportLoadFailed } from '../../components/report/ReportLoadFailed';
 import { ReportErrorBanner } from '../../components/report/ReportErrorBanner';
-import { EmailDraftEditor } from '../../components/report/EmailDraftEditor';
+import { EmailDraftEditor, type PendingDraft } from '../../components/report/EmailDraftEditor';
+import { DraftChangesList } from '../../components/report/DraftChangesList';
+import { Modal } from '../../components/ui/Modal';
 import { EmailTemplateToggle } from '../../components/report/EmailTemplateToggle';
 import { ExtraAttachmentsCard } from '../../components/report/ExtraAttachmentsCard';
 import { Badge } from '../../components/ui/Badge';
@@ -30,6 +32,20 @@ export function EmailDraftPage() {
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  // Edits typed but not saved, and whether the "you haven't saved" check before Send is open.
+  const [pending, setPending] = useState<PendingDraft | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+
+  // Refreshing or closing the tab with unsaved edits asks first (the browser shows its own message).
+  useEffect(() => {
+    if (!pending) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [pending]);
 
   useEffect(() => {
     if (!reportId) return;
@@ -56,8 +72,9 @@ export function EmailDraftPage() {
     return updated;
   }
 
-  async function handleSave(edits: UpdateReportDraftInput) {
-    if (!reportId || busy) return; // guard against double-clicks/duplicate requests
+  // Returns whether the save went through, so "Save and continue" only moves on after a real save.
+  async function handleSave(edits: UpdateReportDraftInput): Promise<boolean> {
+    if (!reportId || busy) return false; // guard against double-clicks/duplicate requests
     setBusy(true);
     setSavingDraft(true);
     setError(null);
@@ -72,16 +89,34 @@ export function EmailDraftPage() {
       const updated = await updateReportDraft(reportId, edits);
       setReport(updated);
       setJustSaved(true);
+      return true;
     } catch (err) {
       // Deliberately do NOT touch `report` here -- EmailDraftEditor's form
       // state stays exactly as the user left it (it only resyncs from
       // `report`, which is untouched on failure), so a failed save never
       // loses the user's edits and never shows a false "Saved".
       setError((err as Error).message);
+      return false;
     } finally {
       setBusy(false);
       setSavingDraft(false);
     }
+  }
+
+  // Preview Send: the email is sent as SAVED, so unsaved edits get a check first.
+  function handlePreviewSend() {
+    if (busy) return;
+    if (pending) {
+      setConfirmLeave(true);
+      return;
+    }
+    navigate(`/reports/${reportId}/send`);
+  }
+
+  async function handleSaveAndContinue() {
+    if (!pending?.edits) return;
+    setConfirmLeave(false);
+    if (await handleSave(pending.edits)) navigate(`/reports/${reportId}/send`);
   }
 
   async function handleRegenerate() {
@@ -145,7 +180,7 @@ export function EmailDraftPage() {
       <PageHeader
         breadcrumbs={[{ label: '← Back to Report Preview', to: `/reports/${reportId}/preview` }, { label: 'Email Draft' }]}
         action={
-          <Button disabled={busy} onClick={() => !busy && navigate(`/reports/${reportId}/send`)}>
+          <Button disabled={busy} onClick={handlePreviewSend}>
             Preview Send &rarr;
           </Button>
         }
@@ -175,6 +210,7 @@ export function EmailDraftPage() {
           saving={savingDraft}
           disabled={busy}
           justSaved={justSaved}
+          onPendingChange={setPending}
         />
       </div>
 
@@ -197,6 +233,45 @@ export function EmailDraftPage() {
           )}
         </div>
       )}
+
+      <Modal
+        open={confirmLeave && pending !== null}
+        onClose={() => setConfirmLeave(false)}
+        title="You haven't saved your changes"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmLeave(false)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setConfirmLeave(false);
+                navigate(`/reports/${reportId}/send`);
+              }}
+            >
+              Continue without saving
+            </Button>
+            <Button disabled={!pending?.edits} onClick={() => void handleSaveAndContinue()}>
+              Save and continue
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-[var(--color-ink-muted)]">
+          The email is sent as last saved. These changes are <strong>not</strong> saved yet, so they won't be in the email unless you save them:
+        </p>
+        <div className="mt-4">
+          {pending && pending.changes.length > 0 ? (
+            <DraftChangesList changes={pending.changes} />
+          ) : (
+            <p className="text-sm text-[var(--color-ink-muted)]">Only spacing/formatting changes in the address fields.</p>
+          )}
+        </div>
+        {pending && !pending.edits && (
+          <p className="mt-4 text-sm text-amber-300">These changes can't be saved as they are (e.g. an invalid email address or an empty subject). Keep editing to fix them.</p>
+        )}
+      </Modal>
     </AppShell>
   );
 }

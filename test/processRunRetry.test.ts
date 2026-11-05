@@ -41,14 +41,15 @@ async function makeRun(clientId: string) {
   });
 }
 
-async function makeRow(runId: string, overrides: Partial<{ maxRetries: number }> = {}) {
+async function makeRow(runId: string, overrides: Partial<{ maxRetries: number; targetUrl: string }> = {}) {
   return prisma.rankingRow.create({
     data: {
       runId,
       rowUid: randomUUID(),
       sourceRowNumber: 1,
       keyword: "test keyword",
-      targetUrl: "*example.*",
+      // Live is matched locally since 2026-11-05 (no target sent), so fixture URLs must match the target.
+      targetUrl: overrides.targetUrl ?? "*example.*",
       locationName: "Australia",
       seDomain: "google.com.au",
       languageName: "English",
@@ -205,7 +206,7 @@ test("40102 with a shallow crawl (pages_count short of depth) is retried, then s
   const client = await makeClient();
   try {
     const run = await makeRun(client.id);
-    const row = await makeRow(run.id, { maxRetries: 3 });
+    const row = await makeRow(run.id, { targetUrl: "*emiratessound.*", maxRetries: 3 });
 
     let callCount = 0;
     const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => {
@@ -264,7 +265,7 @@ test("40106 with a matching item is accepted immediately -- no retry needed, ran
   const client = await makeClient();
   try {
     const run = await makeRun(client.id);
-    const row = await makeRow(run.id, { maxRetries: 3 });
+    const row = await makeRow(run.id, { targetUrl: "*pangalark.*", maxRetries: 3 });
 
     let callCount = 0;
     const callDataForSeo = async (_payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => {
@@ -345,4 +346,66 @@ test("backoffDelayMs doubles per retry and caps at 60s", () => {
   assert.equal(backoffDelayMs(2), 30_000);
   assert.equal(backoffDelayMs(3), 60_000);
   assert.equal(backoffDelayMs(10), 60_000);
+});
+
+// Live without target (2026-11-05): Wayfarer Footprints, "central asia road trip kyrgyzstan kazakhstan" --
+// Google #1, but Live+target said "No Search Results"; the full top 100 had the client at rank 1 as a
+// google.co.in/goto redirect link whose breadcrumb is the client's site.
+test("Live asks for the whole top 100 (no target) and finds the client behind a Google redirect link by its breadcrumb", async () => {
+  const client = await makeClient();
+  try {
+    const run = await makeRun(client.id);
+    const row = await prisma.rankingRow.create({
+      data: {
+        runId: run.id,
+        rowUid: randomUUID(),
+        sourceRowNumber: 1,
+        keyword: "central asia road trip kyrgyzstan kazakhstan",
+        targetUrl: "*wayfarerfootprints.*",
+        fullUrl: "wayfarerfootprints.com",
+        locationName: "India",
+        seDomain: "google.co.in",
+        languageName: "English",
+        status: "PENDING",
+        maxRetries: 3,
+      },
+    });
+    const sent: DataForSeoRequestPayload[] = [];
+    const callDataForSeo = async (payload: DataForSeoRequestPayload): Promise<DataForSeoCallResult> => {
+      sent.push(payload);
+      return {
+        httpStatus: 200,
+        body: {
+          status_code: 20000,
+          status_message: "Ok.",
+          tasks: [{
+            status_code: 20000,
+            status_message: "Ok.",
+            result: [{
+              keyword: payload.keyword,
+              pages_count: 10,
+              items: [
+                { type: "organic", rank_group: 1, rank_absolute: 2, domain: "google.co.in", url: "https://google.co.in/goto?url=CAESkQEB", breadcrumb: "https://www.wayfarerfootprints.com › Blog" },
+                { type: "organic", rank_group: 2, rank_absolute: 3, domain: "adventuresoflilnicki.com", url: "https://adventuresoflilnicki.com/kazakhstan-kyrgyzstan-itinerary/", breadcrumb: "https://adventuresoflilnicki.com › kazakhstan-kyrgyzsta..." },
+                { type: "organic", rank_group: 3, rank_absolute: 4, domain: "wayfarerfootprints-tours.com", url: "https://wayfarerfootprints-tours.com/x", breadcrumb: "https://wayfarerfootprints-tours.com" },
+              ],
+            }],
+          }],
+        },
+      };
+    };
+    await processRun(run.id, callDataForSeo, { sleep: noSleep });
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].target, undefined, "no target is sent to Live");
+    assert.deepEqual(sent[0].stop_crawl_on_match, [{ match_type: "with_subdomains", match_value: "wayfarerfootprints.com" }]);
+    const done = await prisma.rankingRow.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(done.status, "COMPLETED");
+    assert.equal(done.rankValue, 1);
+    assert.equal(done.rankingUrl, "https://www.wayfarerfootprints.com/Blog");
+    const attempt = await prisma.rankingRowAttempt.findFirstOrThrow({ where: { rankingRowId: row.id } });
+    assert.equal((attempt.rawResponse as { tasks: { result: { items: unknown[] }[] }[] }).tasks[0].result[0].items.length, 3, "the full answer is what's saved");
+  } finally {
+    await cleanup(client.id);
+  }
 });
