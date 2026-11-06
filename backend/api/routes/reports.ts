@@ -8,6 +8,8 @@ import { prisma } from "../../db/client.js";
 import { rejectReport } from "../../reporting/reportTransitions.js";
 import { updateReportDraft, setCustomPdfAttachment } from "../../reporting/editReportDraft.js";
 import { approveAndSendReport } from "../../reporting/approveAndSend.js";
+import { markReportSentManually, countKeywordMatches, MANUAL_SEND_FROM, MIN_KEYWORD_MATCH } from "../../reporting/markSentManually.js";
+import { parseBaselineFile } from "../../baselines/parseBaselineFile.js";
 import { generateEmailDraft, regenerateEmailDraft, setEmailVariant } from "../../reporting/generateEmailDraft.js";
 import { addExtraAttachments, removeExtraAttachment, readExtraAttachments, previewExcelAttachment, ExtraAttachmentError, MAX_EXTRA_ATTACHMENTS, MAX_EXTRA_ATTACHMENT_BYTES } from "../../reporting/extraAttachments.js";
 import { createReportForRun } from "../../reporting/createReport.js";
@@ -55,6 +57,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // by the "-custom" suffix so neither ever collides with or overwrites
 // the other.
 const REPORTS_DIR = process.env.REPORTS_DIR ? path.resolve(process.env.REPORTS_DIR) : path.resolve(__dirname, "../../../reports");const uploadCustomPdf = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const uploadSentReport = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const uploadExtraPdfs = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_EXTRA_ATTACHMENT_BYTES, files: MAX_EXTRA_ATTACHMENTS } });
 
 export interface ReportsRouterDeps {
@@ -442,6 +445,74 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
             ? 422
             : 502;
     res.status(statusCode).json(result);
+  });
+
+  // "Mark as sent manually" -- the report went out outside the dashboard (ClickUp by hand, or the team's
+  // own file instead of the generated one). Step 1: read the file the client actually got and show its
+  // ranks, date and how many of this report's keywords it has. Writes nothing.
+  router.post("/:id/sent-manually/preview", uploadSentReport.single("file"), async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    if (!req.file) {
+      res.status(400).json({ error: "Upload the report file that was sent to the client (.xlsx or .pdf)." });
+      return;
+    }
+    const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, select: { status: true, runId: true } });
+    if (!MANUAL_SEND_FROM.includes(report.status)) {
+      res.status(409).json({ error: `This report is ${report.status.toLowerCase().replace(/_/g, " ")} -- it can't be marked as sent manually.` });
+      return;
+    }
+    try {
+      const preview = await parseBaselineFile(req.file.buffer);
+      const runRows = await prisma.rankingRow.findMany({ where: { runId: report.runId }, select: { keyword: true } });
+      const { matched, total } = countKeywordMatches(runRows.map((r) => r.keyword), preview.rows);
+      res.json({ ...preview, sourceFilename: req.file.originalname, matchedKeywords: matched, totalKeywords: total, minMatch: MIN_KEYWORD_MATCH });
+    } catch (err) {
+      res.status(422).json({ error: (err as Error).message });
+    }
+  });
+
+  // Step 2: mark it SENT (no email goes out) and save exactly the reviewed rows as this run's baseline.
+  router.post("/:id/sent-manually", async (req, res) => {
+    const reportId = req.params.id as string;
+    if (!(await findOwnedReportOrRespond(req, res, reportId, { requireActive: true }))) return;
+    const { sourceFilename, sourceType, baselineDate, sentAt, rows } = req.body ?? {};
+    if (typeof sourceFilename !== "string" || sourceFilename.length === 0) {
+      res.status(400).json({ error: "sourceFilename is required" });
+      return;
+    }
+    if (sourceType !== "EXCEL" && sourceType !== "PDF") {
+      res.status(400).json({ error: 'sourceType must be "EXCEL" or "PDF"' });
+      return;
+    }
+    if (typeof baselineDate !== "string" || typeof sentAt !== "string") {
+      res.status(400).json({ error: "baselineDate and sentAt are required" });
+      return;
+    }
+    const result = await markReportSentManually(reportId, {
+      markedBy: req.authUser!.email,
+      sentAt: new Date(sentAt),
+      file: { sourceFilename, sourceType, baselineDate: new Date(baselineDate), rows },
+    });
+    switch (result.outcome) {
+      case "SENT":
+        res.json(result);
+        return;
+      case "NOT_FOUND":
+        res.status(404).json({ error: "Report not found" });
+        return;
+      case "WRONG_STATUS":
+        res.status(409).json({ error: `This report is ${result.status.toLowerCase().replace(/_/g, " ")} -- it can't be marked as sent manually.` });
+        return;
+      case "INVALID":
+        res.status(400).json({ error: result.error });
+        return;
+      case "WRONG_FILE":
+        res.status(422).json({
+          error: `This file has only ${result.matched} of this report's ${result.total} keywords -- it looks like a different client's or an older report. Upload the report that was actually sent.`,
+        });
+        return;
+    }
   });
 
   router.post("/:id/reject", async (req, res) => {

@@ -262,7 +262,8 @@ export interface RankingReport {
   /** The day the PDF was last (re)built -- its current-column date, also used for the email's end date. Null on older reports. */
   reportDate: string | null;
   /** Send history, newest first -- only populated by GET /reports/:id. A corrected report can be sent more than once. */
-  sends?: { id: string; sentAt: string; sentBy: string | null; subject: string | null }[];
+  /** manual: marked "sent manually" -- no email went out from the dashboard; sourceFilename is the file the client actually got. */
+  sends?: { id: string; sentAt: string; sentBy: string | null; subject: string | null; manual?: boolean; sourceFilename?: string | null }[];
   approvedBy: string | null;
   approvedAt: string | null;
   sentAt: string | null;
@@ -310,6 +311,14 @@ export interface BaselinePreview {
   rows: BaselinePreviewRow[];
   sourceFilename: string;
   sourceType: BaselineSourceType;
+}
+
+/** The sent file's preview plus how many of the report's keywords it has (mark as sent manually). */
+export interface SentReportPreview extends BaselinePreview {
+  matchedKeywords: number;
+  totalKeywords: number;
+  /** Below this share of matching keywords the file is refused as the wrong report. */
+  minMatch: number;
 }
 
 export interface BaselineRecord {

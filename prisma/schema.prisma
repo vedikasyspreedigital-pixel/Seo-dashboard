@@ -445,6 +445,11 @@ model ReportSend {
   sentAt   DateTime      @default(now()) @map("sent_at")
   sentBy   String?       @map("sent_by")
   subject  String?
+  // True when someone sent the report outside the dashboard (ClickUp/email by hand) and then used
+  // "Mark as sent manually": no email went out from here, and the client's baseline came from
+  // sourceFilename -- the file they actually sent -- not from the generated report.
+  manual         Boolean @default(false)
+  sourceFilename String? @map("source_filename")
 
   @@index([reportId, sentAt])
   @@map("report_sends")

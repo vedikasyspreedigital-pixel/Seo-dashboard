@@ -1,6 +1,9 @@
 import { prisma } from "../db/client.js";
 import { normalizeKeyword } from "./normalizeKeyword.js";
-import { BaselineSourceType } from "@prisma/client";
+import { BaselineSourceType, Prisma, type RankingBaseline } from "@prisma/client";
+
+/** The prisma client, or a transaction from prisma.$transaction(async (tx) => ...). */
+type Db = Prisma.TransactionClient;
 
 export interface BaselineRowInput {
   keyword: string;
@@ -34,8 +37,8 @@ function toRowCreates(rows: BaselineRowInput[]) {
  * so both stay one baseline created per call, never overwriting a client's
  * prior baselines (see RankingBaseline's own schema comment).
  */
-export async function createBaselineFromRows(clientId: string, input: CreateBaselineFromRowsInput) {
-  return prisma.rankingBaseline.create({
+export async function createBaselineFromRows(clientId: string, input: CreateBaselineFromRowsInput, db: Db = prisma) {
+  return db.rankingBaseline.create({
     data: {
       clientId,
       sourceFilename: input.sourceFilename,
@@ -54,17 +57,21 @@ export async function createBaselineFromRows(clientId: string, input: CreateBase
  * rows and date in place (never stacking a second baseline for the same run).
  * Manual imports and other runs' baselines are never touched.
  */
-export async function upsertRunBaseline(clientId: string, runId: string, input: Omit<CreateBaselineFromRowsInput, "sourceRunId">) {
-  const existing = await prisma.rankingBaseline.findFirst({ where: { clientId, sourceRunId: runId }, orderBy: { createdAt: "desc" } });
-  if (!existing) return createBaselineFromRows(clientId, { ...input, sourceRunId: runId });
+export async function upsertRunBaseline(
+  clientId: string,
+  runId: string,
+  input: Omit<CreateBaselineFromRowsInput, "sourceRunId">,
+  tx?: Db,
+): Promise<RankingBaseline> {
+  if (!tx) return prisma.$transaction((t): Promise<RankingBaseline> => upsertRunBaseline(clientId, runId, input, t));
 
-  const [, , updated] = await prisma.$transaction([
-    prisma.rankingBaselineRow.deleteMany({ where: { baselineId: existing.id } }),
-    prisma.rankingBaselineRow.createMany({ data: toRowCreates(input.rows).map((row) => ({ ...row, baselineId: existing.id })) }),
-    prisma.rankingBaseline.update({
-      where: { id: existing.id },
-      data: { sourceFilename: input.sourceFilename, sourceType: input.sourceType, baselineDate: input.baselineDate, createdBy: input.createdBy ?? existing.createdBy },
-    }),
-  ]);
-  return updated;
+  const existing = await tx.rankingBaseline.findFirst({ where: { clientId, sourceRunId: runId }, orderBy: { createdAt: "desc" } });
+  if (!existing) return createBaselineFromRows(clientId, { ...input, sourceRunId: runId }, tx);
+
+  await tx.rankingBaselineRow.deleteMany({ where: { baselineId: existing.id } });
+  await tx.rankingBaselineRow.createMany({ data: toRowCreates(input.rows).map((row) => ({ ...row, baselineId: existing.id })) });
+  return tx.rankingBaseline.update({
+    where: { id: existing.id },
+    data: { sourceFilename: input.sourceFilename, sourceType: input.sourceType, baselineDate: input.baselineDate, createdBy: input.createdBy ?? existing.createdBy },
+  });
 }

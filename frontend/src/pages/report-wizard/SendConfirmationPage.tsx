@@ -13,6 +13,7 @@ import { InlineError } from '../../components/ui/InlineError';
 import { BackLink } from '../../components/ui/BackLink';
 import { AlertPanel } from '../../components/ui/AlertPanel';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
+import { MarkSentManuallyModal } from '../../components/report/MarkSentManuallyModal';
 import { approveAndSendReport, getReport } from '../../api/client';
 import { useSession } from '../../context/SessionContext';
 import type { RankingReport } from '../../api/types';
@@ -29,6 +30,12 @@ const DUPLICATE_SUBJECT_BLOCK = /already appears in this task's history/i;
 const GA_PLACEHOLDER = /\[(organic search users|event count|month)\]/i;
 const GA_PLACEHOLDER_ALL = /\[(organic search users|event count|month)\]/gi;
 
+/** yyyy-mm-dd in local time, for the "date it was sent" field. */
+function localDateInput(iso: string | null | undefined): string {
+  const d = iso ? new Date(iso) : new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function SendConfirmationPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const navigate = useNavigate();
@@ -39,6 +46,7 @@ export function SendConfirmationPage() {
   const [sent, setSent] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [markingManually, setMarkingManually] = useState(false);
 
   // While the report is being sent (here or by someone else), check again until it's sent or failed.
   useEffect(() => {
@@ -64,6 +72,7 @@ export function SendConfirmationPage() {
     setSent(false);
     setError(null);
     setSending(false);
+    setMarkingManually(false);
     // Guarded on the initial fetch only -- an email draft must have been
     // submitted for approval before this page has anything to show.
     getReport(reportId)
@@ -143,6 +152,8 @@ export function SendConfirmationPage() {
     // same GET /api/reports/:id/pdf stream used everywhere else in the app,
     // which only ever reads the file buildReport already wrote to disk.
     const sentRecipients = report.resolvedRecipients ?? [];
+    // The latest send was "Mark as sent manually": the client got the team's own file, not the generated PDF.
+    const manualSend = report.sends?.[0]?.manual ? report.sends[0] : null;
     const sentCc = report.resolvedCc ?? [];
     return (
       <AppShell>
@@ -151,6 +162,15 @@ export function SendConfirmationPage() {
           <PageTitle title="Sent Report Details" subtitle="Exactly what was stored and sent -- read-only." />
           <ReportStatusBadge status="SENT" />
         </div>
+
+        {manualSend && (
+          <AlertPanel tone="info" className="mt-4">
+            <p className="text-sm text-[var(--color-ink)]">
+              Marked as sent manually by {manualSend.sentBy ?? 'someone'} -- it was sent outside the dashboard, so no email went out from here. The
+              baseline was saved from <span className="font-semibold">{manualSend.sourceFilename ?? 'the uploaded file'}</span>.
+            </p>
+          </AlertPanel>
+        )}
 
         {report.auditCommentPosted === false && (
           <AlertPanel tone="warning" className="mt-4">
@@ -209,10 +229,12 @@ export function SendConfirmationPage() {
           <BackLink to="/reports" label="Back to Reports" />
         </Card>
 
-        <div className="mt-4">
-          <p className="eyebrow-label mb-2">Attached report (PDF)</p>
-          <ReportPdfPreview reportId={report.id} />
-        </div>
+        {!manualSend && (
+          <div className="mt-4">
+            <p className="eyebrow-label mb-2">Attached report (PDF)</p>
+            <ReportPdfPreview reportId={report.id} />
+          </div>
+        )}
       </AppShell>
     );
   }
@@ -325,7 +347,29 @@ export function SendConfirmationPage() {
             <Button variant="ghost">Cancel</Button>
           </Link>
         </div>
+
+        <div className="mt-6 border-t border-[var(--color-border)] pt-4">
+          <p className="text-sm text-[var(--color-ink-muted)]">
+            Already sent this report to the client outside the dashboard (from ClickUp, or your own report)? Mark it as sent and upload the report you
+            sent, so the next report compares with it.
+          </p>
+          <Button variant="secondary" className="mt-3" disabled={sending} onClick={() => setMarkingManually(true)}>
+            Mark as sent manually
+          </Button>
+        </div>
       </Card>
+
+      <MarkSentManuallyModal
+        open={markingManually}
+        reportId={report.id}
+        defaultSentDate={localDateInput(report.reportDate)}
+        onClose={() => setMarkingManually(false)}
+        onMarked={() => {
+          setMarkingManually(false);
+          void getReport(report.id).then(setReport);
+          setSent(true);
+        }}
+      />
     </AppShell>
   );
 }

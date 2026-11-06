@@ -12,6 +12,7 @@ import type {
   RankingRun,
   RunProgress,
   RunRow,
+  SentReportPreview,
   SessionInfo,
   UpdateClientInput,
   ValidateRunFileResult,
@@ -564,6 +565,32 @@ export async function markNotificationsRead(workspaceId: string): Promise<void> 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workspaceId }),
   });
+}
+
+// -- Mark as sent manually -------------------------------------------------
+
+/** Reads the report file that was actually sent to the client -- writes nothing. */
+export async function previewSentReport(reportId: string, file: File): Promise<SentReportPreview> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await apiFetch(`/reports/${reportId}/sent-manually/preview`, { method: 'POST', body: formData });
+  return handle<SentReportPreview>(res);
+}
+
+/** Marks the report SENT (no email goes out) and saves the previewed rows as its baseline. */
+export async function markReportSentManually(reportId: string, preview: SentReportPreview, sentAt: string): Promise<{ outcome: 'SENT'; baselineId: string }> {
+  const res = await apiFetch(`/reports/${reportId}/sent-manually`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sourceFilename: preview.sourceFilename,
+      sourceType: preview.sourceType,
+      baselineDate: preview.baselineDate,
+      sentAt,
+      rows: preview.rows,
+    }),
+  });
+  return handle<{ outcome: 'SENT'; baselineId: string }>(res);
 }
 
 // -- Previous-ranking baselines ---------------------------------------------

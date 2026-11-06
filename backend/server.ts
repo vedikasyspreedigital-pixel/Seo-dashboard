@@ -19,7 +19,7 @@ import { loadSavedAudits } from './domainIntel/auditJob.js';
 import { removeExpiredReportFiles } from './domainIntel/createDomainReport.js';
 import { loadSavedBundles } from './domainIntel/bundleJob.js';
 import { removeOldFetchFiles } from './domainIntel/fetchJob.js';
-import { pruneOldRawResponses } from './dataforseo/pruneRawResponses.js';
+import { pruneOldRawResponses, pruneRawResponsesWhenFull } from './dataforseo/pruneRawResponses.js';
 import { promoteMissingBaselines } from './reporting/processVerifiedExcelUpload.js';
 import { createGeminiGapAdvisor } from './domainIntel/gapReport.js';
 import { agentStatus, createAgentFetcher } from './domainIntel/agentQueue.js';
@@ -218,7 +218,11 @@ async function start() {
   void promoteMissing();
   setInterval(promoteMissing, 60 * 60 * 1000).unref();
   // DataForSEO's raw answers are kept 40 days (the ranks stay) -- checked at start and once a day.
-  const pruneRaw = () => pruneOldRawResponses().catch((err) => console.error('[dataforseo] emptying old raw answers failed:', err));
+  // When the database is over RAW_RESPONSE_DB_LIMIT_GB (default 3 GB), only the last 7 days are kept.
+  const pruneRaw = async () => {
+    await pruneOldRawResponses().catch((err) => console.error('[dataforseo] emptying old raw answers failed:', err));
+    await pruneRawResponsesWhenFull().catch((err) => console.error('[dataforseo] database-size check failed:', err));
+  };
   void pruneRaw();
   setInterval(pruneRaw, 24 * 60 * 60 * 1000).unref();
 
