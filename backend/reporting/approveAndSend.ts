@@ -10,6 +10,7 @@ import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
 import { loadExtraAttachmentFiles, readExtraAttachments } from "./extraAttachments.js";
 import { buildConsolidatedForReport, saveSentConsolidated } from "./consolidatedReport.js";
+import { buildBaselineForReport } from "./baselineReport.js";
 
 // Ties the approval decision to the actual send, with recipients resolved
 // entirely from what was already persisted at draft time (ClientReportConfig,
@@ -141,6 +142,12 @@ export async function approveAndSendReport(
         );
       }
       excelPdfFilename = current.customPdfFilename ?? path.basename(current.customPdfPath);
+    } else if (current.attachmentSource === "baseline") {
+      // Baseline Report (2026-11-10): a new client's first report -- the team's "Client Keyword Baseline Report"
+      // Excel (volume, competition, result count, SERP mix, intent, rank) goes INSTEAD of the PDF.
+      const baseline = await buildBaselineForReport(current.id);
+      excelPdfBuffer = baseline.buffer;
+      excelPdfFilename = baseline.filename;
     } else if (reportWithClient.client.consolidatedReport) {
       // Consolidated client (2026-11-10): the consolidated Excel -- every past date plus this one -- goes out
       // INSTEAD of the 2-date PDF. No history uploaded yet -> throws -> SEND_FAILED, never a send without it.

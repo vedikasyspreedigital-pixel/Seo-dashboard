@@ -82,6 +82,7 @@ export function RunDebugPanel({ runId }: { runId: string }) {
                     Google redirect links: {s.redirects}/{s.organic} ({Math.round((s.redirects / s.organic) * 100)}%)
                   </span>
                 )}
+                {!!s.converted && <span>Converted to real addresses: {s.converted}</span>}
                 {s.rawGone > 0 && <span className="text-[var(--color-ink-faint)]">{s.rawGone} tries older than 40 days: no page details</span>}
               </div>
 

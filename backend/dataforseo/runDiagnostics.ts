@@ -38,6 +38,7 @@ interface AttemptRow {
   pages: number | null;
   organic: number | null;
   redirects: number | null;
+  converted?: number | null;
   raw_kept: boolean;
 }
 
@@ -82,6 +83,8 @@ export interface RunDiagnostics {
     otherSiteMatches: number;
     /** Google redirect links among the organic results DataForSEO returned (all tries). */
     redirects: number;
+    /** Redirect links the free GoTo URL converter turned into real addresses (gotoConverter.ts). */
+    converted: number;
     organic: number;
     /** Tries whose raw answer was already emptied (older than 40 days) -- no page/redirect numbers for them. */
     rawGone: number;
@@ -120,7 +123,9 @@ export async function diagnoseRun(runId: string): Promise<RunDiagnostics> {
            (SELECT count(*)::int FROM jsonb_array_elements(COALESCE(a.raw_response->'tasks'->0->'result'->0->'items', '[]'::jsonb)) i
              WHERE i->>'type' = 'organic') AS organic,
            (SELECT count(*)::int FROM jsonb_array_elements(COALESCE(a.raw_response->'tasks'->0->'result'->0->'items', '[]'::jsonb)) i
-             WHERE i->>'type' = 'organic' AND i->>'url' ~* '^https?://(www\\.)?google\\.[a-z.]+/(goto|url)\\?') AS redirects
+             WHERE i->>'type' = 'organic' AND i->>'url' ~* '^https?://(www\\.)?google\\.[a-z.]+/(goto|url)\\?') AS redirects,
+           (SELECT count(*)::int FROM jsonb_array_elements(COALESCE(a.raw_response->'tasks'->0->'result'->0->'items', '[]'::jsonb)) i
+             WHERE i->>'type' = 'organic' AND i ? 'google_url') AS converted
     FROM ranking_row_attempts a
     JOIN ranking_rows r ON r.id = a.ranking_row_id
     WHERE r.run_id = ${runId}
@@ -140,6 +145,7 @@ export function buildDiagnostics(
   const codes = new Map<number | null, { tries: number; pagesSum: number; pagesN: number }>();
   let earlyStops = 0;
   let redirects = 0;
+  let converted = 0;
   let organic = 0;
   let rawGone = 0;
   const out: RowDiagnosis[] = rows.map((row) => {
@@ -155,6 +161,7 @@ export function buildDiagnostics(
       if (t.dataforseo_status_code === 40102 && t.pages != null && t.pages < FULL_CRAWL_PAGES) earlyStops++;
       if (!t.raw_kept) rawGone++;
       redirects += t.redirects ?? 0;
+      converted += t.converted ?? 0;
       organic += t.organic ?? 0;
     }
     const clientDomain = clientDomainOf(row.fullUrl, row.targetUrl);
@@ -197,6 +204,7 @@ export function buildDiagnostics(
       earlyStops,
       otherSiteMatches: out.filter((r) => r.otherSite).length,
       redirects,
+      converted,
       organic,
       rawGone,
     },

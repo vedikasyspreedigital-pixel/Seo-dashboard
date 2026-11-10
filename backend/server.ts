@@ -10,6 +10,7 @@ import { recoverStandardTasksOnStartup, startStandardQueue } from './worker/stan
 import { createStandardClient } from './dataforseo/standardClient.js';
 import { createMockStandardClient } from './dataforseo/mockStandardClient.js';
 import { standardWorkspaceSlugs } from './dataforseo/engine.js';
+import { createGotoConverter, gotoConverterEnabled, standardClientWithGotoResolution, withGotoResolution } from './dataforseo/gotoConverter.js';
 import { recoverInterruptedDeliveries } from './worker/recoverInterruptedDeliveries.js';
 import { createClickUpCommentPoster, createMockCommentPoster } from './domainIntel/clickupCommentPoster.js';
 import { createFlikoverAhrefsFetcher, createMockAhrefsFetcher } from './domainIntel/fetchers/flikoverAhrefs.js';
@@ -51,7 +52,12 @@ const PORT = Number(process.env.PORT ?? 3001);
 // Safety default: MOCK unless DATAFORSEO_LIVE=true is explicitly set.
 // This is the actual gate on real API calls/spend, not just a convention.
 const useLive = process.env.DATAFORSEO_LIVE === 'true';
-const callDataForSeo = useLive ? callDataForSeoLive : createMockDataForSeoClient();
+// Google redirect (goto) links in every live search answer are turned into real URLs by DataForSEO's
+// free converter before anything is saved or matched (gotoConverter.ts). DATAFORSEO_GOTO_CONVERTER=0 turns it off.
+const useGotoConverter = useLive && gotoConverterEnabled();
+const gotoConverter = createGotoConverter();
+const callDataForSeo = useLive ? (useGotoConverter ? withGotoResolution(callDataForSeoLive, gotoConverter) : callDataForSeoLive) : createMockDataForSeoClient();
+if (useGotoConverter) console.log('DataForSEO: Google redirect links are converted to real URLs (free GoTo URL converter).');
 
 const standardWorkspaces = [...standardWorkspaceSlugs()];
 if (standardWorkspaces.length) console.log(`DataForSEO: Standard (queue) method for workspace(s): ${standardWorkspaces.join(', ')}; Live for the rest.`);
@@ -201,7 +207,9 @@ async function start() {
     // Standard runs (workspaces in DATAFORSEO_STANDARD_WORKSPACES): searches still waiting at
     // DataForSEO carry on; the queue's timer keeps submitting and collecting from here.
     await recoverStandardTasksOnStartup();
-    startStandardQueue(useLive ? createStandardClient() : createMockStandardClient());
+    startStandardQueue(
+      useLive ? (useGotoConverter ? standardClientWithGotoResolution(createStandardClient(), gotoConverter) : createStandardClient()) : createMockStandardClient(),
+    );
   }
   // Report emails / Domain Intelligence comments cut off mid-send: retryable, with "check ClickUp first".
   await recoverInterruptedDeliveries();

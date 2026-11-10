@@ -15,6 +15,7 @@ import type { CallDataForSeoFn } from '../../worker/processRun.js';
 import { startRunProcessing } from '../../dataforseo/engine.js';
 import { diagnoseRun } from '../../dataforseo/runDiagnostics.js';
 import { callDataForSeoLive, hasDataForSeoCredentials, MISSING_CREDENTIALS_MESSAGE } from '../../dataforseo/client.js';
+import { unwrapCall } from '../../dataforseo/gotoConverter.js';
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
 import { expensiveActionRateLimit } from '../rateLimit.js';
@@ -171,7 +172,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
 
   // Live DataForSEO without its login: refused up front -- a started run used to hang on its first keyword.
   const cantCheckRankings = (res: import('express').Response) => {
-    if (callDataForSeo !== callDataForSeoLive || hasDataForSeoCredentials()) return false;
+    if (unwrapCall(callDataForSeo) !== callDataForSeoLive || hasDataForSeoCredentials()) return false;
     res.status(503).json({ error: MISSING_CREDENTIALS_MESSAGE });
     return true;
   };

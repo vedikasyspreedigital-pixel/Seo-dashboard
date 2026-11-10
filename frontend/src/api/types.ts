@@ -50,6 +50,23 @@ export type ReportConsolidatedInfo =
   | { enabled: true; ready: false; error: string }
   | { enabled: true; ready: true; filename: string; newColumnLabel: string; dateColumns: number; keywordCount: number; added: string[]; dropped: string[] };
 
+/** "Baseline Report" (2026-11-10): what a new client's Baseline Excel would contain and what's still missing. */
+export type ReportBaselineInfo =
+  | { ready: false; error: string; googleAdsAvailable: boolean }
+  | {
+      ready: true;
+      filename: string;
+      keywordCount: number;
+      dateLabel: string;
+      country: string | null;
+      missingVolumes: string[];
+      merged: { keyword: string; usedFiguresOf: string }[];
+      missingSerp: string[];
+      metricsSource: string | null;
+      googleAdsAvailable: boolean;
+      saved?: number;
+    };
+
 export interface CreateClientInput {
   workspaceId: string;
   name: string;

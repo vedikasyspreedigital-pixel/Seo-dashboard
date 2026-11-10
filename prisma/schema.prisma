@@ -241,6 +241,7 @@ model Client {
   baselines     RankingBaseline[]
   domainReports DomainReport[]
   consolidatedHistory ConsolidatedHistory?
+  keywordMetrics KeywordMetric[]
 
   @@index([workspaceId, isActive])
   @@map("clients")
@@ -264,6 +265,26 @@ model ConsolidatedHistory {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@map("consolidated_histories")
+}
+
+// Google Keyword Planner numbers per client keyword (2026-11-10, "Baseline Report"): Avg. monthly searches and
+// Competition exactly as Keyword Planner gave them ("10 – 100", "1000", "Low") -- converted to the team's
+// buckets (50 / 500 / 5000, "Unknown") only when the report is built. Filled from the team's Keyword Planner
+// download ("upload") or the Google Ads API ("google_ads"). Per client: the location is the client's country.
+model KeywordMetric {
+  id                 String   @id @default(uuid())
+  clientId           String   @map("client_id")
+  client             Client   @relation(fields: [clientId], references: [id])
+  normalizedKeyword  String   @map("normalized_keyword")
+  keyword            String
+  avgMonthlySearches String?  @map("avg_monthly_searches")
+  competition        String?
+  source             String // "upload" | "google_ads"
+  updatedBy          String?  @map("updated_by")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@unique([clientId, normalizedKeyword])
+  @@map("keyword_metrics")
 }
 
 // Reporting-layer config only -- deliberately isolated from the ranking

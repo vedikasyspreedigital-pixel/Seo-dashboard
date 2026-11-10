@@ -11,6 +11,7 @@ import type {
   RankingReport,
   RankingReportListItem,
   RankingRun,
+  ReportBaselineInfo,
   ReportConsolidatedInfo,
   RunProgress,
   RunRow,
@@ -236,6 +237,8 @@ export interface RunDiagnostics {
     redirects: number;
     organic: number;
     rawGone: number;
+    /** Redirect links turned into real addresses by DataForSEO's free converter. */
+    converted?: number;
   };
 }
 
@@ -427,6 +430,29 @@ export function getReportConsolidatedUrl(reportId: string): string {
   return `${BASE}/reports/${reportId}/consolidated`;
 }
 
+// -- Baseline Report (2026-11-10) --------------------------------------------
+
+export async function getReportBaselineInfo(reportId: string): Promise<ReportBaselineInfo> {
+  return handle<ReportBaselineInfo>(await apiFetch(`/reports/${reportId}/baseline-report/info`));
+}
+
+/** The Baseline Report Excel this report sends (built fresh each time). */
+export function getReportBaselineUrl(reportId: string): string {
+  return `${BASE}/reports/${reportId}/baseline-report`;
+}
+
+/** The team's Keyword Planner download (.csv / .xlsx) -- volume and competition for the client's keywords. */
+export async function uploadKeywordPlannerFile(reportId: string, file: File): Promise<ReportBaselineInfo> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return handle<ReportBaselineInfo>(await apiFetch(`/reports/${reportId}/baseline-report/keyword-planner`, { method: 'POST', body: formData }));
+}
+
+/** The same numbers straight from the Google Ads API (only once it's set up on the server). */
+export async function fetchGoogleAdsVolumes(reportId: string): Promise<ReportBaselineInfo> {
+  return handle<ReportBaselineInfo>(await apiFetch(`/reports/${reportId}/baseline-report/google-ads`, { method: 'POST' }));
+}
+
 /** The uploaded custom report PDF, and each extra attachment (a PDF opens in the tab, Excel downloads). */
 export function getCustomPdfUrl(reportId: string): string {
   return `${BASE}/reports/${reportId}/custom-pdf`;
@@ -505,7 +531,7 @@ export interface UpdateReportDraftInput {
   resolvedCc?: string[];
   resolvedClickupTaskUrl?: string | null;
   /** "none" sends only the extra attachments, without the report PDF. */
-  attachmentSource?: 'generated' | 'custom' | 'none';
+  attachmentSource?: 'generated' | 'custom' | 'none' | 'baseline';
 }
 
 export async function updateReportDraft(reportId: string, edits: UpdateReportDraftInput): Promise<RankingReport> {

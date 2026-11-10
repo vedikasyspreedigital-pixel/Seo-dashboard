@@ -7,6 +7,7 @@ import {
   getCustomPdfUrl,
   getExtraAttachmentUrl,
   getReport,
+  getReportBaselineUrl,
   getReportConsolidatedUrl,
   getReportPdfUrl,
   removeExtraAttachment,
@@ -17,6 +18,7 @@ import {
 import type { RankingReport } from '../../api/types';
 import { AttachmentViewerModal, type ViewedAttachment } from './AttachmentViewerModal';
 import { ConsolidatedReportInfo } from './ConsolidatedReportInfo';
+import { BaselineReportInfo } from './BaselineReportInfo';
 
 const MAX_FILES = 5;
 const ACCEPTED = 'application/pdf,.pdf,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
@@ -55,8 +57,10 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
   const reportPdfOff = report.attachmentSource === 'none';
   // Consolidated client: the generated attachment is the consolidated Excel, not the PDF (a custom PDF still wins).
   const consolidated = !!report.client?.consolidatedReport && report.attachmentSource === 'generated';
-  const reportPdfLabel =
-    report.attachmentSource === 'custom' && report.customPdfFilename
+  const baseline = report.attachmentSource === 'baseline';
+  const reportPdfLabel = baseline
+    ? `${report.client?.name ?? 'Client'} - Baseline Report.xlsx (generated)`
+    : report.attachmentSource === 'custom' && report.customPdfFilename
       ? `${report.customPdfFilename} (custom report PDF)`
       : report.client?.consolidatedReport
         ? `${report.client.name} - Consolidated Keyword Ranking Report.xlsx (generated)`
@@ -97,6 +101,23 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
     setBusy('report-pdf');
     try {
       onChange(await updateReportDraft(report.id, { attachmentSource: attach ? 'generated' : 'none' }));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Baseline Report: this report only (a new client's first report) -- picked by the team.
+  async function setBaseline(on: boolean) {
+    const question = on
+      ? 'Send this report as the Baseline Report (new client) instead of the PDF?\n\nIt is an Excel with search volume, competition, number of results, SERP result, intent and the ranks. Upload the Keyword Planner download for the volumes next.'
+      : 'Send the normal report instead of the Baseline Report?';
+    if (!window.confirm(question)) return;
+    setError(null);
+    setBusy('baseline');
+    try {
+      onChange(await updateReportDraft(report.id, { attachmentSource: on ? 'baseline' : 'generated' }));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -150,6 +171,15 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
           <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-[var(--color-ink-faint)]">{reportPdfOff ? 'not attached' : 'attached'}</span>
           {report.attachmentSource === 'custom' && report.customPdfFilename ? (
             <ViewButton filename={report.customPdfFilename} onView={() => setViewing({ filename: report.customPdfFilename!, url: getCustomPdfUrl(report.id) })} />
+          ) : baseline ? (
+            <a
+              href={getReportBaselineUrl(report.id)}
+              title="Download the Baseline Report"
+              aria-label="Download the Baseline Report"
+              className="shrink-0 rounded-full p-1.5 text-[var(--color-ink-faint)] transition-colors hover:bg-brand-500/10 hover:text-brand-300"
+            >
+              <EyeIcon className="h-4 w-4" />
+            </a>
           ) : report.client?.consolidatedReport ? (
             <a
               href={getReportConsolidatedUrl(report.id)}
@@ -209,6 +239,8 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
         ))}
       </ul>
 
+      {baseline && <BaselineReportInfo reportId={report.id} editable={editable} className="mt-3" />}
+
       {consolidated && <ConsolidatedReportInfo reportId={report.id} clientId={report.clientId} editable={editable} className="mt-3" />}
 
       {editable && report.client && report.attachmentSource === 'generated' && (
@@ -220,6 +252,18 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
         >
           {busy === 'consolidated' && <Spinner />}
           {report.client.consolidatedReport ? 'Send the PDF instead (switch this client back to the normal report)' : 'Send the consolidated Excel instead of the PDF (every past date as a column)'}
+        </button>
+      )}
+
+      {editable && (report.attachmentSource === 'generated' || baseline) && (
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void setBaseline(!baseline)}
+          className="mt-3 flex items-center gap-2 text-xs font-medium text-brand-300 hover:text-brand-200 disabled:opacity-50"
+        >
+          {busy === 'baseline' && <Spinner />}
+          {baseline ? 'Send the normal report instead of the Baseline Report' : 'Send the Baseline Report instead (new client: volume, competition, SERP result, intent)'}
         </button>
       )}
 

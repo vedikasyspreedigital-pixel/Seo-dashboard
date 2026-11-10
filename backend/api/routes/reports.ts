@@ -204,8 +204,8 @@ export function createReportsRouter({ sendEmail, generateExcelAttachment }: Repo
     if (!(await findOwnedReportOrRespond(req, res, req.params.id, { requireActive: true }))) return;
     const { emailSubject, emailBody, emailBodyHtml, resolvedRecipients, resolvedCc, resolvedClickupTaskUrl, attachmentSource } = req.body ?? {};
     // "none": send only the extra files, without the report PDF (2026-11-03).
-    if (attachmentSource !== undefined && attachmentSource !== "generated" && attachmentSource !== "custom" && attachmentSource !== "none") {
-      res.status(400).json({ error: 'attachmentSource must be "generated", "custom" or "none"' });
+    if (attachmentSource !== undefined && attachmentSource !== "generated" && attachmentSource !== "custom" && attachmentSource !== "none" && attachmentSource !== "baseline") {
+      res.status(400).json({ error: 'attachmentSource must be "generated", "custom", "none" or "baseline"' });
       return;
     }
     if (attachmentSource === "custom") {

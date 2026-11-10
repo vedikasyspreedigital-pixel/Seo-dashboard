@@ -6,6 +6,7 @@ import { overviewRouter } from "./routes/overview.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { baselinesRouter } from "./routes/baselines.js";
 import { consolidatedClientsRouter, consolidatedReportsRouter } from "./routes/consolidated.js";
+import { baselineReportRouter } from "./routes/baselineReport.js";
 import { compareReportsRouter } from "./routes/compareReports.js";
 import { createRunsRouter } from "./routes/runs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
@@ -103,6 +104,7 @@ export function createApp(
   app.use("/api/compare-reports", compareReportsRouter);
   app.use("/api/runs", createRunsRouter(callDataForSeo));
   app.use("/api/reports", consolidatedReportsRouter);
+  app.use("/api/reports", baselineReportRouter);
   app.use("/api/reports", createReportsRouter(reportingDeps));
   app.use("/api/domain-intel", createDomainIntelRouter(domainIntelDeps));
   app.use("/api/storage", storageRouter);
