@@ -14,7 +14,8 @@ import { BackLink } from '../../components/ui/BackLink';
 import { AlertPanel } from '../../components/ui/AlertPanel';
 import { resumeRouteForStatus } from '../../components/report/reportFlowRoute';
 import { MarkSentManuallyModal } from '../../components/report/MarkSentManuallyModal';
-import { approveAndSendReport, getReport } from '../../api/client';
+import { ConsolidatedReportInfo } from '../../components/report/ConsolidatedReportInfo';
+import { approveAndSendReport, getConsolidatedHistoryFileUrl, getReport } from '../../api/client';
 import { useSession } from '../../context/SessionContext';
 import type { RankingReport } from '../../api/types';
 
@@ -229,7 +230,17 @@ export function SendConfirmationPage() {
           <BackLink to="/reports" label="Back to Reports" />
         </Card>
 
-        {!manualSend && (
+        {!manualSend && report.client?.consolidatedReport && report.attachmentSource === 'generated' ? (
+          <AlertPanel tone="info" className="mt-4">
+            <p className="text-sm text-[var(--color-ink)]">
+              The consolidated Excel was sent instead of the PDF. The latest one sent is kept as this client's history --{' '}
+              <a href={getConsolidatedHistoryFileUrl(report.clientId)} className="font-medium text-brand-300 hover:text-brand-200">
+                download it
+              </a>
+              .
+            </p>
+          </AlertPanel>
+        ) : !manualSend && (
           <div className="mt-4">
             <p className="eyebrow-label mb-2">Attached report (PDF)</p>
             <ReportPdfPreview reportId={report.id} />
@@ -281,12 +292,22 @@ export function SendConfirmationPage() {
             <span className="text-[var(--color-ink-faint)]">Attachments</span>
             <span className="text-right text-[var(--color-ink)]">
               {[
-                ...(report.attachmentSource === 'none' ? [] : [report.attachmentSource === 'custom' && report.customPdfFilename ? report.customPdfFilename : 'Ranking report PDF']),
+                ...(report.attachmentSource === 'none'
+                  ? []
+                  : [
+                      report.attachmentSource === 'custom' && report.customPdfFilename
+                        ? report.customPdfFilename
+                        : report.client?.consolidatedReport
+                          ? 'Consolidated ranking report (Excel)'
+                          : 'Ranking report PDF',
+                    ]),
                 ...(report.extraAttachments ?? []).map((a) => a.filename),
               ].join(', ') || 'None'}
             </span>
           </div>
         </div>
+
+        {report.client?.consolidatedReport && report.attachmentSource === 'generated' && <ConsolidatedReportInfo reportId={report.id} clientId={report.clientId} editable={!sending} className="mt-5" />}
 
         {GA_PLACEHOLDER.test(report.emailBody ?? '') && (
           <AlertPanel tone="warning" className="mt-5">

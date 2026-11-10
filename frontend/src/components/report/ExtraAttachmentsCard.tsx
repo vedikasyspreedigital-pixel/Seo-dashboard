@@ -3,9 +3,20 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Spinner } from '../ui/Spinner';
 import { DocumentIcon, EyeIcon, TrashIcon, UploadIcon } from '../ui/icons';
-import { getCustomPdfUrl, getExtraAttachmentUrl, getReportPdfUrl, removeExtraAttachment, updateReportDraft, uploadExtraAttachments } from '../../api/client';
+import {
+  getCustomPdfUrl,
+  getExtraAttachmentUrl,
+  getReport,
+  getReportConsolidatedUrl,
+  getReportPdfUrl,
+  removeExtraAttachment,
+  setConsolidatedEnabled,
+  updateReportDraft,
+  uploadExtraAttachments,
+} from '../../api/client';
 import type { RankingReport } from '../../api/types';
 import { AttachmentViewerModal, type ViewedAttachment } from './AttachmentViewerModal';
+import { ConsolidatedReportInfo } from './ConsolidatedReportInfo';
 
 const MAX_FILES = 5;
 const ACCEPTED = 'application/pdf,.pdf,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
@@ -42,7 +53,14 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
   const [viewing, setViewing] = useState<ViewedAttachment | null>(null);
   const extras = report.extraAttachments ?? [];
   const reportPdfOff = report.attachmentSource === 'none';
-  const reportPdfLabel = report.attachmentSource === 'custom' && report.customPdfFilename ? `${report.customPdfFilename} (custom report PDF)` : 'Ranking report PDF (generated)';
+  // Consolidated client: the generated attachment is the consolidated Excel, not the PDF (a custom PDF still wins).
+  const consolidated = !!report.client?.consolidatedReport && report.attachmentSource === 'generated';
+  const reportPdfLabel =
+    report.attachmentSource === 'custom' && report.customPdfFilename
+      ? `${report.customPdfFilename} (custom report PDF)`
+      : report.client?.consolidatedReport
+        ? `${report.client.name} - Consolidated Keyword Ranking Report.xlsx (generated)`
+        : 'Ranking report PDF (generated)';
 
   async function handleFiles(list: FileList | null) {
     const files = Array.from(list ?? []);
@@ -86,6 +104,25 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
     }
   }
 
+  // A client setting, not just this report: every later report of the client follows it too.
+  async function switchConsolidated(enabled: boolean) {
+    const name = report.client?.name ?? 'this client';
+    const question = enabled
+      ? `Send ${name} the consolidated Excel instead of the PDF -- this report and every later one?\n\nYou'll then upload the last consolidated Excel they received; the dashboard adds this report's date column to it.`
+      : `Go back to the normal PDF report for ${name} -- this report and every later one?`;
+    if (!window.confirm(question)) return;
+    setError(null);
+    setBusy('consolidated');
+    try {
+      await setConsolidatedEnabled(report.clientId, enabled);
+      onChange(await getReport(report.id));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <Card className="p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -113,6 +150,15 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
           <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-[var(--color-ink-faint)]">{reportPdfOff ? 'not attached' : 'attached'}</span>
           {report.attachmentSource === 'custom' && report.customPdfFilename ? (
             <ViewButton filename={report.customPdfFilename} onView={() => setViewing({ filename: report.customPdfFilename!, url: getCustomPdfUrl(report.id) })} />
+          ) : report.client?.consolidatedReport ? (
+            <a
+              href={getReportConsolidatedUrl(report.id)}
+              title="Download the consolidated report"
+              aria-label="Download the consolidated report"
+              className="shrink-0 rounded-full p-1.5 text-[var(--color-ink-faint)] transition-colors hover:bg-brand-500/10 hover:text-brand-300"
+            >
+              <EyeIcon className="h-4 w-4" />
+            </a>
           ) : (
             report.clientPdfPath && <ViewButton filename="the report PDF" onView={() => setViewing({ filename: 'Ranking report.pdf', url: getReportPdfUrl(report.id) })} />
           )}
@@ -162,6 +208,20 @@ export function ExtraAttachmentsCard({ report, editable, onChange }: { report: R
           </li>
         ))}
       </ul>
+
+      {consolidated && <ConsolidatedReportInfo reportId={report.id} clientId={report.clientId} editable={editable} className="mt-3" />}
+
+      {editable && report.client && report.attachmentSource === 'generated' && (
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void switchConsolidated(!report.client!.consolidatedReport)}
+          className="mt-3 inline-flex items-center gap-2 text-xs font-medium text-brand-300 hover:text-brand-200 disabled:opacity-50"
+        >
+          {busy === 'consolidated' && <Spinner />}
+          {report.client.consolidatedReport ? 'Send the PDF instead (switch this client back to the normal report)' : 'Send the consolidated Excel instead of the PDF (every past date as a column)'}
+        </button>
+      )}
 
       {editable && extras.length === 0 && (
         <p className="mt-3 text-xs text-[var(--color-ink-faint)]">

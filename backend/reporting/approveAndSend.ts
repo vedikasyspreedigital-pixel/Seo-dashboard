@@ -9,6 +9,7 @@ import { promoteSentReportToBaseline } from "./processVerifiedExcelUpload.js";
 import type { SendEmailFn } from "./emailSender.js";
 import type { GenerateExcelAttachmentFn } from "./generateExcelAttachment.js";
 import { loadExtraAttachmentFiles, readExtraAttachments } from "./extraAttachments.js";
+import { buildConsolidatedForReport, saveSentConsolidated } from "./consolidatedReport.js";
 
 // Ties the approval decision to the actual send, with recipients resolved
 // entirely from what was already persisted at draft time (ClientReportConfig,
@@ -98,6 +99,7 @@ export async function approveAndSendReport(
   }
 
   let sendResult: Awaited<ReturnType<SendEmailFn>>;
+  let sentConsolidated: { buffer: Buffer; filename: string } | null = null;
   try {
     // The client-facing PDF (Report Summary + one Keyword Ranking Table,
     // built straight from the report's own deterministic analyticsJson),
@@ -139,6 +141,13 @@ export async function approveAndSendReport(
         );
       }
       excelPdfFilename = current.customPdfFilename ?? path.basename(current.customPdfPath);
+    } else if (reportWithClient.client.consolidatedReport) {
+      // Consolidated client (2026-11-10): the consolidated Excel -- every past date plus this one -- goes out
+      // INSTEAD of the 2-date PDF. No history uploaded yet -> throws -> SEND_FAILED, never a send without it.
+      const consolidated = await buildConsolidatedForReport(current.id);
+      excelPdfBuffer = consolidated.buffer;
+      excelPdfFilename = consolidated.filename;
+      sentConsolidated = { buffer: consolidated.buffer, filename: consolidated.filename };
     } else if (generateExcelAttachment) {
       const excelAttachment = await generateExcelAttachment(current.id);
       excelPdfBuffer = excelAttachment.buffer;
@@ -203,6 +212,13 @@ export async function approveAndSendReport(
   await promoteSentReportToBaseline(reportId, approvedBy).catch((err) => {
     console.error(`[approveAndSend] report ${reportId} was SENT but saving it as the client's new baseline failed:`, err);
   });
+  // The consolidated file the client just got becomes its history -- the next one adds a column to THIS file.
+  if (sentConsolidated) {
+    const sentFile = sentConsolidated;
+    await saveSentConsolidated(current.clientId, sentFile, reportId, approvedBy).catch((err) =>
+      console.error(`[approveAndSend] report ${reportId} was SENT but saving its consolidated report as the client's history failed:`, err),
+    );
+  }
   await notifyReportSent(current).catch((err) => console.error(`[approveAndSend] report ${reportId} was SENT but the "sent" notification failed:`, err));
   return { outcome: "SENT", messageId: sendResult.messageId };
 }

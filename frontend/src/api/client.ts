@@ -2,6 +2,7 @@ import type {
   BaselinePreview,
   BaselineRecord,
   ClientRecord,
+  ConsolidatedSettings,
   CreateClientInput,
   CreateRunResult,
   EmailVariant,
@@ -10,6 +11,7 @@ import type {
   RankingReport,
   RankingReportListItem,
   RankingRun,
+  ReportConsolidatedInfo,
   RunProgress,
   RunRow,
   SentReportPreview,
@@ -387,6 +389,42 @@ export async function buildReport(reportId: string): Promise<BuildReportResult> 
 /** URL for the stored PDF artifact -- the SAME file previewed and later attached to the email. */
 export function getReportPdfUrl(reportId: string): string {
   return `${BASE}/reports/${reportId}/pdf`;
+}
+
+// -- Consolidated report (2026-11-10) ----------------------------------------
+
+export async function getConsolidatedSettings(clientId: string): Promise<ConsolidatedSettings> {
+  return handle<ConsolidatedSettings>(await apiFetch(`/clients/${clientId}/consolidated`));
+}
+
+export async function setConsolidatedEnabled(clientId: string, enabled: boolean): Promise<ConsolidatedSettings> {
+  const res = await apiFetch(`/clients/${clientId}/consolidated`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  return handle<ConsolidatedSettings>(res);
+}
+
+/** The client's last consolidated Excel -- every later consolidated report adds a column to it. */
+export async function uploadConsolidatedHistory(clientId: string, file: File): Promise<ConsolidatedSettings & { newestLabel: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await apiFetch(`/clients/${clientId}/consolidated/history`, { method: 'POST', body: formData });
+  return handle<ConsolidatedSettings & { newestLabel: string }>(res);
+}
+
+export function getConsolidatedHistoryFileUrl(clientId: string): string {
+  return `${BASE}/clients/${clientId}/consolidated/history/file`;
+}
+
+export async function getReportConsolidatedInfo(reportId: string): Promise<ReportConsolidatedInfo> {
+  return handle<ReportConsolidatedInfo>(await apiFetch(`/reports/${reportId}/consolidated/info`));
+}
+
+/** The consolidated Excel this report sends (built fresh from the client's history + this report's ranks). */
+export function getReportConsolidatedUrl(reportId: string): string {
+  return `${BASE}/reports/${reportId}/consolidated`;
 }
 
 /** The uploaded custom report PDF, and each extra attachment (a PDF opens in the tab, Excel downloads). */

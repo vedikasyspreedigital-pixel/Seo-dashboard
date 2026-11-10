@@ -10,8 +10,9 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { InlineError } from '../components/ui/InlineError';
-import { PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon, UploadIcon } from '../components/ui/icons';
+import { GridIcon, PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon, UploadIcon } from '../components/ui/icons';
 import { BaselineUploadModal } from '../components/baselines/BaselineUploadModal';
+import { ConsolidatedReportModal } from '../components/baselines/ConsolidatedReportModal';
 import { parseRecipientsInput } from '../components/report/reportStatus';
 import { useSession } from '../context/SessionContext';
 import { useActiveClient } from '../context/ClientContext';
@@ -75,6 +76,7 @@ export function ClientsPage() {
   const [archiving, setArchiving] = useState(false);
   const [rowActionError, setRowActionError] = useState<string | null>(null);
   const [baselineTarget, setBaselineTarget] = useState<ClientRecord | null>(null);
+  const [consolidatedTarget, setConsolidatedTarget] = useState<ClientRecord | null>(null);
 
   function load() {
     if (!activeWorkspace) return;
@@ -245,7 +247,14 @@ export function ClientsPage() {
             <tbody>
               {filtered.map((client) => (
                 <tr key={client.id} className="border-b border-[var(--color-border)] last:border-0 even:bg-[var(--color-surface-2)]/40">
-                  <td className="cell-cozy text-[var(--color-ink)]">{client.name}</td>
+                  <td className="cell-cozy text-[var(--color-ink)]">
+                    {client.name}
+                    {client.consolidatedReport && (
+                      <span className="ml-2 align-middle">
+                        <StatusBadge label="Consolidated" toneClassName="bg-violet-500/15 text-violet-300" />
+                      </span>
+                    )}
+                  </td>
                   <td className="cell-cozy font-mono text-[var(--color-ink-muted)]">{client.clickupTaskId ?? '—'}</td>
                   <td className="cell-cozy">{clientStatusBadge(client)}</td>
                   <td className="cell-cozy">{baselineStatusBadge(client)}</td>
@@ -270,6 +279,14 @@ export function ClientsPage() {
                             className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]"
                           >
                             <UploadIcon className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            title="Consolidated report"
+                            onClick={() => setConsolidatedTarget(client)}
+                            className={`rounded-full p-1.5 hover:bg-overlay/[0.06] hover:text-[var(--color-ink)] ${client.consolidatedReport ? 'text-violet-300' : 'text-[var(--color-ink-muted)]'}`}
+                          >
+                            <GridIcon className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
@@ -369,6 +386,15 @@ export function ClientsPage() {
           clientId={baselineTarget.id}
           onClose={() => setBaselineTarget(null)}
           onConfirmed={load}
+        />
+      )}
+
+      {consolidatedTarget && (
+        <ConsolidatedReportModal
+          clientId={consolidatedTarget.id}
+          clientName={consolidatedTarget.name}
+          onClose={() => setConsolidatedTarget(null)}
+          onChanged={load}
         />
       )}
     </AppShell>

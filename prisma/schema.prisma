@@ -229,6 +229,9 @@ model Client {
   // "ranking" = a real ranking client; "domain" = made by the Domain Intelligence page from a typed name
   // (2026-10-28: those are new prospects every time) -- hidden from the ranking side's client lists.
   kind       String   @default("ranking")
+  // "Consolidated report" (2026-11-10): this client gets ONE Excel with every past ranking date as a column
+  // (newest first) INSTEAD of the 2-date PDF. Its history lives in ConsolidatedHistory.
+  consolidatedReport Boolean @default(false) @map("consolidated_report")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -237,9 +240,30 @@ model Client {
   reports       RankingReport[]
   baselines     RankingBaseline[]
   domainReports DomainReport[]
+  consolidatedHistory ConsolidatedHistory?
 
   @@index([workspaceId, isActive])
   @@map("clients")
+}
+
+// The client's consolidated ranking report so far (2026-11-10): the last consolidated Excel the client got,
+// stored as the file itself so every past date column -- and the team's own layout and colours -- is kept.
+// The next consolidated report is this file with the new date column added in front. Uploaded once by the
+// team ("upload"), then replaced by each consolidated report the dashboard sends ("sent").
+model ConsolidatedHistory {
+  clientId     String   @id @map("client_id")
+  client       Client   @relation(fields: [clientId], references: [id])
+  filename     String
+  file         Bytes
+  newestDate   DateTime @map("newest_date")
+  dateColumns  Int      @map("date_columns")
+  keywordCount Int      @map("keyword_count")
+  source       String // "upload" | "sent"
+  reportId     String?  @map("report_id")
+  updatedBy    String?  @map("updated_by")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("consolidated_histories")
 }
 
 // Reporting-layer config only -- deliberately isolated from the ranking

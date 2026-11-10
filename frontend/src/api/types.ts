@@ -24,7 +24,31 @@ export interface ClientRecord {
   // Most recent uploaded previous-rank baseline, if any -- only present via
   // getClientsForManagement, same as the fields above.
   latestBaseline?: { baselineDate: string; uploadedAt: string } | null;
+  /** Gets the consolidated Excel (every past date as a column) instead of the 2-date PDF. */
+  consolidatedReport?: boolean;
 }
+
+/** The client's consolidated-report switch and saved history (its last consolidated Excel). */
+export interface ConsolidatedSettings {
+  enabled: boolean;
+  history: {
+    filename: string;
+    newestDate: string;
+    dateColumns: number;
+    keywordCount: number;
+    /** "upload" = uploaded by the team, "sent" = the last one sent from the dashboard. */
+    source: string;
+    reportId: string | null;
+    updatedBy: string | null;
+    updatedAt: string;
+  } | null;
+}
+
+/** What a report's consolidated Excel would contain -- or why it can't be built yet. */
+export type ReportConsolidatedInfo =
+  | { enabled: false }
+  | { enabled: true; ready: false; error: string }
+  | { enabled: true; ready: true; filename: string; newColumnLabel: string; dateColumns: number; keywordCount: number; added: string[]; dropped: string[] };
 
 export interface CreateClientInput {
   workspaceId: string;
@@ -238,6 +262,8 @@ export interface RankingReport {
   /** Only populated by GET /reports/:id (the detail fetch) -- name/date of the saved baseline this report was compared against, when previousBaselineId is set. */
   previousBaseline?: { id: string; sourceFilename: string; baselineDate: string } | null;
   clientId: string;
+  /** Only populated by GET /reports/:id. */
+  client?: { name: string; consolidatedReport?: boolean };
   status: ReportStatus;
   analyticsJson: RunAnalytics | null;
   analysisJson: AnalystOutput | null;

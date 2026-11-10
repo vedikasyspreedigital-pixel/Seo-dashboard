@@ -21,7 +21,11 @@ import type { EmailVariant, RankingReport } from '../../api/types';
 export function EmailDraftPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const navigate = useNavigate();
-  const [report, setReport] = useState<RankingReport | null>(null);
+  const [report, setReportState] = useState<RankingReport | null>(null);
+  // Edits answer with the bare report row (no client / send history) -- keep the ones already loaded, so the
+  // consolidated-report option (it reads report.client) doesn't vanish after e.g. removing an attachment.
+  const setReport = (next: RankingReport | null) =>
+    setReportState((prev) => (next && prev && prev.id === next.id ? { ...next, client: next.client ?? prev.client, sends: next.sends ?? prev.sends } : next));
   const [busy, setBusy] = useState(false);
   // Save Changes gets its own in-flight flag (in addition to the shared
   // `busy` used to keep Save/Regenerate/Reject mutually exclusive) so its
