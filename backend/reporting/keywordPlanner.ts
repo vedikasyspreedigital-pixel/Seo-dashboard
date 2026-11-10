@@ -152,7 +152,9 @@ export function geoTargetOf(country: string | null) {
   return country ? (GEO_TARGETS[country] ?? null) : null;
 }
 
-const REQUIRED_ENV = ["GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_REFRESH_TOKEN", "GOOGLE_ADS_CUSTOMER_ID"] as const;
+// GOOGLE_ADS_DEVELOPER_TOKEN is optional: Google moved API access levels to the Google Cloud project on
+// 2026-09-09 (developer tokens "sunset"); the header is still sent when the variable is set.
+const REQUIRED_ENV = ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_REFRESH_TOKEN", "GOOGLE_ADS_CUSTOMER_ID"] as const;
 
 /** True once every Google Ads API variable is set on the server. */
 export function googleAdsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -193,13 +195,13 @@ export async function fetchGoogleAdsMetrics(
     throw new GoogleAdsError(`Google sign-in for the Ads API failed (${token.error ?? tokenRes.status}${token.error_description ? `: ${token.error_description}` : ""}) -- the refresh token may need renewing.`);
   }
 
-  const version = env.GOOGLE_ADS_API_VERSION?.trim() || "v22";
+  const version = env.GOOGLE_ADS_API_VERSION?.trim() || "v24";
   const customerId = digitsOnly(env.GOOGLE_ADS_CUSTOMER_ID!);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token.access_token}`,
-    "developer-token": env.GOOGLE_ADS_DEVELOPER_TOKEN!.trim(),
     "Content-Type": "application/json",
   };
+  if (env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim()) headers["developer-token"] = env.GOOGLE_ADS_DEVELOPER_TOKEN.trim();
   if (env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.trim()) headers["login-customer-id"] = digitsOnly(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
 
   const out: PlannerMetric[] = [];
