@@ -12,6 +12,8 @@ import {
   collectFinished,
   recoverStandardTasksOnStartup,
   submitDueRows,
+  pickMedianReading,
+  standardReadings,
   STANDARD_RETRY_DELAYS_MS,
   LOST_AFTER_MS,
 } from "../backend/worker/standardQueue.js";
@@ -475,4 +477,106 @@ test("queue: another website matching the wildcard target is skipped -- the clie
   assert.equal(mapped.outcome, "SUCCESS");
   assert.equal(mapped.rankValue, 61);
   assert.equal(mapped.rankingUrl, "https://www.client-site.com.au/trowels");
+});
+
+// ---------------------------------------------------------------- several readings (median)
+
+test("readings: DATAFORSEO_READINGS is 1-5 (default 1); the middle rank is picked, 'Not in 100' counted last", () => {
+  assert.equal(standardReadings({}), 1);
+  assert.equal(standardReadings({ DATAFORSEO_READINGS: "3" }), 3);
+  assert.equal(standardReadings({ DATAFORSEO_READINGS: "9" }), 5);
+  assert.equal(standardReadings({ DATAFORSEO_READINGS: "x" }), 1);
+  const r = (readingRank: number | null) => ({ readingRank });
+  assert.equal(pickMedianReading([r(7), r(86), r(2)]).readingRank, 7);
+  assert.equal(pickMedianReading([r(null), r(3), r(5)]).readingRank, 5, "Not in 100 sorts last");
+  assert.equal(pickMedianReading([r(5), r(9)]).readingRank, 9, "even count: the worse of the two middle ones");
+  assert.equal(pickMedianReading([r(4)]).readingRank, 4);
+});
+
+async function withReadings<T>(n: string, fn: () => Promise<T>): Promise<T> {
+  const prev = process.env.DATAFORSEO_READINGS;
+  process.env.DATAFORSEO_READINGS = n;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.DATAFORSEO_READINGS;
+    else process.env.DATAFORSEO_READINGS = prev;
+  }
+}
+
+/** A fake API whose readings of each keyword answer in turn from `answers` (a rank, null = not found, or a status code >= 40000). */
+function readingsClient(answers: Record<string, (number | null)[]>) {
+  const seen: Record<string, number> = {};
+  return fakeClient({
+    get: (_id, task) => {
+      const i = (seen[task.keyword] = (seen[task.keyword] ?? 0) + 1) - 1;
+      const a = answers[task.keyword][i];
+      if (a !== null && a >= 40000) return serp([], { statusCode: a });
+      return serp(a === null ? [{ rank: 1, url: "https://competitor.com/" }] : [{ rank: a, url: "https://www.client-site.com/services/" }]);
+    },
+  });
+}
+
+test("readings: 3 tasks per keyword in one batch; when all are in, the middle rank is applied once and the readings are kept", async () => {
+  const { client, run, rows } = await makeStandardRun(["it managed services sydney", "biryani in thane"]);
+  try {
+    await withReadings("3", async () => {
+      const { client: api, calls } = readingsClient({ "it managed services sydney": [7, 86, 2], "biryani in thane": [7, null, 6] });
+      assert.equal(await submitDueRows(api), 6, "3 readings x 2 keywords");
+      assert.equal(calls.post, 1, "all in one task_post");
+      const tasks = await prisma.dataforseoTask.findMany({ where: { runId: run.id } });
+      assert.equal(new Set(tasks.filter((t) => t.rankingRowId === rows[0].id).map((t) => t.groupId)).size, 1, "one group per keyword");
+      assert.deepEqual(tasks.filter((t) => t.rankingRowId === rows[0].id).map((t) => t.reading).sort(), [1, 2, 3]);
+
+      await collectFinished(api);
+
+      const a = await prisma.rankingRow.findUniqueOrThrow({ where: { id: rows[0].id }, include: { attempts: true } });
+      assert.equal(a.status, "COMPLETED");
+      assert.equal(a.rankValue, 7, "middle of 2, 7, 86");
+      assert.equal(a.attempts.length, 1, "ONE attempt for the three readings");
+      assert.deepEqual((a.readings as { ranks: string[] }).ranks, ["7", "86", "2"]);
+      const b = await prisma.rankingRow.findUniqueOrThrow({ where: { id: rows[1].id } });
+      assert.equal(b.rankValue, 7, "middle of 6, 7, Not in 100");
+      const after = await prisma.dataforseoTask.findMany({ where: { runId: run.id } });
+      assert.ok(after.every((t) => t.status === "COLLECTED" && t.finalizedAt && t.resultBody === null), "raw answers emptied once used");
+      assert.match((await prisma.rankingRun.findUniqueOrThrow({ where: { id: run.id } })).status, /^COMPLETED/);
+    });
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("readings: a failed reading is left out; if every reading fails the row is retried like a single failed try", async () => {
+  const { client, rows } = await makeStandardRun(["one error", "all errors"]);
+  try {
+    await withReadings("3", async () => {
+      const { client: api } = readingsClient({ "one error": [5, 50401, 9], "all errors": [50401, 50401, 50401] });
+      await submitDueRows(api);
+      await collectFinished(api);
+      const a = await prisma.rankingRow.findUniqueOrThrow({ where: { id: rows[0].id } });
+      assert.equal(a.rankValue, 9, "middle of the 2 good readings (the worse one)");
+      assert.deepEqual((a.readings as { ranks: string[] }).ranks, ["5", "error", "9"]);
+      const b = await prisma.rankingRow.findUniqueOrThrow({ where: { id: rows[1].id }, include: { attempts: true } });
+      assert.equal(b.status, "ERROR_RETRY");
+      assert.equal(b.attempts.length, 1, "one failed try, not three");
+    });
+  } finally {
+    await cleanup(client.id);
+  }
+});
+
+test("readings: two collectors finishing the last readings at once apply the median exactly once", async () => {
+  const { client, rows } = await makeStandardRun(["race"]);
+  try {
+    await withReadings("3", async () => {
+      const { client: api } = readingsClient({ race: [3, 4, 5, 3, 4, 5] });
+      await submitDueRows(api);
+      await Promise.all([collectFinished(api), collectFinished(api)]);
+      const row = await prisma.rankingRow.findUniqueOrThrow({ where: { id: rows[0].id }, include: { attempts: true } });
+      assert.equal(row.attempts.length, 1);
+      assert.equal(row.status, "COMPLETED");
+    });
+  } finally {
+    await cleanup(client.id);
+  }
 });

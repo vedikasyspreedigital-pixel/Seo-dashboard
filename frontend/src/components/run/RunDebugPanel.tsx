@@ -32,7 +32,7 @@ export function RunDebugPanel({ runId }: { runId: string }) {
   // Tab-separated, so it pastes straight into Excel.
   async function copyForExcel() {
     if (!data) return;
-    const header = ['Keyword', 'Final', 'Rank', 'Counted URL', 'Other website?', 'Tries (status codes)', 'Pages crawled (last try)', 'Redirect links (last try)', 'Last error'];
+    const header = ['Keyword', 'Final', 'Rank', 'Counted URL', 'Other website?', 'Page check', 'Readings (middle one used)', 'Tries (status codes)', 'Pages crawled (last try)', 'Redirect links (last try)', 'Last error'];
     const lines = data.rows.map((r) => {
       const last = r.attempts[r.attempts.length - 1];
       return [
@@ -41,6 +41,8 @@ export function RunDebugPanel({ runId }: { runId: string }) {
         r.rank ?? '',
         r.rankingUrl ?? '',
         r.otherSite ? 'YES' : '',
+        pageCheckLabel(r.pageCheck),
+        r.readings ? r.readings.ranks.join(', ') : '',
         r.attempts.map((a) => a.statusCode ?? 'none').join(' → '),
         last?.pages ?? '',
         last && last.redirects != null && last.organic != null ? `${last.redirects}/${last.organic}` : '',
@@ -70,7 +72,7 @@ export function RunDebugPanel({ runId }: { runId: string }) {
             <>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-[var(--color-ink-muted)]">
                 <span>
-                  Method: <strong className="text-[var(--color-ink)]">{data.engine === 'standard' ? 'Queue (Standard)' : 'Live'}</strong>
+                  Method: <strong className="text-[var(--color-ink)]">{data.engine === 'standard' ? 'Queue (Standard)' : data.engine === 'serper' ? 'Serper' : 'Live'}</strong>
                 </span>
                 <span>
                   {s.keywords} keywords · {s.tries} tries
@@ -83,6 +85,13 @@ export function RunDebugPanel({ runId }: { runId: string }) {
                   </span>
                 )}
                 {!!s.converted && <span>Converted to real addresses: {s.converted}</span>}
+                {!!s.pageCheck?.checked && (
+                  <span title="Each results page is compared with the same keyword's page in the previous run. Fewer than half the usual websites = Google probably served a fake ('poisoned') page, so DataForSEO is asked once more.">
+                    Pages checked against last run: {s.pageCheck.checked} · asked again: {s.pageCheck.reAsked} · really changed: {s.pageCheck.changed}
+                    {' · '}
+                    <span className={s.pageCheck.unconfirmed ? 'font-medium text-amber-300' : ''}>unconfirmed: {s.pageCheck.unconfirmed}</span>
+                  </span>
+                )}
                 {s.rawGone > 0 && <span className="text-[var(--color-ink-faint)]">{s.rawGone} tries older than 40 days: no page details</span>}
               </div>
 
@@ -134,7 +143,17 @@ export function RunDebugPanel({ runId }: { runId: string }) {
                       return (
                         <tr key={i} className="border-t border-[var(--color-border)] align-top">
                           <td className="py-1.5 pr-3">{r.keyword}</td>
-                          <td className="py-1.5 pr-3 whitespace-nowrap">{r.rank ?? (r.status === 'FAILED' ? 'Failed' : '—')}</td>
+                          <td className="py-1.5 pr-3 whitespace-nowrap">
+                            {r.rank ?? (r.status === 'FAILED' ? 'Failed' : '—')}
+                            {r.readings && r.readings.ranks.length > 1 && (
+                              <div className="text-[11px] text-[var(--color-ink-faint)]" title="DataForSEO was asked several times; the middle rank is used (DataForSEO support's advice for keywords whose Google page keeps changing).">
+                                readings: {r.readings.ranks.join(' · ')}
+                              </div>
+                            )}
+                            {r.pageCheck && r.pageCheck.status !== 'ok' && r.pageCheck.status !== 'no_previous' && (
+                              <div className={`text-[11px] ${r.pageCheck.status === 'suspect' ? 'font-medium text-amber-300' : 'text-[var(--color-ink-faint)]'}`}>{pageCheckLabel(r.pageCheck)}</div>
+                            )}
+                          </td>
                           <td className="max-w-[280px] break-all py-1.5 pr-3">
                             {r.rankingUrl ?? '—'}
                             {r.otherSite && <span className="ml-1 whitespace-nowrap font-medium text-amber-300">⚠ not {r.clientDomain}</span>}
@@ -162,4 +181,24 @@ export function RunDebugPanel({ runId }: { runId: string }) {
       </details>
     </Card>
   );
+}
+
+/** The poisoned-page check in the team's words. */
+function pageCheckLabel(c: { status: string; share: number | null } | null | undefined): string {
+  if (!c) return '';
+  const pct = c.share != null ? ` (${Math.round(c.share * 100)}% of last run's sites)` : '';
+  switch (c.status) {
+    case 'ok':
+      return `OK${pct}`;
+    case 'ok_after_retry':
+      return `First page looked fake, asked again: OK${pct}`;
+    case 'changed':
+      return `Google's page really changed (asked twice, same answer)${pct}`;
+    case 'suspect':
+      return `⚠ Unconfirmed: page didn't look right, even when asked again${pct}`;
+    case 'no_previous':
+      return 'No earlier run to compare';
+    default:
+      return c.status;
+  }
 }

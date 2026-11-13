@@ -96,6 +96,7 @@ export function BaselineReportInfo({ reportId, editable, className = '' }: { rep
         </p>
       )}
       <p className="mt-2 text-xs text-[var(--color-ink-faint)]">SERP result and Intent are worked out by rules from the search results -- check them in the download before sending.</p>
+      <p className="mt-1 text-xs text-[var(--color-ink-faint)]">Number of Result can come out empty (Serper doesn't give it): fill it in the download by hand -- incognito Google search, Tools, the "About X results" number.</p>
       {editable && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input ref={inputRef} type="file" accept={ACCEPTED} className="hidden" onChange={(e) => handleFile(e.target.files)} />

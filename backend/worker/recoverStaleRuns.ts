@@ -31,7 +31,7 @@ export async function recoverStaleProcessingRows(callDataForSeo: CallDataForSeoF
   // Standard runs belong to the Standard queue (recoverStandardTasksOnStartup) -- their PROCESSING
   // rows may be searches still waiting at DataForSEO, which must not be reset or re-sent.
   const runs = await prisma.rankingRun.findMany({
-    where: { status: 'PROCESSING', engine: 'live', ...(onlyClientId ? { clientId: onlyClientId } : {}) },
+    where: { status: 'PROCESSING', engine: { not: 'standard' }, ...(onlyClientId ? { clientId: onlyClientId } : {}) },
     select: { id: true },
   });
   if (runs.length === 0) return;

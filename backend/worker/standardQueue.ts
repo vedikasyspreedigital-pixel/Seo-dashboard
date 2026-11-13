@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
+import { mapDataForSeoResponse } from '../dataforseo/mapResponse.js';
 import { prisma } from '../db/client.js';
 import { buildDataForSeoRequest } from '../dataforseo/buildRequest.js';
 import { recordAttemptAndApply } from '../dataforseo/recordAttemptAndApply.js';
@@ -50,6 +52,23 @@ export function standardRetryDelayMs(retryCount: number): number {
   return STANDARD_RETRY_DELAYS_MS[Math.min(Math.max(retryCount, 1), STANDARD_RETRY_DELAYS_MS.length) - 1];
 }
 
+/**
+ * Readings per keyword (DATAFORSEO_READINGS, 1-5, default 1). DataForSEO support, 12 Nov 2026: every task is a
+ * separate crawl and Google serves different variants of volatile pages ("it managed services sydney": 7 on
+ * Live, 86 on Standard, 2 by hand, same morning) -- "take repeated readings (a median of 2-3 per keyword)".
+ * Each reading is one billed Standard task.
+ */
+export function standardReadings(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number.parseInt(env.DATAFORSEO_READINGS ?? '1', 10);
+  return Number.isFinite(n) ? Math.min(Math.max(n, 1), 5) : 1;
+}
+
+/** The middle reading: ranks in order ("Not in 100" last); with an even count, the worse of the two middle ones. */
+export function pickMedianReading<T extends { readingRank: number | null }>(readings: T[]): T {
+  const sorted = [...readings].sort((a, b) => (a.readingRank ?? 101) - (b.readingRank ?? 101));
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 export function standardPriority(): 1 | 2 {
   return process.env.DATAFORSEO_STANDARD_PRIORITY === '2' ? 2 : 1;
 }
@@ -95,11 +114,12 @@ async function submitOneBatch(client: StandardClient, now: Date, touchedRuns: Se
   });
   const due = candidates
     .filter((row) => row.status === 'PENDING' || !row.lastAttempt || row.lastAttempt.createdAt.getTime() + standardRetryDelayMs(row.retryCount) <= now.getTime())
-    .slice(0, MAX_TASKS_PER_POST);
+    .slice(0, Math.floor(MAX_TASKS_PER_POST / standardReadings()));
   if (due.length === 0) return 0;
 
   const priority = standardPriority();
-  const batch: { taskId: string; rowId: string; runId: string; payload: StandardTaskPayload }[] = [];
+  const readings = standardReadings();
+  const batch: { taskId: string; rowId: string; runId: string; payload: StandardTaskPayload; groupId: string | null }[] = [];
   for (const row of due) {
     try {
       await dequeueRow(row.id);
@@ -107,10 +127,13 @@ async function submitOneBatch(client: StandardClient, now: Date, touchedRuns: Se
       if (err instanceof InvalidRowTransitionError) continue; // someone else took it
       throw err;
     }
-    const taskId = randomUUID();
-    const payload = buildStandardTask(row, taskId, priority);
-    await prisma.dataforseoTask.create({ data: { id: taskId, rankingRowId: row.id, runId: row.runId, requestPayload: payload as object } });
-    batch.push({ taskId, rowId: row.id, runId: row.runId, payload });
+    const groupId = readings > 1 ? randomUUID() : null;
+    for (let reading = 1; reading <= readings; reading++) {
+      const taskId = randomUUID();
+      const payload = buildStandardTask(row, taskId, priority);
+      await prisma.dataforseoTask.create({ data: { id: taskId, rankingRowId: row.id, runId: row.runId, requestPayload: payload as object, groupId, reading } });
+      batch.push({ taskId, rowId: row.id, runId: row.runId, payload, groupId });
+    }
   }
   if (batch.length === 0) return 0;
 
@@ -121,8 +144,11 @@ async function submitOneBatch(client: StandardClient, now: Date, touchedRuns: Se
   // retried later; if DataForSEO did take some, those results are ignored (ABANDONED) -- at worst
   // a few cents twice, never a rank applied twice.
   if (transportError || response?.status_code !== 20000 || !Array.isArray(response.tasks)) {
+    const recorded = new Set<string>();
     for (const b of batch) {
       await prisma.dataforseoTask.update({ where: { id: b.taskId }, data: { status: 'ABANDONED', errorMessage: transportError?.message ?? `task_post answered ${response?.status_code ?? httpStatus}` } });
+      if (recorded.has(b.rowId)) continue; // several readings of one row: one try recorded
+      recorded.add(b.rowId);
       await recordAttemptAndApply(b.rowId, { requestPayload: b.payload, transportError, httpStatus, responseBody: body });
       touchedRuns.add(b.runId);
     }
@@ -139,9 +165,20 @@ async function submitOneBatch(client: StandardClient, now: Date, touchedRuns: Se
     }
     // Refused at post time (e.g. 40501 "Invalid Field: 'location_name'."): recorded like a Live
     // answer with that status, so mapResponse decides retry vs FAILED exactly as before.
+    if (b.groupId) {
+      // One reading of several: kept as a failed reading; the row is decided when its last reading is in.
+      await prisma.dataforseoTask.update({
+        where: { id: b.taskId },
+        data: { status: 'FAILED', errorMessage: `${entry?.status_code ?? 'no answer'}`, readingOk: false, resultBody: { status_code: 20000, tasks: [entry ?? {}] } as object },
+      });
+      continue;
+    }
     await prisma.dataforseoTask.update({ where: { id: b.taskId }, data: { status: 'FAILED', errorMessage: `${entry?.status_code ?? 'no answer'}` } });
     await recordAttemptAndApply(b.rowId, { requestPayload: b.payload, httpStatus, responseBody: { status_code: 20000, tasks: [entry ?? {}] } });
     touchedRuns.add(b.runId);
+  }
+  for (const groupId of new Set(batch.map((b) => b.groupId).filter((g): g is string => !!g))) {
+    if (await finishReadingGroup(groupId)) touchedRuns.add(batch.find((b) => b.groupId === groupId)!.runId);
   }
   return accepted;
 }
@@ -210,6 +247,27 @@ async function collectTask(client: StandardClient, dataforseoTaskId: string, at:
     return false;
   }
 
+  if (task.groupId) {
+    // One of several readings: stored, and the row is decided once the last reading is in.
+    const lost = notReady || (taskCode !== undefined && GONE_STATUS_CODES.has(taskCode));
+    const mapped = lost ? null : mapDataForSeoResponse({ httpStatus, body: applyTargetFilter(body, row.targetUrl), requestPayload: task.requestPayload as { depth?: number } });
+    await prisma.dataforseoTask.update({
+      where: { id: task.id },
+      data: {
+        status: lost ? 'ABANDONED' : 'COLLECTED',
+        collectedAt: at,
+        errorMessage: lost ? (notReady ? 'still not done after 3 hours' : `${taskCode} ${response?.tasks?.[0]?.status_message ?? ''}`.trim()) : null,
+        readingOk: mapped?.outcome === 'SUCCESS',
+        readingRank: mapped?.rankValue ?? null,
+        readingDisplay: mapped?.rankDisplay ?? null,
+        readingUrl: mapped?.rankingUrl ?? null,
+        resultBody: lost ? Prisma.DbNull : (body as object),
+      },
+    });
+    if (await finishReadingGroup(task.groupId)) touchedRuns.add(task.runId);
+    return !lost;
+  }
+
   if (notReady) {
     await prisma.dataforseoTask.update({ where: { id: task.id }, data: { status: 'ABANDONED', collectedAt: at, errorMessage: 'still not done after 3 hours' } });
     await recordAttemptAndApply(row.id, { requestPayload: task.requestPayload as object, transportError: new Error(`DataForSEO hadn't finished this search after ${LOST_AFTER_MS / 3_600_000} hours -- trying again.`) });
@@ -232,6 +290,48 @@ async function collectTask(client: StandardClient, dataforseoTaskId: string, at:
   });
   await prisma.dataforseoTask.update({ where: { id: task.id }, data: { status: 'COLLECTED', collectedAt: at } });
   touchedRuns.add(task.runId);
+  return true;
+}
+
+// ---------------------------------------------------------------- several readings
+
+/**
+ * Once every reading of a row's try is in: the middle rank of the successful readings is applied as ONE attempt
+ * (its raw answer saved, like a single reading). No successful reading: the last answer is recorded as a failed
+ * try, so the usual retry rules apply. Claimed atomically (finalizedAt), so two collectors finishing the last two
+ * readings at once apply it once. Returns true when it applied something.
+ */
+export async function finishReadingGroup(groupId: string): Promise<boolean> {
+  const tasks = await prisma.dataforseoTask.findMany({ where: { groupId }, orderBy: { reading: 'asc' } });
+  if (tasks.length === 0 || tasks.some((t) => t.status === 'POSTING' || t.status === 'SUBMITTED' || t.status === 'COLLECTING')) return false;
+  const row = await prisma.rankingRow.findUnique({ where: { id: tasks[0].rankingRowId }, include: { run: { select: { status: true } } } });
+  if (!row || row.status !== 'PROCESSING' || row.run.status !== 'PROCESSING') return false;
+  const { count } = await prisma.dataforseoTask.updateMany({ where: { groupId, finalizedAt: null }, data: { finalizedAt: new Date() } });
+  if (count === 0) return false;
+
+  const good = tasks.filter((t) => t.readingOk && t.resultBody);
+  if (good.length > 0) {
+    const used = pickMedianReading(good);
+    await recordAttemptAndApply(row.id, {
+      requestPayload: used.requestPayload as object,
+      httpStatus: 200,
+      responseBody: used.resultBody,
+      mappingBody: applyTargetFilter(used.resultBody, row.targetUrl),
+    });
+    await prisma.rankingRow.update({
+      where: { id: row.id },
+      data: { readings: { ranks: tasks.map((t) => (t.readingOk ? (t.readingDisplay ?? '?') : 'error')), used: used.readingDisplay, usedReading: used.reading } },
+    });
+  } else {
+    const last = [...tasks].reverse().find((t) => t.resultBody) ?? tasks[tasks.length - 1];
+    if (last.resultBody) {
+      await recordAttemptAndApply(row.id, { requestPayload: last.requestPayload as object, httpStatus: 200, responseBody: last.resultBody, mappingBody: applyTargetFilter(last.resultBody, row.targetUrl) });
+    } else {
+      await recordAttemptAndApply(row.id, { requestPayload: last.requestPayload as object, transportError: new Error(`None of the ${tasks.length} DataForSEO readings came back (${last.errorMessage ?? 'no answer'}) -- trying again.`) });
+    }
+  }
+  // The readings' raw answers were only needed until now (the one used is saved on the attempt).
+  await prisma.dataforseoTask.updateMany({ where: { groupId }, data: { resultBody: Prisma.DbNull } });
   return true;
 }
 

@@ -189,9 +189,12 @@ export async function buildBaselineForReport(reportId: string): Promise<Baseline
   const byWords = new Map<string, (typeof metrics)[number]>();
   for (const m of metrics) if (!byWords.has(wordSetKey(m.keyword))) byWords.set(wordSetKey(m.keyword), m);
 
+  // The site the keywords were checked for (the run's Full URL) comes first -- the client's Domain field in Client
+  // Management can be stale or a placeholder (a test client had "example.com").
   const domain =
+    rows.map((r) => normalizeMatchDomain(r.fullUrl)).find(Boolean) ||
     report.client.domain?.trim() ||
-    rows.map((r) => normalizeMatchDomain(r.fullUrl) ?? normalizeMatchDomain(String(r.targetUrl ?? "").replace(/\*/g, "").replace(/^\.+|\.+$/g, ""))).find(Boolean) ||
+    rows.map((r) => normalizeMatchDomain(String(r.targetUrl ?? "").replace(/\*/g, "").replace(/^\.+|\.+$/g, ""))).find(Boolean) ||
     report.client.name;
   const brandWords = brandWordsOf(domain);
 
@@ -211,7 +214,9 @@ export async function buildBaselineForReport(reportId: string): Promise<Baseline
     const top10 = Array.isArray(s?.top10) ? s!.top10 : [];
     const summary = serpSummary(top10);
     const results = formatIndianResults(s?.results != null ? Number(s.results) : null);
-    if (!summary || !results) missingSerp.push(row.keyword);
+    // Serper gives no "About X results" count, so a blank Number of Result alone isn't a lost answer -- the team fills
+    // that column by hand (incognito search -> Tools). Only a missing results list counts.
+    if (!summary) missingSerp.push(row.keyword);
     return {
       keyword: row.keyword,
       rankValue: row.rankValue,

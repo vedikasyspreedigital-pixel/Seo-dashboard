@@ -226,6 +226,8 @@ export interface RunDiagnostics {
     rankingUrl: string | null;
     clientDomain: string | null;
     otherSite: boolean;
+    pageCheck?: { status: string; share: number | null; retried: boolean } | null;
+    readings?: { ranks: string[]; used: string | null } | null;
     attempts: { attempt: number; statusCode: number | null; outcome: string; pages: number | null; organic: number | null; redirects: number | null; error: string | null; at: string }[];
   }[];
   summary: {
@@ -239,6 +241,8 @@ export interface RunDiagnostics {
     rawGone: number;
     /** Redirect links turned into real addresses by DataForSEO's free converter. */
     converted?: number;
+    /** Poisoned-page check: compared with the previous run / asked again / really changed / still unconfirmed. */
+    pageCheck?: { checked: number; reAsked: number; changed: number; unconfirmed: number };
   };
 }
 

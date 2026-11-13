@@ -257,6 +257,9 @@ async function setup() {
 }
 
 test("baseline report: Keyword Planner upload, preview, and the send attaches the Baseline Excel instead of the PDF", async () => {
+  // This test is the "Google Ads not set up" path -- hide a dev laptop's real keys so it never calls Google.
+  const savedAdsEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("GOOGLE_ADS_")));
+  for (const k of Object.keys(savedAdsEnv)) delete process.env[k];
   const t = await setup();
   try {
     // Picked on the report.
@@ -296,5 +299,6 @@ test("baseline report: Keyword Planner upload, preview, and the send attaches th
     assert.equal((await prisma.rankingReport.findUniqueOrThrow({ where: { id: t.report.id } })).status, "SENT");
   } finally {
     await t.cleanup();
+    Object.assign(process.env, savedAdsEnv);
   }
 });

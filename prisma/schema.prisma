@@ -53,9 +53,22 @@ model DataforseoTask {
   collectedAt      DateTime?            @map("collected_at")
   lastCheckedAt    DateTime?            @map("last_checked_at")
   errorMessage     String?              @map("error_message")
+  // Several readings per keyword (2026-11-12, DATAFORSEO_READINGS): DataForSEO support advised the median of
+  // 2-3 crawls for volatile keywords. Tasks of one row's try share groupId; each keeps its own reading until
+  // the last one is in, then the middle rank is applied as ONE attempt (standardQueue.ts finishReadingGroup).
+  groupId          String?              @map("group_id")
+  reading          Int                  @default(1)
+  readingOk        Boolean?             @map("reading_ok")
+  readingRank      Int?                 @map("reading_rank")
+  readingDisplay   String?              @map("reading_display")
+  readingUrl       String?              @map("reading_url")
+  // The reading's raw answer, kept only until the group is finished (then emptied).
+  resultBody       Json?                @map("result_body")
+  finalizedAt      DateTime?            @map("finalized_at")
   createdAt        DateTime             @default(now()) @map("created_at")
   updatedAt        DateTime             @updatedAt @map("updated_at")
 
+  @@index([groupId])
   @@index([status])
   @@index([runId, status])
   @@index([rankingRowId])
@@ -429,6 +442,12 @@ model RankingRow {
   rankValue       Int?      @map("rank_value")
   rankDisplay     String?   @map("rank_display")
   rankingUrl      String?   @map("ranking_url")
+  // "Poisoned SERP" check (2026-11-12, backend/dataforseo/serpCheck.ts): did the results page look like the
+  // keyword's usual page? { status: ok|ok_after_retry|changed|suspect|no_previous, share, retried, ... }.
+  // Null = not checked (mock, Standard queue, failed row, or before this existed).
+  serpCheck       Json?     @map("serp_check")
+  // Several readings (standardQueue.ts): { ranks: ["7","86","2"], used: "7" } -- the middle one is the rank.
+  readings        Json?     @map("readings")
 
   retryCount       Int     @default(0) @map("retry_count")
   maxRetries       Int     @default(3) @map("max_retries")

@@ -66,6 +66,10 @@ export interface RowDiagnosis {
   clientDomain: string | null;
   /** The counted URL isn't on the client's own website. */
   otherSite: boolean;
+  /** The poisoned-page check (serpCheck.ts), when it ran. */
+  pageCheck: { status: string; share: number | null; retried: boolean } | null;
+  /** Several readings (queue, DATAFORSEO_READINGS): each reading's rank and the middle one used. */
+  readings: { ranks: string[]; used: string | null } | null;
   attempts: AttemptDiagnosis[];
 }
 
@@ -86,6 +90,8 @@ export interface RunDiagnostics {
     /** Redirect links the free GoTo URL converter turned into real addresses (gotoConverter.ts). */
     converted: number;
     organic: number;
+    /** Poisoned-page check (serpCheck.ts): keywords compared with the previous run, asked again, really changed, still unconfirmed. */
+    pageCheck: { checked: number; reAsked: number; changed: number; unconfirmed: number };
     /** Tries whose raw answer was already emptied (older than 40 days) -- no page/redirect numbers for them. */
     rawGone: number;
   };
@@ -112,7 +118,7 @@ export async function diagnoseRun(runId: string): Promise<RunDiagnostics> {
   const rows = await prisma.rankingRow.findMany({
     where: { runId },
     orderBy: { sourceRowNumber: "asc" },
-    select: { id: true, keyword: true, locationName: true, status: true, rankDisplay: true, rankingUrl: true, fullUrl: true, targetUrl: true },
+    select: { id: true, keyword: true, locationName: true, status: true, rankDisplay: true, rankingUrl: true, fullUrl: true, targetUrl: true, serpCheck: true, readings: true },
   });
   // Only the numbers are read out of the raw answers, in the database -- a run's raw answers can be many MB.
   const attempts = await prisma.$queryRaw<AttemptRow[]>`
@@ -133,10 +139,22 @@ export async function diagnoseRun(runId: string): Promise<RunDiagnostics> {
   return buildDiagnostics(run.engine, rows, attempts);
 }
 
+function readingsOf(raw: unknown): RowDiagnosis["readings"] {
+  const r = raw as { ranks?: unknown; used?: unknown } | null | undefined;
+  if (!r || !Array.isArray(r.ranks)) return null;
+  return { ranks: r.ranks.map(String), used: typeof r.used === "string" ? r.used : null };
+}
+
+function pageCheckOf(raw: unknown): RowDiagnosis["pageCheck"] {
+  const c = raw as { status?: unknown; share?: unknown; retried?: unknown } | null | undefined;
+  if (!c || typeof c.status !== "string") return null;
+  return { status: c.status, share: typeof c.share === "number" ? c.share : null, retried: c.retried === true };
+}
+
 /** The pure part (tests): rows + their tries -> the table and the summary. */
 export function buildDiagnostics(
   engine: string,
-  rows: { id: string; keyword: string; locationName: string; status: string; rankDisplay: string | null; rankingUrl: string | null; fullUrl: string | null; targetUrl: string }[],
+  rows: { id: string; keyword: string; locationName: string; status: string; rankDisplay: string | null; rankingUrl: string | null; fullUrl: string | null; targetUrl: string; serpCheck?: unknown; readings?: unknown }[],
   attempts: AttemptRow[],
 ): RunDiagnostics {
   const byRow = new Map<string, AttemptRow[]>();
@@ -174,6 +192,8 @@ export function buildDiagnostics(
       rankingUrl: row.rankingUrl,
       clientDomain,
       otherSite,
+      pageCheck: pageCheckOf(row.serpCheck),
+      readings: readingsOf(row.readings),
       attempts: tries.map((t) => ({
         attempt: t.attempt_number,
         statusCode: t.dataforseo_status_code,
@@ -203,6 +223,12 @@ export function buildDiagnostics(
         })),
       earlyStops,
       otherSiteMatches: out.filter((r) => r.otherSite).length,
+      pageCheck: {
+        checked: out.filter((r) => r.pageCheck && r.pageCheck.status !== "no_previous").length,
+        reAsked: out.filter((r) => r.pageCheck?.retried).length,
+        changed: out.filter((r) => r.pageCheck?.status === "changed").length,
+        unconfirmed: out.filter((r) => r.pageCheck?.status === "suspect").length,
+      },
       redirects,
       converted,
       organic,

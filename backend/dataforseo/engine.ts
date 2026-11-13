@@ -10,7 +10,7 @@ import { wakeStandardQueue } from '../worker/standardQueue.js';
 // started or rerun, so a run never changes method halfway, and restart
 // recovery knows which worker owns it.
 
-export type RankingEngine = 'live' | 'standard';
+export type RankingEngine = 'live' | 'standard' | 'serper';
 
 export function standardWorkspaceSlugs(): Set<string> {
   return new Set(
@@ -26,7 +26,11 @@ export async function assignEngine(runId: string): Promise<RankingEngine> {
     where: { id: runId },
     select: { client: { select: { workspace: { select: { slug: true } } } } },
   });
-  const engine: RankingEngine = standardWorkspaceSlugs().has(run.client.workspace?.slug ?? '') ? 'standard' : 'live';
+  const engine: RankingEngine = standardWorkspaceSlugs().has(run.client.workspace?.slug ?? '')
+    ? 'standard'
+    : process.env.DATAFORSEO_LIVE === 'true' && process.env.RANK_PROVIDER?.trim().toLowerCase() === 'serper'
+      ? 'serper' // checked one row at a time like Live (processRun), with the Serper call
+      : 'live';
   await prisma.rankingRun.update({ where: { id: runId }, data: { engine } });
   return engine;
 }

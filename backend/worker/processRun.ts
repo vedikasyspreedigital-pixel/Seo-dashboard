@@ -7,11 +7,13 @@ import { InvalidRowTransitionError } from '../statemachine/errors.js';
 import { recomputeRunCompletion } from '../statemachine/runTransitions.js';
 import { notifyRunCompletion } from '../notifications/createNotification.js';
 import type { DataForSeoCallResult, DataForSeoRequestPayload } from '../dataforseo/client.js';
+import { checkSerp, hasResults, poisonCheckEnabled, previousTopSites, type SerpCheck } from '../dataforseo/serpCheck.js';
 
 export type CallDataForSeoFn = (payload: DataForSeoRequestPayload) => Promise<DataForSeoCallResult>;
 
 interface RankingRowRecord {
   id: string;
+  runId: string;
   keyword: string;
   targetUrl: string;
   fullUrl: string | null;
@@ -106,7 +108,20 @@ export async function processRun(
       }
       // The whole top 100, matched to the client here (buildLiveRequest's comment).
       const requestPayload = buildLiveRequest(row);
-      const { httpStatus, body, transportError } = await callDataForSeo(requestPayload);
+      let { httpStatus, body, transportError } = await callDataForSeo(requestPayload);
+
+      // "Poisoned SERP" check (serpCheck.ts): a page that doesn't look like this keyword's usual page is asked
+      // for once more. Only answers with results are checked; errors take the normal retry path below.
+      let serpCheck: SerpCheck | null = null;
+      if (!transportError && hasResults(body) && poisonCheckEnabled()) {
+        const previous = await previousTopSites(row);
+        const decided = await checkSerp({ body, result: { httpStatus, body } }, previous?.sites ?? null, async () => {
+          const again = await callDataForSeo(requestPayload);
+          return again.transportError ? null : { body: again.body, result: { httpStatus: again.httpStatus, body: again.body } };
+        });
+        ({ httpStatus, body } = decided.use.result);
+        serpCheck = { ...decided.check, previousRunId: previous?.runId ?? null };
+      }
 
       const { row: updatedRow } = await recordAttemptAndApply(row.id, {
         requestPayload,
@@ -116,6 +131,7 @@ export async function processRun(
         mappingBody: body && !transportError && !liveSendsTarget() ? applyTargetFilter(body, row.targetUrl) : undefined,
       });
 
+      if (serpCheck) await prisma.rankingRow.update({ where: { id: row.id }, data: { serpCheck: serpCheck as object } });
       if (updatedRow.status !== 'ERROR_RETRY') break; // COMPLETED or FAILED -- this row is done
       await sleepFn(backoffDelayMs(updatedRow.retryCount));
     }

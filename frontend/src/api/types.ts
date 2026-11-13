@@ -159,6 +159,8 @@ export interface RunRow {
   status: RowStatus;
   rankDisplay: string | null;
   rankingUrl: string | null;
+  /** Poisoned-page check: "suspect" = the results page didn't look like this keyword's usual page, rank unconfirmed. */
+  serpCheck?: { status: string; share: number | null; retried: boolean } | null;
 }
 
 export interface ValidateRunFileResult {

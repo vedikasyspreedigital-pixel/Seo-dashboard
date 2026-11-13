@@ -11,6 +11,7 @@ import { createStandardClient } from './dataforseo/standardClient.js';
 import { createMockStandardClient } from './dataforseo/mockStandardClient.js';
 import { standardWorkspaceSlugs } from './dataforseo/engine.js';
 import { createGotoConverter, gotoConverterEnabled, standardClientWithGotoResolution, withGotoResolution } from './dataforseo/gotoConverter.js';
+import { createSerperCall, hasSerperKey, serperSelected, MISSING_SERPER_KEY_MESSAGE } from './dataforseo/serperClient.js';
 import { recoverInterruptedDeliveries } from './worker/recoverInterruptedDeliveries.js';
 import { createClickUpCommentPoster, createMockCommentPoster } from './domainIntel/clickupCommentPoster.js';
 import { createFlikoverAhrefsFetcher, createMockAhrefsFetcher } from './domainIntel/fetchers/flikoverAhrefs.js';
@@ -56,7 +57,17 @@ const useLive = process.env.DATAFORSEO_LIVE === 'true';
 // free converter before anything is saved or matched (gotoConverter.ts). DATAFORSEO_GOTO_CONVERTER=0 turns it off.
 const useGotoConverter = useLive && gotoConverterEnabled();
 const gotoConverter = createGotoConverter();
-const callDataForSeo = useLive ? (useGotoConverter ? withGotoResolution(callDataForSeoLive, gotoConverter) : callDataForSeoLive) : createMockDataForSeoClient();
+// RANK_PROVIDER=serper (2026-11-13): Serper.dev instead of DataForSEO Live while DataForSEO's Google pages are
+// "poisoned" (serperClient.ts). Only with DATAFORSEO_LIVE=true -- mock mode stays mock.
+const useSerper = useLive && serperSelected();
+const callDataForSeo = useSerper
+  ? createSerperCall()
+  : useLive
+    ? useGotoConverter
+      ? withGotoResolution(callDataForSeoLive, gotoConverter)
+      : callDataForSeoLive
+    : createMockDataForSeoClient();
+if (useSerper) console.log(hasSerperKey() ? 'Rank checks: SERPER (RANK_PROVIDER=serper), not DataForSEO.' : `WARNING: ${MISSING_SERPER_KEY_MESSAGE}`);
 if (useGotoConverter) console.log('DataForSEO: Google redirect links are converted to real URLs (free GoTo URL converter).');
 
 const standardWorkspaces = [...standardWorkspaceSlugs()];

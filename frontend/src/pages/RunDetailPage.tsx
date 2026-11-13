@@ -385,7 +385,17 @@ export function RunDetailPage() {
                 <td className="cell-compact">
                   <StatusBadge status={row.status} />
                 </td>
-                <td className="cell-compact font-mono text-[var(--color-ink)]">{formatRank(row.rankDisplay)}</td>
+                <td className="cell-compact font-mono text-[var(--color-ink)]">
+                  {formatRank(row.rankDisplay)}
+                  {row.serpCheck?.status === 'suspect' && (
+                    <span
+                      title="Google's results page for this keyword didn't look like its usual page, even when asked again (possibly a 'poisoned' page). Check this rank by hand."
+                      className="ml-1.5 whitespace-nowrap font-sans text-[11px] font-medium text-amber-300"
+                    >
+                      ⚠ unconfirmed
+                    </span>
+                  )}
+                </td>
                 <td className="max-w-xs truncate cell-compact">
                   {row.rankingUrl ? (
                     <a href={row.rankingUrl} target="_blank" rel="noreferrer" className="text-brand-300 hover:text-brand-200">
