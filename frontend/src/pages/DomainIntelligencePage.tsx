@@ -15,6 +15,8 @@ import { competitorProblems, fillFromPaste, toDomain } from '../utils/competitor
 import { RunAllPanel } from '../components/domainIntel/RunAllPanel';
 import { bundleSelectionProblem } from '../utils/bundleSelection';
 import { AuditsSection } from '../components/domainIntel/AuditsSection';
+import { BaselineReportTab } from '../components/domainIntel/BaselineReportTab';
+import { useSearchParams } from 'react-router-dom';
 import {
   createDomainReport,
   downloadDomainAuditFile,
@@ -356,6 +358,10 @@ type CompetitorMode = 'find' | 'have';
 export function DomainIntelligencePage() {
   const { activeWorkspace } = useSession();
   const workspaceId = activeWorkspace?.id ?? null;
+  // "Domain Reports" (the 5 reports) or "Baseline Report" (a new client's first report) -- kept in the URL (?tab=baseline).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: 'reports' | 'baseline' = searchParams.get('tab') === 'baseline' ? 'baseline' : 'reports';
+  const setTab = (next: 'reports' | 'baseline') => setSearchParams(next === 'baseline' ? { tab: 'baseline' } : {}, { replace: true });
   const [clientName, setClientName] = useState('');
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [location, setLocation] = useState('au');
@@ -750,6 +756,32 @@ export function DomainIntelligencePage() {
 
   return (
     <AppShell hideClientPicker>
+      <div className="mb-5 flex w-fit gap-1 rounded-full border border-[var(--color-border)] bg-overlay/[0.03] p-1" role="tablist" aria-label="Domain Intelligence">
+        {(
+          [
+            { value: 'reports', label: 'Domain Reports' },
+            { value: 'baseline', label: 'Baseline Report' },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.value}
+            onClick={() => setTab(t.value)}
+            className={`rounded-full px-4 py-1.5 text-[13px] font-semibold transition-colors ${
+              tab === t.value ? 'bg-brand-500/20 text-[var(--color-ink)]' : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'baseline' ? (
+        <BaselineReportTab workspaceId={workspaceId} />
+      ) : (
+      <>
       <Card className="p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -1129,6 +1161,8 @@ export function DomainIntelligencePage() {
           </ul>
         )}
       </Card>
+      </>
+      )}
     </AppShell>
   );
 }

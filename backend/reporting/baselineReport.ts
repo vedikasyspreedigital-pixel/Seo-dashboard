@@ -159,12 +159,29 @@ export interface BaselineBuild {
 /** The Baseline Report for a report: its run's ranks + saved DataForSEO answers + the client's Keyword Planner numbers. */
 export async function buildBaselineForReport(reportId: string): Promise<BaselineBuild> {
   const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { client: true, run: true } });
+  return buildBaselineForRun({
+    runId: report.runId,
+    client: report.client,
+    reportDate: report.reportDate ?? report.run.completedAt ?? report.run.createdAt,
+  });
+}
+
+/**
+ * The Baseline Report straight from a run -- used by a report (above) and by the Baseline Report tab on Domain
+ * Intelligence, which has no report at all.
+ */
+export async function buildBaselineForRun(input: {
+  runId: string;
+  client: { id: string; name: string; domain: string | null };
+  reportDate: Date;
+}): Promise<BaselineBuild> {
+  const { runId, client, reportDate } = input;
   const rows = await prisma.rankingRow.findMany({
-    where: { runId: report.runId },
+    where: { runId },
     orderBy: { sourceRowNumber: "asc" },
     select: { id: true, keyword: true, rankValue: true, rankDisplay: true, fullUrl: true, targetUrl: true, seDomain: true },
   });
-  if (rows.length === 0) throw new BaselineReportUnavailableError("This report's run has no keywords.");
+  if (rows.length === 0) throw new BaselineReportUnavailableError("This run has no keywords.");
 
   // Per keyword, the newest saved answer that has results: Google's result count and the top 10 organic results.
   // Only those few fields are read out, in the database -- a run's raw answers can be many MB.
@@ -178,13 +195,13 @@ export async function buildBaselineForReport(reportId: string): Promise<Baseline
                      LIMIT 10) x) AS top10
     FROM ranking_row_attempts a
     JOIN ranking_rows r ON r.id = a.ranking_row_id
-    WHERE r.run_id = ${report.runId} AND a.raw_response IS NOT NULL
+    WHERE r.run_id = ${runId} AND a.raw_response IS NOT NULL
     ORDER BY a.ranking_row_id,
              (jsonb_typeof(a.raw_response->'tasks'->0->'result'->0->'items') = 'array') DESC NULLS LAST,
              a.created_at DESC`;
   const serpByRow = new Map(serp.map((s) => [s.ranking_row_id, s]));
 
-  const metrics = await prisma.keywordMetric.findMany({ where: { clientId: report.clientId } });
+  const metrics = await prisma.keywordMetric.findMany({ where: { clientId: client.id } });
   const byKey = new Map(metrics.map((m) => [m.normalizedKeyword, m]));
   const byWords = new Map<string, (typeof metrics)[number]>();
   for (const m of metrics) if (!byWords.has(wordSetKey(m.keyword))) byWords.set(wordSetKey(m.keyword), m);
@@ -193,9 +210,9 @@ export async function buildBaselineForReport(reportId: string): Promise<Baseline
   // Management can be stale or a placeholder (a test client had "example.com").
   const domain =
     rows.map((r) => normalizeMatchDomain(r.fullUrl)).find(Boolean) ||
-    report.client.domain?.trim() ||
+    client.domain?.trim() ||
     rows.map((r) => normalizeMatchDomain(String(r.targetUrl ?? "").replace(/\*/g, "").replace(/^\.+|\.+$/g, ""))).find(Boolean) ||
-    report.client.name;
+    client.name;
   const brandWords = brandWordsOf(domain);
 
   const missingVolumes: string[] = [];
@@ -229,11 +246,10 @@ export async function buildBaselineForReport(reportId: string): Promise<Baseline
     };
   });
 
-  const reportDate = report.reportDate ?? report.run.completedAt ?? report.run.createdAt;
   const buffer = await buildBaselineWorkbook({ domain, reportDate, rows: built });
   return {
     buffer,
-    filename: baselineFilename(report.client.name),
+    filename: baselineFilename(client.name),
     keywordCount: built.length,
     dateLabel: baselineDateLabel(reportDate),
     country: countryOfSeDomain(rows[0]?.seDomain),

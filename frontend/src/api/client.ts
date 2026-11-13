@@ -457,6 +457,73 @@ export async function fetchGoogleAdsVolumes(reportId: string): Promise<ReportBas
   return handle<ReportBaselineInfo>(await apiFetch(`/reports/${reportId}/baseline-report/google-ads`, { method: 'POST' }));
 }
 
+// -- Baseline Report tab on Domain Intelligence (2026-11-13) ------------------
+
+export type BaselineJobState = 'checking' | 'volumes' | 'ready' | 'failed';
+
+export interface BaselineJob {
+  id: string;
+  clientName: string;
+  domain: string | null;
+  country: string;
+  createdAt: string;
+  createdBy: string | null;
+  state: BaselineJobState;
+  total: number;
+  done: number;
+  ranked: number;
+  failed: number;
+  volumes: 'fetched' | 'fetching' | 'failed' | 'not_set_up' | 'waiting';
+  volumesError: string | null;
+  runId: string;
+}
+
+export async function getBaselineJobs(workspaceId: string): Promise<BaselineJob[]> {
+  return handle<BaselineJob[]>(await apiFetch(`/baseline-jobs?workspaceId=${encodeURIComponent(workspaceId)}`));
+}
+
+export async function getBaselineJob(id: string): Promise<BaselineJob> {
+  return handle<BaselineJob>(await apiFetch(`/baseline-jobs/${id}`));
+}
+
+/** Starts one: the keywords pasted and/or an Excel with a "Keywords" column. */
+export async function startBaselineJob(input: {
+  workspaceId: string;
+  clientName: string;
+  websiteUrl: string;
+  country: string;
+  keywords: string;
+  file: File | null;
+}): Promise<BaselineJob> {
+  const formData = new FormData();
+  formData.append('workspaceId', input.workspaceId);
+  formData.append('clientName', input.clientName);
+  formData.append('websiteUrl', input.websiteUrl);
+  formData.append('country', input.country);
+  formData.append('keywords', input.keywords);
+  if (input.file) formData.append('file', input.file);
+  return handle<BaselineJob>(await apiFetch('/baseline-jobs', { method: 'POST', body: formData }));
+}
+
+export async function downloadBaselineJob(id: string): Promise<Blob> {
+  const res = await apiFetch(`/baseline-jobs/${id}/download`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error((body as { error?: string } | null)?.error ?? `Download failed (${res.status})`);
+  }
+  return res.blob();
+}
+
+export async function retryBaselineVolumes(id: string): Promise<BaselineJob> {
+  return handle<BaselineJob>(await apiFetch(`/baseline-jobs/${id}/volumes`, { method: 'POST' }));
+}
+
+export async function uploadBaselineKeywordPlanner(id: string, file: File): Promise<BaselineJob> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return handle<BaselineJob>(await apiFetch(`/baseline-jobs/${id}/keyword-planner`, { method: 'POST', body: formData }));
+}
+
 /** The uploaded custom report PDF, and each extra attachment (a PDF opens in the tab, Excel downloads). */
 export function getCustomPdfUrl(reportId: string): string {
   return `${BASE}/reports/${reportId}/custom-pdf`;

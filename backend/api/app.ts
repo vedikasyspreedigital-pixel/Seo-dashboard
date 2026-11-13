@@ -9,6 +9,7 @@ import { consolidatedClientsRouter, consolidatedReportsRouter } from "./routes/c
 import { baselineReportRouter } from "./routes/baselineReport.js";
 import { compareReportsRouter } from "./routes/compareReports.js";
 import { createRunsRouter } from "./routes/runs.js";
+import { createBaselineJobsRouter } from "./routes/baselineJobs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
 import { createDomainIntelRouter, type DomainIntelRouterDeps } from "./routes/domainIntel.js";
 import { storageRouter } from "./routes/storage.js";
@@ -107,6 +108,7 @@ export function createApp(
   app.use("/api/reports", baselineReportRouter);
   app.use("/api/reports", createReportsRouter(reportingDeps));
   app.use("/api/domain-intel", createDomainIntelRouter(domainIntelDeps));
+  app.use("/api/baseline-jobs", createBaselineJobsRouter(callDataForSeo));
   app.use("/api/storage", storageRouter);
   // The office Chrome agent (Domain Intelligence fetching) -- token-protected, off unless DOMAIN_INTEL_AGENT_TOKEN is set.
   app.use("/api/agent", createAgentRouter());

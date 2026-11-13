@@ -255,6 +255,7 @@ model Client {
   domainReports DomainReport[]
   consolidatedHistory ConsolidatedHistory?
   keywordMetrics KeywordMetric[]
+  baselineJobs   BaselineJob[]
 
   @@index([workspaceId, isActive])
   @@map("clients")
@@ -298,6 +299,28 @@ model KeywordMetric {
 
   @@unique([clientId, normalizedKeyword])
   @@map("keyword_metrics")
+}
+
+// "Baseline Report" tab on Domain Intelligence (2026-11-13): a new client's keywords typed in once, checked as a
+// normal run (ranks + search results), then the Baseline Excel with Keyword Planner volumes -- download only, no
+// report / email steps. The run belongs to a Domain Intelligence ("domain") client, so it stays out of the
+// ranking pages.
+model BaselineJob {
+  id               String     @id @default(uuid())
+  workspaceId      String     @map("workspace_id")
+  clientId         String     @map("client_id")
+  client           Client     @relation(fields: [clientId], references: [id])
+  runId            String     @unique @map("run_id")
+  run              RankingRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  country          String // "AU", "IN", ... -- the Google Ads country for the volumes
+  createdBy        String?    @map("created_by")
+  // Google Ads volumes: fetched once after the run finishes; the error is shown on the card if it failed.
+  volumesFetchedAt DateTime?  @map("volumes_fetched_at")
+  volumesError     String?    @map("volumes_error")
+  createdAt        DateTime   @default(now()) @map("created_at")
+
+  @@index([workspaceId, createdAt])
+  @@map("baseline_jobs")
 }
 
 // Reporting-layer config only -- deliberately isolated from the ranking
@@ -358,6 +381,7 @@ model RankingRun {
   // Baselines produced by this run's verified-Excel upload (at most one in
   // practice -- re-uploads replace it in place, see processVerifiedExcelUpload).
   producedBaselines    RankingBaseline[] @relation("BaselineSourceRun")
+  baselineJob          BaselineJob?
 
   @@map("ranking_runs")
 }
