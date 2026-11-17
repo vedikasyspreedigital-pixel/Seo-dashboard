@@ -995,6 +995,12 @@ export async function getCompetitorSearch(id: string): Promise<DomainCompetitorS
   return handle<DomainCompetitorSearch>(res);
 }
 
+/** Deletes a Domain Intelligence report and its files, for good. */
+export async function deleteDomainReport(reportId: string): Promise<void> {
+  const res = await apiFetch(`/domain-intel/reports/${reportId}`, { method: 'DELETE' });
+  await handle<{ ok: boolean }>(res);
+}
+
 export async function retryDomainReportPost(reportId: string): Promise<void> {
   const res = await apiFetch(`/domain-intel/reports/${reportId}/post`, { method: 'POST' });
   await handle<{ ok: boolean }>(res);

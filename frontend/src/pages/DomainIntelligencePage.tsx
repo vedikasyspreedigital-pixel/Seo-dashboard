@@ -33,6 +33,7 @@ import {
   postDomainBundle,
   resolveDomainClient,
   retryDomainReportPost,
+  deleteDomainReport,
   startDomainAudit,
   startDomainBundle,
   startDomainFetch,
@@ -741,6 +742,17 @@ export function DomainIntelligencePage() {
     }
   }
 
+  async function handleDelete(r: HistoryReport) {
+    const when = new Date(r.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    if (!window.confirm(`Delete ${r.clientName}'s report from ${when}? Its files are deleted too, and this can't be undone. (Anything already posted in ClickUp stays there.)`)) return;
+    try {
+      await deleteDomainReport(r.id);
+      setHistory((list) => list.filter((x) => x.id !== r.id));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   async function handleRetry(reportId: string) {
     try {
       await retryDomainReportPost(reportId);
@@ -1153,6 +1165,11 @@ export function DomainIntelligencePage() {
                   {(r.status === 'POST_FAILED' || (r.status === 'NOT_POSTED' && r.clientTaskId)) && (
                     <Button variant="ghost" className="!py-1.5 text-xs" onClick={() => void handleRetry(r.id)}>
                       Post to ClickUp again
+                    </Button>
+                  )}
+                  {r.status !== 'GENERATING' && r.status !== 'POSTING' && (
+                    <Button variant="ghost" className="ml-auto !py-1.5 text-xs text-rose-300 hover:text-rose-200" onClick={() => void handleDelete(r)}>
+                      Delete
                     </Button>
                   )}
                 </div>

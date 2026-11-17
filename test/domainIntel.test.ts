@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import ExcelJS from "exceljs";
 import { prisma } from "../backend/db/client.js";
 import { createApp } from "../backend/api/app.js";
@@ -327,6 +328,17 @@ test("POST /api/domain-intel/reports: no domain task id -> generated but NOT_POS
 
     const cross = await api.post("/api/domain-intel/reports").field("clientId", foreign.id).field("websiteUrl", "x.com").attach("semrush", Buffer.from(SEMRUSH_CSV), "s.csv");
     assert.equal(cross.status, 404);
+
+    // Delete (2026-11-17): another workspace can't; the owner can -- the row and its files are gone.
+    const files = (await prisma.domainReport.findUniqueOrThrow({ where: { id: ok.body.id } })).files as { path: string }[];
+    assert.ok(files.length > 0 && existsSync(files[0].path));
+    const stranger = authedRequest(app, other.cookieHeader);
+    assert.equal((await stranger.delete(`/api/domain-intel/reports/${ok.body.id}`)).status, 404);
+    const del = await api.delete(`/api/domain-intel/reports/${ok.body.id}`);
+    assert.equal(del.status, 200, JSON.stringify(del.body));
+    assert.equal(await prisma.domainReport.findUnique({ where: { id: ok.body.id } }), null);
+    assert.equal(existsSync(files[0].path), false, "its files are deleted too");
+    assert.equal((await api.delete(`/api/domain-intel/reports/${ok.body.id}`)).status, 404);
   } finally {
     const reports = await prisma.domainReport.findMany({ where: { clientId: { in: [client.id, foreign.id] } } });
     for (const r of reports) {

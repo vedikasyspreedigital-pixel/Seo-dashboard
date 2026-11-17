@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import path from "node:path";
+import { rm, unlink } from "node:fs/promises";
 import { prisma } from "../../db/client.js";
 import { requireAuth } from "../../auth/requireAuth.js";
 import { findOwnedClientOrRespond } from "../../auth/ownership.js";
 import { expensiveActionRateLimit } from "../rateLimit.js";
 import { KeywordExportError, type KeywordSource } from "../../domainIntel/readKeywordExport.js";
-import { LOCATIONS, REPORT_MODES, SOURCES, createDomainReport, isPostingNow, postDomainReport, type ReportFile, type ReportMode } from "../../domainIntel/createDomainReport.js";
+import { LOCATIONS, REPORT_MODES, SOURCES, createDomainReport, domainReportDir, isPostingNow, postDomainReport, type ReportFile, type ReportMode } from "../../domainIntel/createDomainReport.js";
 import type { PostCommentFn } from "../../domainIntel/clickupCommentPoster.js";
 import type { ClassifyWithAiFn } from "../../domainIntel/classifyIntent.js";
 import { bareDomain, type FetchExportFn } from "../../domainIntel/fetchers/flikoverAhrefs.js";
@@ -561,6 +562,27 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
       return;
     }
     res.download(path.resolve(file.path), file.name);
+  });
+
+  // Delete a report (2026-11-17, the history got full): its row and its files, for good. The page asks first.
+  // Not while it's being made or posted -- that work would write to a report that no longer exists.
+  router.delete("/reports/:id", async (req, res) => {
+    const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
+    if (!report) return;
+    if (report.status === "GENERATING" || isPostingNow(report.id)) {
+      res.status(409).json({ error: "This report is still being made or posted -- delete it when that's finished." });
+      return;
+    }
+    await prisma.domainReport.delete({ where: { id: report.id } });
+    // Its files: the report's own folder, plus any listed file that sits under the Domain Intelligence folder.
+    const dir = domainReportDir(report.id);
+    const root = path.dirname(dir);
+    await rm(dir, { recursive: true, force: true }).catch((err) => console.error(`[domainIntel] deleting report ${report.id}'s folder failed:`, err));
+    for (const f of (report.files as unknown as ReportFile[]) ?? []) {
+      const full = path.resolve(f.path);
+      if (full.startsWith(root + path.sep)) await unlink(full).catch(() => {});
+    }
+    res.json({ ok: true });
   });
 
   router.post("/reports/:id/post", expensiveActionRateLimit, async (req, res) => {
