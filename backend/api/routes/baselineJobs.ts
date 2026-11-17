@@ -18,16 +18,22 @@ import {
   keywordsFromWorkbook,
   parseKeywordText,
   retryVolumes,
+  sendBaselineJob,
+  BaselineSendError,
   viewBaselineJobs,
 } from "../../reporting/baselineJobs.js";
+import type { SendEmailFn } from "../../reporting/emailSender.js";
 
 // "Baseline Report" tab on Domain Intelligence (2026-11-13) -- see backend/reporting/baselineJobs.ts.
 //   GET  /api/baseline-jobs?workspaceId=     this workspace's baseline jobs (newest first)
 //   POST /api/baseline-jobs                  start one: client name, website, country + pasted keywords or an Excel
 //   GET  /api/baseline-jobs/:id              one job (the page polls it while the keywords are checked)
-//   GET  /api/baseline-jobs/:id/download     the Baseline Excel
+//   GET  /api/baseline-jobs/:id/download     the Baseline Excel (?copy=client: the client copy)
+//   GET  /api/baseline-jobs/:id/preview      the client copy's contents, to show on screen
 //   POST /api/baseline-jobs/:id/volumes      fetch the Google Ads volumes again (after a failure)
 //   POST /api/baseline-jobs/:id/keyword-planner   or upload the Keyword Planner download instead
+//   POST /api/baseline-jobs/:id/send         email the client copy to the new client through ClickUp -- once
+//                                            (body: to, cc, clickupTask, subject?, body?)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // The same folder the runs page stores uploads in (backend/api/routes/runs.ts).
@@ -44,7 +50,7 @@ async function findOwnedJob(req: Request, res: Response) {
   return job;
 }
 
-export function createBaselineJobsRouter(callDataForSeo: CallDataForSeoFn) {
+export function createBaselineJobsRouter(callDataForSeo: CallDataForSeoFn, sendEmail?: SendEmailFn) {
   const router = Router();
   router.use(requireAuth);
 
@@ -115,7 +121,7 @@ export function createBaselineJobsRouter(callDataForSeo: CallDataForSeoFn) {
       return;
     }
     try {
-      const built = await buildBaselineForJob(job.id);
+      const built = await buildBaselineForJob(job.id, req.query.copy === "client" ? "client" : "internal");
       res.setHeader("Content-Type", XLSX);
       res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(built.filename)}`);
       res.send(built.buffer);
@@ -126,6 +132,54 @@ export function createBaselineJobsRouter(callDataForSeo: CallDataForSeoFn) {
       }
       throw err;
     }
+  });
+
+  router.get("/:id/preview", async (req, res) => {
+    const job = await findOwnedJob(req, res);
+    if (!job) return;
+    const [view] = await viewBaselineJobs({ workspaceId: job.workspaceId, id: job.id }, 1);
+    if (view.state === "checking") {
+      res.status(409).json({ error: `Still checking the keywords (${view.done} of ${view.total}) -- try again when it's done.` });
+      return;
+    }
+    try {
+      res.json((await buildBaselineForJob(job.id, "client")).clientPreview);
+    } catch (err) {
+      if (err instanceof BaselineReportUnavailableError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  router.post("/:id/send", expensiveActionRateLimit, async (req, res) => {
+    const job = await findOwnedJob(req, res);
+    if (!job) return;
+    if (!sendEmail) {
+      res.status(503).json({ error: "Email isn't set up on this server." });
+      return;
+    }
+    const { to, cc, clickupTask, subject, body } = req.body ?? {};
+    try {
+      await sendBaselineJob(
+        job.id,
+        { to, cc, clickupTask: typeof clickupTask === "string" ? clickupTask : "", subject, body, sentBy: req.authUser!.email },
+        sendEmail,
+      );
+    } catch (err) {
+      if (err instanceof BaselineJobInputError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      if (err instanceof BaselineSendError || err instanceof BaselineReportUnavailableError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+    const [view] = await viewBaselineJobs({ workspaceId: job.workspaceId, id: job.id }, 1);
+    res.json(view);
   });
 
   router.post("/:id/volumes", expensiveActionRateLimit, async (req, res) => {

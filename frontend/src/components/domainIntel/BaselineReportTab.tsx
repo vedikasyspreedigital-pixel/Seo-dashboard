@@ -11,17 +11,22 @@ import { StatusBadge } from '../ui/StatusBadge';
 import { CheckCircleIcon, UploadDropIcon, UploadIcon, XCircleIcon } from '../ui/icons';
 import {
   downloadBaselineJob,
+  getBaselineJobPreview,
   getBaselineJobs,
   retryBaselineVolumes,
+  sendBaselineJobEmail,
   startBaselineJob,
   uploadBaselineKeywordPlanner,
   type BaselineJob,
 } from '../../api/client';
+import type { BaselineClientPreview as PreviewData } from '../../api/types';
+import { BaselineClientPreview } from '../report/BaselineClientPreview';
 
 /**
  * "Baseline Report" tab on Domain Intelligence (2026-11-13): a new client's first report, made once. The team types
  * the client, website, country and keywords; the dashboard checks the ranks on Google, gets the search volumes from
- * Google Keyword Planner, and the Excel is ready to download. Nothing is sent to the client from here.
+ * Google Keyword Planner, and the Excel is ready to download. Then it's emailed to the new client ONCE from the
+ * card (To / CC / ClickUp task), through ClickUp, with the client copy (no Number of Result / SERP result).
  */
 
 // The same codes as the backend (backend/reporting/baselineJobs.ts BASELINE_COUNTRIES).
@@ -70,7 +75,7 @@ function saveBlob(blob: Blob, name: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-const STEPS = ['Client & keywords', 'Ranks on Google', 'Search volumes', 'Download Excel'];
+const STEPS = ['Client & keywords', 'Ranks on Google', 'Search volumes', 'Check & email client'];
 
 function Steps() {
   return (
@@ -125,6 +130,66 @@ function PlannerUpload({ onFile, busy }: { onFile: (f: File) => void; busy: bool
   );
 }
 
+/** "Email to client": To / CC / ClickUp task + the message, sent once through ClickUp with the client copy. */
+function EmailForm({ job, onSent, onCancel }: { job: BaselineJob; onSent: (job: BaselineJob) => void; onCancel: () => void }) {
+  const [to, setTo] = useState('');
+  const [cc, setCc] = useState('');
+  const [task, setTask] = useState(job.email.clickupTaskUrl ?? '');
+  const [subject, setSubject] = useState(job.email.defaultSubject);
+  const [body, setBody] = useState(job.email.defaultBody);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(job.email.error ? `Last try failed: ${job.email.error}` : null);
+
+  async function send() {
+    if (!window.confirm(`Send the Baseline Report to ${to.trim()}? It goes to the client only once.`)) return;
+    setSending(true);
+    setError(null);
+    try {
+      onSent(await sendBaselineJobEmail(job.id, { to, cc, clickupTask: task, subject, body }));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const id = (name: string) => `baseline-${job.id}-${name}`;
+  return (
+    <div className="mt-3 space-y-3 rounded-xl border border-[var(--color-border)] bg-overlay/[0.02] p-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FormField label="To" htmlFor={id('to')}>
+          <TextInput id={id('to')} value={to} onChange={(e) => setTo(e.target.value)} placeholder="client@example.com" disabled={sending} />
+        </FormField>
+        <FormField label="CC" htmlFor={id('cc')}>
+          <TextInput id={id('cc')} value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Optional · comma between addresses" disabled={sending} />
+        </FormField>
+      </div>
+      <FormField label="ClickUp task (link or ID)" htmlFor={id('task')}>
+        <TextInput id={id('task')} value={task} onChange={(e) => setTask(e.target.value)} placeholder="https://app.clickup.com/t/86c1abcde" disabled={sending} />
+      </FormField>
+      <FormField label="Subject" htmlFor={id('subject')}>
+        <TextInput id={id('subject')} value={subject} onChange={(e) => setSubject(e.target.value)} disabled={sending} />
+      </FormField>
+      <FormField label="Message" htmlFor={id('body')}>
+        <Textarea id={id('body')} rows={7} value={body} onChange={(e) => setBody(e.target.value)} disabled={sending} />
+      </FormField>
+      <p className="text-[11px] text-[var(--color-ink-faint)]">
+        Attaches the client copy of the Excel: Keywords, Avg. Monthly Searches, Competition, Intent and the ranking. Number of Result and SERP result stay internal.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button className="!py-1.5 text-xs" disabled={sending || !to.trim() || !task.trim()} onClick={() => void send()}>
+          {sending && <Spinner />}
+          {sending ? 'Sending through ClickUp…' : 'Send to client'}
+        </Button>
+        <Button variant="ghost" className="!py-1.5 text-xs" disabled={sending} onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+      <InlineError message={error} />
+    </div>
+  );
+}
+
 function stateBadge(job: BaselineJob) {
   if (job.state === 'failed') return { label: 'Stopped', tone: 'bg-rose-500/15 text-rose-300' };
   if (job.state === 'checking') return { label: 'Checking ranks', tone: 'bg-sky-500/15 text-sky-300' };
@@ -133,13 +198,28 @@ function stateBadge(job: BaselineJob) {
 }
 
 function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: BaselineJob) => void }) {
-  const [busy, setBusy] = useState<'download' | 'retry' | 'planner' | null>(null);
+  const [busy, setBusy] = useState<'download' | 'client' | 'retry' | 'planner' | null>(null);
+  const [emailing, setEmailing] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [preview, setPreview] = useState<PreviewData | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  async function openPreview() {
+    setPreviewOpen(true);
+    setPreview(null);
+    setPreviewError(null);
+    try {
+      setPreview(await getBaselineJobPreview(job.id));
+    } catch (err) {
+      setPreviewError((err as Error).message);
+    }
+  }
   const [error, setError] = useState<string | null>(null);
   const badge = stateBadge(job);
   const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
   const finished = job.state === 'ready' || job.state === 'volumes';
 
-  async function act(kind: 'download' | 'retry' | 'planner', fn: () => Promise<void>) {
+  async function act(kind: 'download' | 'client' | 'retry' | 'planner', fn: () => Promise<void>) {
     setBusy(kind);
     setError(null);
     try {
@@ -223,6 +303,28 @@ function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: Baseline
             {busy === 'download' && <Spinner />}
             Download Baseline Excel
           </Button>
+          <Button
+            variant="secondary"
+            className="!py-1.5 text-xs"
+            title="Without Number of Result and SERP result -- the copy for the client"
+            disabled={busy !== null || job.state === 'volumes'}
+            onClick={() =>
+              void act('client', async () =>
+                saveBlob(await downloadBaselineJob(job.id, 'client'), `${job.clientName.replace(/[\\/:*?"<>|]/g, '').trim()} - Baseline Report.xlsx`),
+              )
+            }
+          >
+            {busy === 'client' && <Spinner />}
+            Client copy
+          </Button>
+          <Button variant="secondary" className="!py-1.5 text-xs" disabled={busy !== null || job.state === 'volumes'} onClick={() => void openPreview()}>
+            Preview client copy
+          </Button>
+          {job.state === 'ready' && job.email.state === 'not_sent' && !emailing && (
+            <Button variant="secondary" className="!py-1.5 text-xs" disabled={busy !== null} onClick={() => setEmailing(true)}>
+              Email to client
+            </Button>
+          )}
           {(job.volumes === 'failed' || job.volumes === 'not_set_up') && (
             <>
               {job.volumes === 'failed' && (
@@ -236,12 +338,44 @@ function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: Baseline
           )}
         </div>
       )}
-      {job.state === 'ready' && (
-        <p className="mt-2 text-[11px] text-[var(--color-ink-faint)]">
-          Before sending: fill “Number of Result” by hand (incognito Google search → Tools → “About X results”) and look over the ranks.
+      {job.state === 'ready' && job.email.state === 'not_sent' && !emailing && (
+        <p className="mt-2 text-[11px] text-[var(--color-ink-faint)]">Before sending: download it and look over the ranks, volumes and intent.</p>
+      )}
+      {emailing && job.email.state === 'not_sent' && (
+        <EmailForm
+          job={job}
+          onCancel={() => setEmailing(false)}
+          onSent={(next) => {
+            setEmailing(false);
+            onChange(next);
+          }}
+        />
+      )}
+      {job.email.state === 'sending' && (
+        <p className="mt-3 flex items-center gap-2 text-xs text-sky-300">
+          <Spinner /> Sending to the client through ClickUp…
         </p>
       )}
+      {job.email.state === 'sent' && (
+        <p className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-[var(--color-ink-muted)]">
+          <CheckCircleIcon className="h-4 w-4 text-emerald-400" />
+          Emailed to <span className="font-medium text-[var(--color-ink)]">{job.email.to.join(', ')}</span>
+          {job.email.cc.length > 0 && <> (cc {job.email.cc.join(', ')})</>}
+          {job.email.sentAt && <> on {new Date(job.email.sentAt).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</>}
+          {job.email.sentBy && <> by {job.email.sentBy.split('@')[0]}</>}
+        </p>
+      )}
+      {job.email.state === 'not_sent' && job.email.error && !emailing && (
+        <p className="mt-2 text-xs text-amber-300">The email didn't go out last time: {job.email.error}</p>
+      )}
       <InlineError message={error} className="mt-2" />
+      <BaselineClientPreview
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        preview={preview}
+        loading={previewOpen && !preview && !previewError}
+        error={previewError}
+      />
     </li>
   );
 }
@@ -323,7 +457,7 @@ export function BaselineReportTab({ workspaceId }: { workspaceId: string | null 
         <h2 className="text-base font-semibold text-[var(--color-ink)]">New Baseline Report</h2>
         <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
           A new client’s first report. Add their keywords — the dashboard checks where the website ranks on Google, adds the search volume and competition
-          from Google Keyword Planner, and you download the Excel. Nothing is sent to the client from here.
+          from Google Keyword Planner, then you check the Excel and email it to the client once (through ClickUp).
         </p>
         <Steps />
 

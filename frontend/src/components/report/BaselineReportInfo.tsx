@@ -5,6 +5,7 @@ import { Spinner } from '../ui/Spinner';
 import { UploadIcon } from '../ui/icons';
 import { fetchGoogleAdsVolumes, getReportBaselineInfo, getReportBaselineUrl, uploadKeywordPlannerFile } from '../../api/client';
 import type { ReportBaselineInfo } from '../../api/types';
+import { BaselineClientPreview } from './BaselineClientPreview';
 
 const ACCEPTED = '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -19,6 +20,7 @@ export function BaselineReportInfo({ reportId, editable, className = '' }: { rep
   const [busy, setBusy] = useState<'upload' | 'google' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -74,7 +76,15 @@ export function BaselineReportInfo({ reportId, editable, className = '' }: { rep
         <span className="font-semibold">{info.dateLabel}</span>, with search volume, competition, number of results, SERP result and intent.{' '}
         <a href={getReportBaselineUrl(reportId)} className="font-medium text-brand-300 hover:text-brand-200">
           Download to check
-        </a>
+        </a>{' '}
+        ·{' '}
+        <a href={getReportBaselineUrl(reportId, 'client')} className="font-medium text-brand-300 hover:text-brand-200">
+          client copy (what the email attaches)
+        </a>{' '}
+        ·{' '}
+        <button type="button" onClick={() => setPreviewOpen(true)} className="font-medium text-brand-300 hover:text-brand-200">
+          preview client copy
+        </button>
       </p>
       {missing > 0 ? (
         <p className="mt-2 text-sm text-amber-300">
@@ -95,7 +105,7 @@ export function BaselineReportInfo({ reportId, editable, className = '' }: { rep
           The saved search results are gone for: {info.missingSerp.join(', ')} -- Number of Result and SERP result stay empty for them.
         </p>
       )}
-      <p className="mt-2 text-xs text-[var(--color-ink-faint)]">SERP result and Intent are worked out by rules from the search results -- check them in the download before sending.</p>
+      <p className="mt-2 text-xs text-[var(--color-ink-faint)]">SERP result is worked out from Google's top 10 results; Intent is written by Gemini (rules if it isn't available) -- check them in the download before sending. Number of Result and SERP result are for the team only: the email attaches the client copy without them.</p>
       <p className="mt-1 text-xs text-[var(--color-ink-faint)]">Number of Result can come out empty (Serper doesn't give it): fill it in the download by hand -- incognito Google search, Tools, the "About X results" number.</p>
       {editable && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -114,6 +124,7 @@ export function BaselineReportInfo({ reportId, editable, className = '' }: { rep
       )}
       {savedNote && <p className="mt-2 text-xs text-emerald-300">{savedNote}</p>}
       {actionError && <p className="mt-2 text-sm text-rose-300">{actionError}</p>}
+      <BaselineClientPreview open={previewOpen} onClose={() => setPreviewOpen(false)} preview={info.clientPreview} />
     </AlertPanel>
   );
 }

@@ -9,14 +9,19 @@ import { startRunProcessing } from "../dataforseo/engine.js";
 import type { CallDataForSeoFn } from "../worker/processRun.js";
 import { findOrCreateProspectClient } from "../domainIntel/prospectClient.js";
 import { normalizeMatchDomain } from "../dataforseo/buildRequest.js";
-import { buildBaselineForRun, saveKeywordMetrics, type BaselineBuild } from "./baselineReport.js";
+import { buildBaselineForRun, saveKeywordMetrics, type BaselineBuild, type BaselineCopy } from "./baselineReport.js";
 import { fetchGoogleAdsMetrics, googleAdsConfigured, GoogleAdsError } from "./keywordPlanner.js";
+import type { SendEmailFn } from "./emailSender.js";
+import { isClickUpTaskUrl } from "./clickupEmailSender.js";
+import { toClickUpTaskId, ProspectClientError } from "../domainIntel/prospectClient.js";
 
 /**
  * "Baseline Report" tab on Domain Intelligence (2026-11-13). The team types a new client's name, website, country
  * and keyword list ONCE; the dashboard checks the keywords as an ordinary run (Serper / DataForSEO -- whatever the
  * server is set to), fetches the volumes from Google Ads when the run is done, and hands back the Baseline Excel.
- * Download only: no report, no email, nothing goes to the client.
+ * The Excel downloads any time; once it's checked, the card emails it to the new client ONCE (2026-11-16): the
+ * team types To / CC / the ClickUp task, and it goes through ClickUp like every report, with the client copy
+ * (no Number of Result / SERP result). See sendBaselineJob.
  */
 
 /** The countries the tab offers -- the same codes as the Domain Intelligence location list. */
@@ -179,6 +184,20 @@ export interface BaselineJobView {
   volumes: "fetched" | "fetching" | "failed" | "not_set_up" | "waiting";
   volumesError: string | null;
   runId: string;
+  /** The email to the client: sent once. */
+  email: {
+    state: "not_sent" | "sending" | "sent";
+    sentAt: string | null;
+    sentBy: string | null;
+    to: string[];
+    cc: string[];
+    subject: string | null;
+    error: string | null;
+    /** The ClickUp task to send from -- the one used, else the client's Domain Intelligence task (to pre-fill). */
+    clickupTaskUrl: string | null;
+    defaultSubject: string;
+    defaultBody: string;
+  };
 }
 
 const volumeFetches = new Map<string, Promise<void>>();
@@ -224,7 +243,7 @@ export async function viewBaselineJobs(where: { workspaceId: string; id?: string
     where,
     orderBy: { createdAt: "desc" },
     take,
-    include: { client: { select: { name: true, domain: true } }, run: { select: { status: true, totalRows: true } } },
+    include: { client: { select: { name: true, domain: true, domainReportTaskId: true } }, run: { select: { status: true, totalRows: true } } },
   });
   if (jobs.length === 0) return [];
   const counts = await prisma.rankingRow.groupBy({
@@ -270,15 +289,129 @@ export async function viewBaselineJobs(where: { workspaceId: string; id?: string
       volumes,
       volumesError: j.volumesError,
       runId: j.runId,
+      email: {
+        state: j.sentAt ? "sent" : j.sendingAt ? "sending" : "not_sent",
+        sentAt: j.sentAt?.toISOString() ?? null,
+        sentBy: j.sentBy,
+        to: Array.isArray(j.sentTo) ? (j.sentTo as string[]) : [],
+        cc: Array.isArray(j.sentCc) ? (j.sentCc as string[]) : [],
+        subject: j.sentSubject,
+        error: j.sendError,
+        clickupTaskUrl: j.clickupTaskUrl ?? (j.client.domainReportTaskId ? `https://app.clickup.com/t/${j.client.domainReportTaskId}` : null),
+        defaultSubject: baselineEmailSubject(j.client.name),
+        defaultBody: BASELINE_EMAIL_BODY,
+      },
     });
   }
   return views;
 }
 
-export async function buildBaselineForJob(jobId: string): Promise<BaselineBuild> {
+export async function buildBaselineForJob(jobId: string, copy: BaselineCopy = "internal"): Promise<BaselineBuild> {
   const job = await prisma.baselineJob.findUniqueOrThrow({
     where: { id: jobId },
     include: { client: { select: { id: true, name: true, domain: true } }, run: { select: { completedAt: true, createdAt: true } } },
   });
-  return buildBaselineForRun({ runId: job.runId, client: job.client, reportDate: job.run.completedAt ?? job.run.createdAt });
+  return buildBaselineForRun({ runId: job.runId, client: job.client, reportDate: job.run.completedAt ?? job.run.createdAt, copy });
+}
+
+// ---------------------------------------------------------------- the email to the new client (sent once)
+
+export const BASELINE_EMAIL_BODY =
+  "Dear Client,\n\nGreetings from SySpree!\n\nPlease find attached the Keyword Baseline Report for your website. We shall continue to share similar reports that will include updates and ranking status, with you on a regular basis in the future too.\n\nPlease feel free to reach out to us in case you have any queries or if you want us to walk you through the details. And, we look forward to your feedback to ensure that you have a quality experience with SySpree.\n\nThanks & Regards,\nCaahill Murzello.";
+
+export function baselineEmailSubject(clientName: string): string {
+  return `${clientName.trim()} - Keyword Baseline Report`;
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** "a@x.com, b@y.com" / one per line / an array -> trimmed, de-duplicated addresses; any bad one is refused. */
+export function parseEmailList(value: unknown, label: string): string[] {
+  const parts = Array.isArray(value) ? value.map(String) : typeof value === "string" ? value.split(/[\s,;]+/) : [];
+  const out: string[] = [];
+  for (const raw of parts) {
+    const e = raw.trim();
+    if (!e) continue;
+    if (!EMAIL_PATTERN.test(e)) throw new BaselineJobInputError(`"${e}" in ${label} isn't an email address.`);
+    if (!out.some((o) => o.toLowerCase() === e.toLowerCase())) out.push(e);
+  }
+  return out;
+}
+
+export class BaselineSendError extends Error {}
+
+export interface SendBaselineJobInput {
+  to: unknown;
+  cc?: unknown;
+  clickupTask: string;
+  subject?: string;
+  body?: string;
+  sentBy: string;
+}
+
+/**
+ * Emails the Baseline Report (the client copy) to the new client through ClickUp -- ONCE. The job is claimed
+ * atomically first (sendingAt), so a double click or two tabs can never send it twice; a failed send releases
+ * the claim and keeps the error on the card, so it can be tried again.
+ */
+export async function sendBaselineJob(jobId: string, input: SendBaselineJobInput, sendEmail: SendEmailFn) {
+  const to = parseEmailList(input.to, "To");
+  if (to.length === 0) throw new BaselineJobInputError("Add the client's email address in To.");
+  const cc = parseEmailList(input.cc ?? "", "CC");
+  let taskId: string | null;
+  try {
+    taskId = toClickUpTaskId(String(input.clickupTask ?? ""));
+  } catch (err) {
+    throw new BaselineJobInputError(err instanceof ProspectClientError ? err.message : "That ClickUp task doesn't look right.");
+  }
+  if (!taskId) throw new BaselineJobInputError("Paste the client's ClickUp task link or ID -- the email is sent from that task.");
+  const clickupTaskUrl = `https://app.clickup.com/t/${taskId}`;
+  if (!isClickUpTaskUrl(clickupTaskUrl)) throw new BaselineJobInputError("That ClickUp task doesn't look right.");
+
+  const job = await prisma.baselineJob.findUniqueOrThrow({
+    where: { id: jobId },
+    include: { client: { select: { name: true } }, run: { select: { status: true } } },
+  });
+  if (job.sentAt) throw new BaselineSendError(`Already sent on ${job.sentAt.toISOString().slice(0, 10)} -- the Baseline Report goes to a client only once.`);
+  if (!runFinished(job.run.status)) throw new BaselineSendError("Still checking the keywords -- send it when the Excel is ready.");
+  const subject = String(input.subject ?? "").trim() || baselineEmailSubject(job.client.name);
+  const body = String(input.body ?? "").trim() || BASELINE_EMAIL_BODY;
+
+  // Built BEFORE claiming, so a build problem never leaves the job stuck in "sending".
+  const built = await buildBaselineForJob(jobId, "client");
+
+  const claimed = await prisma.baselineJob.updateMany({
+    where: { id: jobId, sentAt: null, sendingAt: null },
+    data: { sendingAt: new Date(), sendError: null },
+  });
+  if (claimed.count === 0) throw new BaselineSendError("It's already being sent (or was just sent) -- refresh the page.");
+
+  const workspace = await prisma.workspace.findUnique({ where: { id: job.workspaceId }, select: { slug: true } });
+  let result: Awaited<ReturnType<SendEmailFn>>;
+  try {
+    result = await sendEmail({
+      to,
+      cc: cc.length ? cc : undefined,
+      subject,
+      bodyText: body,
+      clickupTaskUrl,
+      workspaceSlug: workspace?.slug ?? null,
+      excelPdfBuffer: built.buffer,
+      excelPdfFilename: built.filename,
+    });
+  } catch (err) {
+    console.error(`[baselineJobs] send failed for baseline job ${jobId}:`, err);
+    await prisma.baselineJob
+      .update({ where: { id: jobId }, data: { sendingAt: null, sendError: (err as Error).message.slice(0, 500), clickupTaskUrl } })
+      .catch(() => {});
+    throw new BaselineSendError(`The email didn't go out: ${(err as Error).message}`);
+  }
+  // The email HAS gone out: never report a failure from here (that would invite a second send).
+  await prisma.baselineJob
+    .update({
+      where: { id: jobId },
+      data: { sentAt: new Date(), sentBy: input.sentBy, sentTo: to, sentCc: cc, sentSubject: subject, clickupTaskUrl, sendError: null },
+    })
+    .catch((err) => console.error(`[baselineJobs] baseline job ${jobId} WAS SENT, but saving that failed (left "sending", which blocks a resend):`, err));
+  return { messageId: result.messageId };
 }

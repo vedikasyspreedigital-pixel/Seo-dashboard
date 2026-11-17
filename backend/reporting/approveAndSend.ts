@@ -145,7 +145,8 @@ export async function approveAndSendReport(
     } else if (current.attachmentSource === "baseline") {
       // Baseline Report (2026-11-10): a new client's first report -- the team's "Client Keyword Baseline Report"
       // Excel (volume, competition, result count, SERP mix, intent, rank) goes INSTEAD of the PDF.
-      const baseline = await buildBaselineForReport(current.id);
+      // The client copy: Number of Result and SERP result stay internal (2026-11-16).
+      const baseline = await buildBaselineForReport(current.id, "client");
       excelPdfBuffer = baseline.buffer;
       excelPdfFilename = baseline.filename;
     } else if (reportWithClient.client.consolidatedReport) {

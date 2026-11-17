@@ -317,6 +317,16 @@ model BaselineJob {
   // Google Ads volumes: fetched once after the run finishes; the error is shown on the card if it failed.
   volumesFetchedAt DateTime?  @map("volumes_fetched_at")
   volumesError     String?    @map("volumes_error")
+  // Email to the new client (2026-11-16) -- sent ONCE, from the job card, through ClickUp like every report.
+  // sendingAt = the send is in progress (claimed atomically, so a double click can't send twice).
+  sendingAt        DateTime?  @map("sending_at")
+  sentAt           DateTime?  @map("sent_at")
+  sentBy           String?    @map("sent_by")
+  sentTo           Json?      @map("sent_to")
+  sentCc           Json?      @map("sent_cc")
+  sentSubject      String?    @map("sent_subject")
+  clickupTaskUrl   String?    @map("clickup_task_url")
+  sendError        String?    @map("send_error")
   createdAt        DateTime   @default(now()) @map("created_at")
 
   @@index([workspaceId, createdAt])

@@ -42,7 +42,7 @@ baselineReportRouter.get("/:id/baseline-report", async (req, res) => {
   const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
   if (!report) return;
   try {
-    const built = await buildBaselineForReport(report.id);
+    const built = await buildBaselineForReport(report.id, req.query.copy === "client" ? "client" : "internal");
     res.setHeader("Content-Type", XLSX);
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(built.filename)}`);
     res.send(built.buffer);

@@ -51,6 +51,15 @@ export type ReportConsolidatedInfo =
   | { enabled: true; ready: true; filename: string; newColumnLabel: string; dateColumns: number; keywordCount: number; added: string[]; dropped: string[] };
 
 /** "Baseline Report" (2026-11-10): what a new client's Baseline Excel would contain and what's still missing. */
+/** The client copy of the Baseline Report, cell by cell (the on-screen preview). */
+export interface BaselineClientPreview {
+  domain: string;
+  dateLabel: string;
+  letter: string;
+  headers: string[];
+  rows: (string | number)[][];
+}
+
 export type ReportBaselineInfo =
   | { ready: false; error: string; googleAdsAvailable: boolean }
   | {
@@ -65,6 +74,7 @@ export type ReportBaselineInfo =
       metricsSource: string | null;
       googleAdsAvailable: boolean;
       saved?: number;
+      clientPreview: BaselineClientPreview;
     };
 
 export interface CreateClientInput {

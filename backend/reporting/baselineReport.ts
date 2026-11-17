@@ -16,6 +16,8 @@ import {
   type OrganicItem,
 } from "./baselineColumns.js";
 import { countryOfSeDomain, googleAdsConfigured } from "./keywordPlanner.js";
+import { defaultBaselineIntentFn, type BaselineIntentFn } from "./baselineIntent.js";
+import { keywordKey } from "../domainIntel/readKeywordExport.js";
 
 /**
  * "Baseline Report" (2026-11-10): the first report a NEW client gets -- the team's "Client Keyword Baseline
@@ -23,7 +25,7 @@ import { countryOfSeDomain, googleAdsConfigured } from "./keywordPlanner.js";
  * report (attachmentSource "baseline"). Grey title row with the logo, the greeting letter signed Caahill
  * Murzello, then one row per keyword:
  *   Keywords | Avg. Monthly Searches | Competition | Number of Result | SERP result | Intent | <date> ranking
- * sorted by rank, "Not in 100" last. Ranks, result counts, SERP mix and intent come from the run itself;
+ * sorted by rank, "Not in 100" last. The email attaches the client copy, without Number of Result / SERP result. Ranks, result counts, SERP mix and intent come from the run itself;
  * volume/competition from Keyword Planner (KeywordMetric). Once sent, the run's ranks become the client's
  * baseline as for every sent report.
  */
@@ -59,6 +61,15 @@ const BOX = { left: THIN, right: THIN, top: THIN, bottom: THIN };
 const HEADERS = ["Keywords", "Avg. Monthly Searches", "Competition", "Number of Result", "SERP result", "Intent"];
 const WIDTHS = [34, 16, 14, 22, 44, 15, 18];
 
+/**
+ * Which copy (2026-11-16): "internal" (the team's download) has every column; "client" -- the one the email
+ * attaches -- leaves out Number of Result and SERP result (team-only working columns):
+ *   Keywords | Avg. Monthly Searches | Competition | Intent | <date> ranking
+ */
+export type BaselineCopy = "internal" | "client";
+const CLIENT_HEADERS = ["Keywords", "Avg. Monthly Searches", "Competition", "Intent"];
+const CLIENT_WIDTHS = [34, 16, 14, 22, 18];
+
 function rankCell(row: BaselineRow): string | number {
   if (row.rankValue !== null && row.rankValue !== undefined) return row.rankValue;
   const d = row.rankDisplay?.trim();
@@ -73,12 +84,34 @@ export function sortBaselineRows(rows: BaselineRow[]): BaselineRow[] {
     .map((x) => x.r);
 }
 
-export async function buildBaselineWorkbook(input: { domain: string; reportDate: Date; rows: BaselineRow[] }): Promise<Buffer> {
+/** What the client copy shows, cell by cell -- the on-screen "Preview client copy" (2026-11-17). */
+export interface BaselinePreview {
+  domain: string;
+  dateLabel: string;
+  letter: string;
+  headers: string[];
+  rows: (string | number)[][];
+}
+
+export function clientCopyPreview(input: { domain: string; reportDate: Date; rows: BaselineRow[] }): BaselinePreview {
+  const dateLabel = baselineDateLabel(input.reportDate);
+  return {
+    domain: input.domain,
+    dateLabel,
+    letter: BASELINE_LETTER,
+    headers: [...CLIENT_HEADERS, `${dateLabel} ranking`],
+    rows: sortBaselineRows(input.rows).map((row) => [row.keyword, row.volume ?? "", row.competition ?? "", row.intent ?? "", rankCell(row)]),
+  };
+}
+
+export async function buildBaselineWorkbook(input: { domain: string; reportDate: Date; rows: BaselineRow[]; copy?: BaselineCopy }): Promise<Buffer> {
+  const forClient = input.copy === "client";
+  const headers = forClient ? CLIENT_HEADERS : HEADERS;
   const workbook = new ExcelJS.Workbook();
   const ws = workbook.addWorksheet("Sheet1", { views: [{ state: "frozen", ySplit: 3 }] });
   const dateLabel = baselineDateLabel(input.reportDate);
-  const lastCol = HEADERS.length + 1;
-  WIDTHS.forEach((w, i) => (ws.getColumn(i + 1).width = w));
+  const lastCol = headers.length + 1;
+  (forClient ? CLIENT_WIDTHS : WIDTHS).forEach((w, i) => (ws.getColumn(i + 1).width = w));
 
   // Row 1: grey title, right-aligned, with the logo top-left.
   ws.mergeCells(1, 1, 1, lastCol);
@@ -103,7 +136,7 @@ export async function buildBaselineWorkbook(input: { domain: string; reportDate:
 
   // Row 3: orange headers.
   const header = ws.getRow(3);
-  [...HEADERS, `${dateLabel} ranking`].forEach((h, i) => {
+  [...headers, `${dateLabel} ranking`].forEach((h, i) => {
     const cell = header.getCell(i + 1);
     cell.value = h;
     cell.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" }, name: "Calibri", family: 2 };
@@ -115,13 +148,16 @@ export async function buildBaselineWorkbook(input: { domain: string; reportDate:
 
   sortBaselineRows(input.rows).forEach((row, i) => {
     const r = ws.getRow(4 + i);
-    const values: (string | number | null)[] = [row.keyword, row.volume, row.competition, row.results, row.serp, row.intent, rankCell(row)];
+    const values: (string | number | null)[] = forClient
+      ? [row.keyword, row.volume, row.competition, row.intent, rankCell(row)]
+      : [row.keyword, row.volume, row.competition, row.results, row.serp, row.intent, rankCell(row)];
+    const serpCol = forClient ? -1 : 4;
     values.forEach((v, c) => {
       const cell = r.getCell(c + 1);
       cell.value = v ?? "";
       cell.font = { size: 11, color: { argb: "FF000000" }, name: "Calibri", family: 2 };
       cell.border = BOX;
-      cell.alignment = { horizontal: c === 0 || c === 4 ? "left" : "center", vertical: "middle", wrapText: c === 4 };
+      cell.alignment = { horizontal: c === 0 || c === serpCol ? "left" : "center", vertical: "middle", wrapText: c === serpCol };
     });
   });
 
@@ -154,15 +190,18 @@ export interface BaselineBuild {
   missingSerp: string[];
   metricsSource: string | null;
   googleAdsAvailable: boolean;
+  /** The client copy's contents, for the on-screen preview. */
+  clientPreview: BaselinePreview;
 }
 
 /** The Baseline Report for a report: its run's ranks + saved DataForSEO answers + the client's Keyword Planner numbers. */
-export async function buildBaselineForReport(reportId: string): Promise<BaselineBuild> {
+export async function buildBaselineForReport(reportId: string, copy: BaselineCopy = "internal"): Promise<BaselineBuild> {
   const report = await prisma.rankingReport.findUniqueOrThrow({ where: { id: reportId }, include: { client: true, run: true } });
   return buildBaselineForRun({
     runId: report.runId,
     client: report.client,
     reportDate: report.reportDate ?? report.run.completedAt ?? report.run.createdAt,
+    copy,
   });
 }
 
@@ -174,6 +213,10 @@ export async function buildBaselineForRun(input: {
   runId: string;
   client: { id: string; name: string; domain: string | null };
   reportDate: Date;
+  /** The AI that writes the Intent column (1-2 intents per keyword); null = rules only. Default: Gemini when its key is set. */
+  classifyIntent?: BaselineIntentFn | null;
+  /** "client" = the emailed copy, without Number of Result / SERP result. Default: the team's full copy. */
+  copy?: BaselineCopy;
 }): Promise<BaselineBuild> {
   const { runId, client, reportDate } = input;
   const rows = await prisma.rankingRow.findMany({
@@ -215,6 +258,17 @@ export async function buildBaselineForRun(input: {
     client.name;
   const brandWords = brandWordsOf(domain);
 
+  // Intent: Gemini for every keyword, 1 or 2 intents ("Commercial, Transactional" -- the user's ask, 2026-11-16), with
+  // the page types Google showed as a hint; the
+  // word/page-type rules (guessIntent) for any keyword Gemini didn't answer, or when no AI key is set.
+  const summaries = new Map(rows.map((row) => [row.id, serpSummary(Array.isArray(serpByRow.get(row.id)?.top10) ? serpByRow.get(row.id)!.top10! : [])]));
+  const aiIntents = await intentsFromAi(
+    client,
+    domain,
+    rows.map((row) => ({ keyword: row.keyword, serp: summaries.get(row.id)?.text ?? null })),
+    input.classifyIntent === undefined ? defaultBaselineIntentFn() : input.classifyIntent,
+  );
+
   const missingVolumes: string[] = [];
   const missingSerp: string[] = [];
   const merged: BaselineBuild["merged"] = [];
@@ -228,8 +282,7 @@ export async function buildBaselineForRun(input: {
     if (metric) sources.add(metric.source);
     else missingVolumes.push(row.keyword);
     const s = serpByRow.get(row.id);
-    const top10 = Array.isArray(s?.top10) ? s!.top10 : [];
-    const summary = serpSummary(top10);
+    const summary = summaries.get(row.id) ?? null;
     const results = formatIndianResults(s?.results != null ? Number(s.results) : null);
     // Serper gives no "About X results" count, so a blank Number of Result alone isn't a lost answer -- the team fills
     // that column by hand (incognito search -> Tools). Only a missing results list counts.
@@ -242,11 +295,11 @@ export async function buildBaselineForRun(input: {
       competition: competitionLabel(metric?.competition ?? null),
       results,
       serp: summary?.text ?? null,
-      intent: guessIntent(row.keyword, summary?.categories ?? null, brandWords),
+      intent: aiIntents.get(keywordKey(row.keyword)) ?? guessIntent(row.keyword, summary?.categories ?? null, brandWords),
     };
   });
 
-  const buffer = await buildBaselineWorkbook({ domain, reportDate, rows: built });
+  const buffer = await buildBaselineWorkbook({ domain, reportDate, rows: built, copy: input.copy });
   return {
     buffer,
     filename: baselineFilename(client.name),
@@ -258,7 +311,44 @@ export async function buildBaselineForRun(input: {
     missingSerp,
     metricsSource: sources.size ? [...sources].join(", ") : null,
     googleAdsAvailable: googleAdsConfigured(),
+    clientPreview: clientCopyPreview({ domain, reportDate, rows: built }),
   };
+}
+
+/** Gemini's answers per client + keyword, so downloading the same report again doesn't ask again. */
+const aiIntentCache = new Map<string, string>();
+
+async function intentsFromAi(
+  client: { id: string; name: string },
+  domain: string,
+  keywords: { keyword: string; serp: string | null }[],
+  classify: BaselineIntentFn | null,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ask: string[] = [];
+  const hints = new Map<string, string[]>();
+  for (const k of keywords) {
+    const key = keywordKey(k.keyword);
+    const cached = aiIntentCache.get(`${client.id}|${key}`);
+    if (cached) out.set(key, cached);
+    else if (!ask.some((a) => keywordKey(a) === key)) {
+      ask.push(k.keyword);
+      if (k.serp) hints.set(key, [`Google's top 10 results: ${k.serp}`]);
+    }
+  }
+  if (ask.length === 0 || !classify) return out;
+  try {
+    const fromAi = await classify(ask, { clientName: client.name, websiteUrl: domain }, hints);
+    for (const keyword of ask) {
+      const intent = fromAi.get(keywordKey(keyword));
+      if (!intent) continue;
+      out.set(keywordKey(keyword), intent);
+      aiIntentCache.set(`${client.id}|${keywordKey(keyword)}`, intent);
+    }
+  } catch (err) {
+    console.error(`[baselineReport] AI intent failed, using the rules for ${ask.length} keyword(s): ${(err as Error).message}`);
+  }
+  return out;
 }
 
 /** Saves Keyword Planner numbers for a client's keywords (replacing older numbers for the same keywords). */

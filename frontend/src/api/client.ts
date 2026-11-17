@@ -1,4 +1,5 @@
 import type {
+  BaselineClientPreview,
   BaselinePreview,
   BaselineRecord,
   ClientRecord,
@@ -441,8 +442,8 @@ export async function getReportBaselineInfo(reportId: string): Promise<ReportBas
 }
 
 /** The Baseline Report Excel this report sends (built fresh each time). */
-export function getReportBaselineUrl(reportId: string): string {
-  return `${BASE}/reports/${reportId}/baseline-report`;
+export function getReportBaselineUrl(reportId: string, copy: 'internal' | 'client' = 'internal'): string {
+  return `${BASE}/reports/${reportId}/baseline-report${copy === 'client' ? '?copy=client' : ''}`;
 }
 
 /** The team's Keyword Planner download (.csv / .xlsx) -- volume and competition for the client's keywords. */
@@ -476,6 +477,34 @@ export interface BaselineJob {
   volumes: 'fetched' | 'fetching' | 'failed' | 'not_set_up' | 'waiting';
   volumesError: string | null;
   runId: string;
+  /** The email to the new client -- sent once. */
+  email: {
+    state: 'not_sent' | 'sending' | 'sent';
+    sentAt: string | null;
+    sentBy: string | null;
+    to: string[];
+    cc: string[];
+    subject: string | null;
+    error: string | null;
+    clickupTaskUrl: string | null;
+    defaultSubject: string;
+    defaultBody: string;
+  };
+}
+
+/** The client copy's contents, for "Preview client copy". */
+export async function getBaselineJobPreview(id: string): Promise<BaselineClientPreview> {
+  return handle<BaselineClientPreview>(await apiFetch(`/baseline-jobs/${id}/preview`));
+}
+
+/** Emails the client copy to the new client through ClickUp (once). */
+export async function sendBaselineJobEmail(
+  id: string,
+  input: { to: string; cc: string; clickupTask: string; subject: string; body: string },
+): Promise<BaselineJob> {
+  return handle<BaselineJob>(
+    await apiFetch(`/baseline-jobs/${id}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
+  );
 }
 
 export async function getBaselineJobs(workspaceId: string): Promise<BaselineJob[]> {
@@ -505,8 +534,9 @@ export async function startBaselineJob(input: {
   return handle<BaselineJob>(await apiFetch('/baseline-jobs', { method: 'POST', body: formData }));
 }
 
-export async function downloadBaselineJob(id: string): Promise<Blob> {
-  const res = await apiFetch(`/baseline-jobs/${id}/download`);
+/** copy "client" = the copy for the client (no Number of Result / SERP result); default the team's full copy. */
+export async function downloadBaselineJob(id: string, copy: 'internal' | 'client' = 'internal'): Promise<Blob> {
+  const res = await apiFetch(`/baseline-jobs/${id}/download${copy === 'client' ? '?copy=client' : ''}`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error((body as { error?: string } | null)?.error ?? `Download failed (${res.status})`);

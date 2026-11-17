@@ -202,6 +202,19 @@ test("buildBaselineWorkbook: title, letter, headers with the date, rows sorted b
   assert.deepEqual([...merges].sort(), ["A1:G1", "A2:G2"]);
 });
 
+test("buildBaselineWorkbook client copy: no Number of Result / SERP result (team-only columns)", async () => {
+  const buffer = await buildBaselineWorkbook({
+    domain: "veneziadesigns.com",
+    reportDate: new Date("2026-11-09T05:00:00Z"),
+    copy: "client",
+    rows: [{ keyword: "kitchen contractors dubai", rankValue: 2, rankDisplay: "2", volume: 50, competition: "High", results: "137 results", serp: "1 Home page, 9 Service page", intent: "Commercial, Transactional" }],
+  });
+  const { rows, merges } = await readBack(buffer);
+  assert.deepEqual(rows[2], ["Keywords", "Avg. Monthly Searches", "Competition", "Intent", "09th Nov 2026 ranking"]);
+  assert.deepEqual(rows[3], ["kitchen contractors dubai", 50, "High", "Commercial, Transactional", 2]);
+  assert.deepEqual([...merges].sort(), ["A1:E1", "A2:E2"]);
+});
+
 // ---------------------------------------------------------------- end to end
 
 function serpAnswer(urls: string[], results: number) {
@@ -257,8 +270,11 @@ async function setup() {
 }
 
 test("baseline report: Keyword Planner upload, preview, and the send attaches the Baseline Excel instead of the PDF", async () => {
-  // This test is the "Google Ads not set up" path -- hide a dev laptop's real keys so it never calls Google.
-  const savedAdsEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("GOOGLE_ADS_")));
+  // This test is the "Google Ads not set up" path -- hide a dev laptop's real keys so it never calls Google
+  // (Ads or Gemini -- the Intent column then comes from the rules).
+  const savedAdsEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => k.startsWith("GOOGLE_ADS_") || k.startsWith("GEMINI_") || k === "ANTHROPIC_API_KEY"),
+  );
   for (const k of Object.keys(savedAdsEnv)) delete process.env[k];
   const t = await setup();
   try {
@@ -283,6 +299,14 @@ test("baseline report: Keyword Planner upload, preview, and the send attaches th
     assert.deepEqual(up.body.missingVolumes, []);
     assert.deepEqual(up.body.merged, [{ keyword: "rouse hill hand car wash", usedFiguresOf: "hand car wash rouse hill" }], "Keyword Planner merged the same words in another order");
 
+    // The team's download keeps every column; ?copy=client is what the email attaches.
+    const full = await t.api.get(`/api/reports/${t.report.id}/baseline-report`).buffer(true).parse((res, cb) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => cb(null, Buffer.concat(chunks)));
+    });
+    assert.equal((await readBack(full.body as Buffer)).rows[2].length, 7);
+
     const google = await t.api.post(`/api/reports/${t.report.id}/baseline-report/google-ads`);
     assert.equal(google.status, 503, "not set up yet");
 
@@ -292,8 +316,10 @@ test("baseline report: Keyword Planner upload, preview, and the send attaches th
     assert.equal(t.sentCalls[0].excelPdfFilename, `${t.client.name} - Baseline Report.xlsx`);
     const { rows } = await readBack(t.sentCalls[0].excelPdfBuffer!);
     assert.equal(rows[0][0], "Client Keyword Baseline Report\nthewashouse.com.au \n14th Nov 2026");
-    assert.deepEqual(rows[3], ["car wash rouse hill", 500, "Low", "137 results", "2 Home page, 1 Service page, 1 Directory/Listing", "Transactional", 4]);
-    assert.deepEqual(rows[4], ["rouse hill hand car wash", 50, "Unknown", "2,52,000 results", "1 Blog page", "Transactional", "Not in 100"]);
+    // The client copy: Number of Result and SERP result stay internal.
+    assert.deepEqual(rows[2], ["Keywords", "Avg. Monthly Searches", "Competition", "Intent", "14th Nov 2026 ranking"]);
+    assert.deepEqual(rows[3], ["car wash rouse hill", 500, "Low", "Transactional", 4]);
+    assert.deepEqual(rows[4], ["rouse hill hand car wash", 50, "Unknown", "Transactional", "Not in 100"]);
 
     // Baselines follow the usual rule (only a verified-Excel report's ranks become one) -- nothing special here.
     assert.equal((await prisma.rankingReport.findUniqueOrThrow({ where: { id: t.report.id } })).status, "SENT");
