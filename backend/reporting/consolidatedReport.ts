@@ -146,6 +146,53 @@ function parseRange(range: string) {
   return { top: Number(m[2]), left: col(m[1]), bottom: Number(m[4]), right: col(m[3]) };
 }
 
+const colNumber = (s: string) => [...s].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+function colLetters(n: number): string {
+  let s = "";
+  for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+/**
+ * Moves a formula like a copy-paste would: relative row refs shift by `rowDelta`, and every column at or right of
+ * `insertCol` (when given) moves one right for the inserted date column. Text in quotes and other sheets' refs
+ * ("Sheet!A1") are left alone.
+ */
+export function shiftFormula(formula: string, rowDelta: number, insertCol: number | null): string {
+  return formula
+    .split('"')
+    .map((part, i) =>
+      i % 2
+        ? part
+        : part.replace(/(^|[^A-Za-z0-9_!.$])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_(])/g, (m, pre, colAbs, col, rowAbs, row) => {
+            let c = colNumber(col);
+            if (insertCol !== null && c >= insertCol) c += 1;
+            const r = rowAbs ? Number(row) : Number(row) + rowDelta;
+            if (r < 1) return m;
+            return `${pre}${colAbs}${colLetters(c)}${rowAbs}${r}`;
+          }),
+    )
+    .join('"');
+}
+
+/**
+ * Keyword rows get re-sorted and a column goes in, so a formula can't stay "shared" with a master cell in another
+ * row (ExcelJS refuses to save that: "Shared Formula master must exist above..."). Each formula cell becomes its
+ * own formula, still pointing at the row it was written for (`toRow` later moves it).
+ */
+function ownFormula(ws: ExcelJS.Worksheet, cell: ExcelJS.Cell): { formula: string; result?: unknown } | null {
+  const v = cell.value as { formula?: string; sharedFormula?: string; result?: unknown } | null;
+  if (!v || typeof v !== "object") return null;
+  if (typeof v.formula === "string") return { formula: v.formula, result: v.result };
+  if (typeof v.sharedFormula === "string") {
+    const master = ws.getCell(v.sharedFormula);
+    const mv = master.value as { formula?: string } | null;
+    if (!mv || typeof mv.formula !== "string") return null;
+    return { formula: shiftFormula(mv.formula, Number(cell.row) - Number(master.row), null), result: v.result };
+  }
+  return null;
+}
+
 /**
  * The next consolidated report: `history` (the client's last consolidated file) with a new date column in
  * front of the old ones, holding `rows` (this report's ranks), rows sorted by the new rank.
@@ -163,12 +210,20 @@ export async function buildConsolidatedReport(history: Buffer, input: { reportDa
   for (const m of merges) ws.unMergeCells(m);
 
   // Every row's cells as they are now (values + styles), so rows can be rewritten in the new order.
+  // Formulas are kept as each cell's own formula, tagged with the row they came from (moved in place below).
   type Snap = { value: ExcelJS.CellValue; style: Partial<ExcelJS.Style> };
+  const formulaFrom = new WeakMap<object, number>();
   const snapRow = (r: number): Snap[] => {
     const out: Snap[] = [];
     for (let c = 1; c <= lastCol; c++) {
       const cell = ws.getRow(r).getCell(c);
-      out.push({ value: cell.value, style: JSON.parse(JSON.stringify(cell.style ?? {})) });
+      const own = ownFormula(ws, cell);
+      let value: ExcelJS.CellValue = cell.value;
+      if (own) {
+        value = (own.result === undefined ? { formula: own.formula } : { formula: own.formula, result: own.result }) as ExcelJS.CellValue;
+        formulaFrom.set(value as object, r);
+      }
+      out.push({ value, style: JSON.parse(JSON.stringify(cell.style ?? {})) });
     }
     return out;
   };
@@ -227,7 +282,13 @@ export async function buildConsolidatedReport(history: Buffer, input: { reportDa
     for (let c = 1; c <= width; c++) {
       const cell = row.getCell(c);
       if (i < totalRows) {
-        cell.value = (outRows[i].cells[c - 1] ?? null) as ExcelJS.CellValue;
+        let value = (outRows[i].cells[c - 1] ?? null) as ExcelJS.CellValue;
+        const from = value && typeof value === "object" ? formulaFrom.get(value as object) : undefined;
+        if (from !== undefined) {
+          const f = value as { formula: string; result?: unknown };
+          value = { ...f, formula: shiftFormula(f.formula, r - from, insertAt) } as ExcelJS.CellValue;
+        }
+        cell.value = value;
         cell.style = JSON.parse(JSON.stringify(styles[c - 1] ?? {}));
       } else {
         cell.value = null; // a dropped keyword's old row
@@ -274,7 +335,14 @@ export async function buildConsolidatedForReport(reportId: string): Promise<Cons
       `The consolidated history already goes up to ${history.newestDate.toISOString().slice(0, 10)}, but this report is dated ${reportDate.toISOString().slice(0, 10)} -- it would add an older column in front. Upload the right consolidated file in Client Management, or check the report date.`,
     );
   }
-  const built = await buildConsolidatedReport(Buffer.from(history.file), { reportDate, rows });
+  let built: ConsolidatedBuildResult;
+  try {
+    built = await buildConsolidatedReport(Buffer.from(history.file), { reportDate, rows });
+  } catch (err) {
+    if (err instanceof ConsolidatedFileError) throw err;
+    // Anything odd in the team's file (2026-11-17: shared formulas) -- say what, instead of a bare 500.
+    throw new ConsolidatedFileError(`Couldn't build the consolidated report from the uploaded history file: ${(err as Error).message}`);
+  }
   return { ...built, filename: consolidatedFilename(report.client.name) };
 }
 

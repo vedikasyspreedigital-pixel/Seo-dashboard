@@ -6,7 +6,7 @@ import { ReportStatus } from "@prisma/client";
 import { prisma } from "../backend/db/client.js";
 import { createApp } from "../backend/api/app.js";
 import { createMockEmailSender } from "../backend/reporting/mockEmailSender.js";
-import { buildConsolidatedReport, columnLabel, describeConsolidatedFile } from "../backend/reporting/consolidatedReport.js";
+import { buildConsolidatedReport, columnLabel, describeConsolidatedFile, shiftFormula } from "../backend/reporting/consolidatedReport.js";
 import { createAuthenticatedSession, type AuthFixture } from "./helpers/auth.js";
 import { authedRequest } from "./helpers/authedRequest.js";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
@@ -95,6 +95,41 @@ test("buildConsolidatedReport: new column in front, rows sorted by the new rank,
   const info = await describeConsolidatedFile(out.buffer);
   assert.equal(info.newestDate.toISOString().slice(0, 10), "2026-11-14");
   assert.equal(info.dateColumns, 4);
+});
+
+test("shiftFormula moves row refs like a copy-paste and shifts columns for the inserted date column", () => {
+  assert.equal(shiftFormula('IF(AND(ISNUMBER(V4),ISNUMBER(W4)),V4-W4,"")', 6, 3), 'IF(AND(ISNUMBER(W10),ISNUMBER(X10)),W10-X10,"")');
+  assert.equal(shiftFormula("SUM($B$4:B4)+LOG10(C2)", 1, null), "SUM($B$4:B5)+LOG10(C3)");
+  assert.equal(shiftFormula('"V4"&Sheet2!V4&B4', 1, 2), '"V4"&Sheet2!V4&C5');
+});
+
+test("buildConsolidatedReport: a file with shared formulas (Vastrado's GSC 'Click Change') builds, each formula follows its row", async () => {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Ranking Report + GSC");
+  ws.getRow(1).values = ["Keyword", "03rd Nov 26", "26th Oct 26", "GSC Clicks Oct 26", "GSC Clicks Sep 26", "Click Change"];
+  ws.getRow(2).values = ["boxy shirts", 1, 1, 202, 176];
+  ws.getRow(3).values = ["plain shirt", 9, 9, 10, 4];
+  ws.getRow(4).values = ["linen shirt", 30, 31, 7, 9];
+  ws.getCell("F2").value = { formula: "D2-E2", result: 26, ref: "F2:F4", shareType: "shared" } as ExcelJS.CellValue;
+  ws.getCell("F3").value = { sharedFormula: "F2", result: 6 } as ExcelJS.CellValue;
+  ws.getCell("F4").value = { sharedFormula: "F2", result: -2 } as ExcelJS.CellValue;
+  const history = Buffer.from(await wb.xlsx.writeBuffer());
+  const built = await buildConsolidatedReport(history, {
+    reportDate: new Date("2026-11-17T00:00:00Z"),
+    rows: [
+      { keyword: "boxy shirts", rankValue: 4, rankDisplay: "4" },
+      { keyword: "plain shirt", rankValue: 2, rankDisplay: "2" },
+      { keyword: "linen shirt", rankValue: 1, rankDisplay: "1" },
+    ],
+  });
+  const out = new ExcelJS.Workbook();
+  await out.xlsx.load(built.buffer as unknown as ArrayBuffer);
+  const s = out.worksheets[0];
+  const at = (r: number) => [s.getCell(r, 1).value, s.getCell(r, 2).value, (s.getCell(r, 7).value as { formula: string }).formula];
+  assert.deepEqual(at(2), ["linen shirt", 1, "E2-F2"]);
+  assert.deepEqual(at(3), ["plain shirt", 2, "E3-F3"]);
+  assert.deepEqual(at(4), ["boxy shirts", 4, "E4-F4"]);
+  assert.equal(s.getCell(4, 5).value, 202);
 });
 
 test("columnLabel follows the file's own date style", () => {
