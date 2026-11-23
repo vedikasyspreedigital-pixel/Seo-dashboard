@@ -9,6 +9,8 @@ datasource db {
 
 enum RunStatus {
   UPLOADED
+  // 2026-11-23: started, waiting its turn in the run queue (backend/worker/runQueue.ts).
+  QUEUED
   PROCESSING
   COMPLETED
   COMPLETED_WITH_ERRORS
@@ -117,6 +119,7 @@ model Workspace {
   clients       Client[]
   memberships   WorkspaceMembership[]
   notifications Notification[]
+  runSlots      RunSlot[]
 
   @@map("workspaces")
 }
@@ -136,6 +139,42 @@ enum NotificationType {
   REPORT_SEND_FAILED
   // 2026-11-23: a run finished for a client whose report type (normal PDF / consolidated) isn't confirmed yet.
   REPORT_TYPE_UNCONFIRMED
+  // 2026-11-23: another team moved a run to the front of the shared run queue.
+  RUN_MADE_URGENT
+  // 2026-11-23: a team's booked run slot has started -- "Start all" on the Run slots page.
+  RUN_SLOT_DUE
+}
+
+// Run slots (2026-11-23): each team books a time to run its clients (SEO Friday morning, Advanced SEO Friday
+// afternoon...). Both teams see every slot, so they don't overlap. At the slot's time the team gets a reminder;
+// "Start all" puts each client's run in the run queue -- the client's freshly uploaded run if there is one, else
+// a copy of its last keyword list. A repeating slot moves to its next date once its window ends.
+model RunSlot {
+  id              String    @id @default(uuid())
+  workspaceId     String    @map("workspace_id")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // The next (or current) occurrence.
+  startsAt        DateTime  @map("starts_at")
+  durationMinutes Int       @default(180) @map("duration_minutes")
+  // null = once; 7 = every week; 15 = every 15 days.
+  repeatDays      Int?      @map("repeat_days")
+  // Empty = every active client of the team at the time it starts.
+  clientIds       String[]  @default([]) @map("client_ids")
+  note            String?
+  createdBy       String?   @map("created_by")
+  // The reminder for the occurrence at startsAt has gone out.
+  notifiedAt      DateTime? @map("notified_at")
+  // "Start all" was done for the occurrence that started at this time (= startsAt while that occurrence is current).
+  startedForSlotAt DateTime? @map("started_for_slot_at")
+  startedAt       DateTime? @map("started_at")
+  startedBy       String?   @map("started_by")
+  // What the last "Start all" did: { queued: [{ clientId, clientName, runId, reused }], skipped: [{ clientId, clientName, reason }] }.
+  lastResult      Json?     @map("last_result")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([startsAt])
+  @@map("run_slots")
 }
 
 model Notification {
@@ -380,6 +419,12 @@ model RankingRun {
   engine         String    @default("live")
   totalRows      Int       @map("total_rows")
   createdBy      String?   @map("created_by")
+  // Run queue (2026-11-23): when it was put in line, and "urgent" = goes to the front (with who/why).
+  queuedAt       DateTime? @map("queued_at")
+  urgent         Boolean   @default(false)
+  urgentReason   String?   @map("urgent_reason")
+  urgentBy       String?   @map("urgent_by")
+  urgentAt       DateTime? @map("urgent_at")
   startedAt      DateTime? @map("started_at")
   completedAt    DateTime? @map("completed_at")
   createdAt      DateTime  @default(now()) @map("created_at")

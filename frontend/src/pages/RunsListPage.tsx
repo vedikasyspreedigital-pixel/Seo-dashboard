@@ -7,6 +7,7 @@ import { Button } from '../components/ui/Button';
 import { Spinner } from '../components/ui/Spinner';
 import { EyeIcon, RefreshIcon, TrashIcon } from '../components/ui/icons';
 import { StatusBadge } from '../components/run/StatusBadge';
+import { RunQueueCard } from '../components/run/RunQueueCard';
 import { EmptyState, LoadingRows } from '../components/ui/EmptyState';
 import { useActiveClient } from '../context/ClientContext';
 import { useClientScopedList } from '../hooks/useClientScopedList';
@@ -68,6 +69,8 @@ export function RunsListPage() {
           </div>
         )}
       </div>
+
+      <RunQueueCard className="mt-6" />
 
       <Card className="mt-6 overflow-hidden p-0">
         {actionError && <p className="border-b border-rose-500/20 bg-rose-500/10 px-6 py-3 text-sm text-rose-200">{actionError}</p>}

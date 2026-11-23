@@ -1,5 +1,9 @@
 import type {
   ReportType,
+  RunQueue,
+  RunSlot,
+  RunSlotClash,
+  RunSlotStartResult,
   BaselineClientPreview,
   BaselinePreview,
   BaselineRecord,
@@ -181,9 +185,61 @@ export async function validateRunFile(clientId: string, file: File): Promise<Val
   return handle<ValidateRunFileResult>(res);
 }
 
-export async function startRun(runId: string): Promise<RankingRun> {
-  const res = await apiFetch(`/runs/${runId}/start`, { method: 'POST' });
+/** Puts the run in the shared run queue (it starts straight away when nothing else is checking). */
+export async function startRun(runId: string, urgent?: { reason: string }): Promise<RankingRun> {
+  const res = await apiFetch(`/runs/${runId}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(urgent ? { urgent: true, reason: urgent.reason } : {}),
+  });
   return handle<RankingRun>(res);
+}
+
+/** Moves a waiting run to the front of the queue; the other team sees the reason. */
+export async function makeRunUrgent(runId: string, reason: string): Promise<RankingRun> {
+  const res = await apiFetch(`/runs/${runId}/urgent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+  return handle<RankingRun>(res);
+}
+
+export async function getRunQueue(): Promise<RunQueue> {
+  return handle<RunQueue>(await apiFetch('/runs/queue'));
+}
+
+// -- Run slots (2026-11-23) --------------------------------------------------
+
+export async function getRunSlots(): Promise<RunSlot[]> {
+  return handle<RunSlot[]>(await apiFetch('/run-slots'));
+}
+
+export async function bookRunSlot(input: {
+  workspaceId: string;
+  startsAt: string;
+  durationMinutes: number;
+  repeatDays: number | null;
+  clientIds: string[];
+  note?: string;
+}): Promise<{ slot: RunSlot; clashes: RunSlotClash[] }> {
+  const res = await apiFetch('/run-slots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+  return handle<{ slot: RunSlot; clashes: RunSlotClash[] }>(res);
+}
+
+export async function checkRunSlotClashes(workspaceId: string, startsAt: string, durationMinutes: number): Promise<RunSlotClash[]> {
+  const params = new URLSearchParams({ workspaceId, startsAt, durationMinutes: String(durationMinutes) });
+  return handle<RunSlotClash[]>(await apiFetch(`/run-slots/clashes?${params.toString()}`));
+}
+
+export async function deleteRunSlot(id: string): Promise<void> {
+  const res = await apiFetch(`/run-slots/${id}`, { method: 'DELETE' });
+  if (!res.ok) await handle(res);
+}
+
+/** "Start all": every client's run goes into the run queue. */
+export async function startRunSlot(id: string): Promise<RunSlotStartResult> {
+  return handle<RunSlotStartResult>(await apiFetch(`/run-slots/${id}/start`, { method: 'POST' }));
 }
 
 /** Re-checks only the run's failed keywords, in the same run. Finished keywords are kept and not re-requested. */

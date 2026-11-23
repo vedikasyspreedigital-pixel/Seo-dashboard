@@ -7,6 +7,7 @@ import { NewRunPage } from './pages/NewRunPage';
 import { RunDetailPage } from './pages/RunDetailPage';
 import { ReportsListPage } from './pages/ReportsListPage';
 import { ClientsPage } from './pages/ClientsPage';
+import { RunSlotsPage } from './pages/RunSlotsPage';
 import { CompareReportsPage } from './pages/CompareReportsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { DomainIntelligencePage } from './pages/DomainIntelligencePage';
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="/runs" element={<RunsListPage />} />
         <Route path="/runs/new" element={<NewRunPage />} />
         <Route path="/runs/:runId" element={<RunDetailPage />} />
+        <Route path="/run-slots" element={<RunSlotsPage />} />
         <Route path="/reports" element={<ReportsListPage />} />
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/compare" element={<CompareReportsPage />} />

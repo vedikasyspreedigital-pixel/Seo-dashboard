@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { prisma } from '../../db/client.js';
 import { ingestExcelRun } from '../../runs/ingestExcelRun.js';
 import { parseRankingExcel, COLUMN_HEADERS } from '../../excel/parser.js';
-import { startRun, cancelRun, rerunFailedRows } from '../../statemachine/runTransitions.js';
+import { cancelRun, markRunUrgent, queueRun, rerunFailedRows } from '../../statemachine/runTransitions.js';
+import { listRunQueue, queuePositionOf, rememberRunCall, wakeRunQueue } from '../../worker/runQueue.js';
+import { notifyRunMadeUrgent } from '../../notifications/createNotification.js';
 import { InvalidRunTransitionError } from '../../statemachine/errors.js';
 import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { deleteExtraAttachmentFiles } from '../../reporting/extraAttachments.js';
@@ -20,6 +22,18 @@ import { hasSerperKey, serperSelected, MISSING_SERPER_KEY_MESSAGE } from '../../
 import { requireAuth } from '../../auth/requireAuth.js';
 import { findOwnedClientOrRespond, findOwnedRunOrRespond } from '../../auth/ownership.js';
 import { expensiveActionRateLimit } from '../rateLimit.js';
+
+/** { urgent, reason } from a request body; responds 400 and returns null when an urgent run has no reason. */
+function parseUrgent(body: unknown, res: import('express').Response): { urgent: boolean; reason: string | null } | null {
+  const b = (body ?? {}) as { urgent?: unknown; reason?: unknown };
+  if (b.urgent !== true) return { urgent: false, reason: null };
+  const reason = typeof b.reason === 'string' ? b.reason.trim() : '';
+  if (reason.length < 3) {
+    res.status(400).json({ error: 'Say why it is urgent (a few words) -- the other team sees it.' });
+    return null;
+  }
+  return { urgent: true, reason: reason.slice(0, 200) };
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Configurable so a persistent disk (e.g. Render) can be mounted somewhere
@@ -182,23 +196,41 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     return true;
   };
 
+  // "Start run" (2026-11-23): the run joins the shared run queue (worker/runQueue.ts) and starts when it's its
+  // turn -- straight away when nothing else is checking. Body { urgent: true, reason } puts it at the front.
+  // The response returns immediately either way; the dashboard polls /progress.
   router.post('/:id/start', expensiveActionRateLimit, async (req, res) => {
     if (!(await findOwnedRunOrRespond(req, res, req.params.id as string, { requireActive: true }))) return;
+    const urgentInput = parseUrgent(req.body, res);
+    if (urgentInput === null) return;
     if (cantCheckRankings(res)) return;
     try {
-      const run = await startRun(req.params.id as string);
-      // Fire-and-forget: the HTTP response returns immediately, the
-      // dashboard polls /progress. Live (processRun) or the Standard queue,
-      // per the run's workspace -- see dataforseo/engine.ts. A failure in
-      // processRun is logged, not thrown at the client -- the affected rows
-      // simply stay in whatever state it left them (their own transition
-      // guards protect them).
-      const engine = await startRunProcessing(run.id, callDataForSeo);
-      res.json({ ...run, engine });
+      const queued = await queueRun(req.params.id as string, { ...urgentInput, by: req.authUser!.email });
+      rememberRunCall(queued.id, callDataForSeo);
+      if (queued.urgent) await notifyRunMadeUrgent(queued);
+      await wakeRunQueue();
+      const run = await prisma.rankingRun.findUniqueOrThrow({ where: { id: queued.id } });
+      res.json({ ...run, queuePosition: await queuePositionOf(run.id) });
     } catch (err) {
       // 409 only when the run is in the wrong state; a database failure is a real error, not a "conflict".
       if (!(err instanceof InvalidRunTransitionError)) throw err;
       res.status(409).json({ error: (err as Error).message });
+    }
+  });
+
+  // Run queue: move a waiting run to the front ("urgent"), with a reason the other team sees.
+  router.post('/:id/urgent', async (req, res) => {
+    if (!(await findOwnedRunOrRespond(req, res, req.params.id as string, { requireActive: true }))) return;
+    const urgentInput = parseUrgent({ ...(req.body ?? {}), urgent: true }, res);
+    if (urgentInput === null) return;
+    try {
+      const run = await markRunUrgent(req.params.id as string, { reason: urgentInput.reason, by: req.authUser!.email });
+      await notifyRunMadeUrgent(run);
+      await wakeRunQueue();
+      res.json({ ...run, queuePosition: await queuePositionOf(run.id) });
+    } catch (err) {
+      if (!(err instanceof InvalidRunTransitionError)) throw err;
+      res.status(409).json({ error: 'Only a run that is waiting in the queue (and not already urgent) can be made urgent.' });
     }
   });
 
@@ -226,6 +258,12 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       }
       throw err;
     }
+  });
+
+  // The shared run queue: what's checking and what's waiting, both teams, in order. The other team's runs show
+  // without client names.
+  router.get('/queue', async (req, res) => {
+    res.json(await listRunQueue(req.authUser!.workspaceIds));
   });
 
   // List: runs for a client, most recent first -- backs the Runs list page.
@@ -291,6 +329,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     if (!(await findOwnedRunOrRespond(req, res, req.params.id, { requireActive: true }))) return;
     try {
       const run = await cancelRun(req.params.id);
+      void wakeRunQueue(); // a cancelled run frees its slot
       res.json(run);
     } catch (err) {
       if (err instanceof InvalidRunTransitionError) {
@@ -357,6 +396,8 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
       errorRetry: countFor(counts, 'ERROR_RETRY'),
       failed: countFor(counts, 'FAILED'),
       waitingAtDataForSeo,
+      queuePosition: run.status === 'QUEUED' ? await queuePositionOf(run.id) : null,
+      urgent: run.urgent,
     });
   });
 

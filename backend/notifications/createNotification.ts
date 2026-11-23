@@ -65,6 +65,29 @@ export async function notifyRunCompletion(run: { id: string; clientId: string; s
   }
 }
 
+/**
+ * Run queue (2026-11-23): a run was moved to the front. Tells every OTHER team that has runs checking or waiting,
+ * with the reason, so nobody wonders why their batch paused.
+ */
+export async function notifyRunMadeUrgent(run: { id: string; clientId: string; urgentReason: string | null }): Promise<void> {
+  const client = await prisma.client.findUnique({ where: { id: run.clientId }, select: { workspaceId: true, name: true, workspace: { select: { name: true } } } });
+  if (!client?.workspaceId) return;
+  const waiting = await prisma.rankingRun.findMany({
+    where: { status: { in: ["QUEUED", "PROCESSING"] }, id: { not: run.id }, client: { workspaceId: { not: client.workspaceId } } },
+    select: { client: { select: { workspaceId: true } } },
+  });
+  const others = [...new Set(waiting.map((r) => r.client.workspaceId).filter((id): id is string => !!id))];
+  for (const workspaceId of others) {
+    await createNotification({
+      workspaceId,
+      type: "RUN_MADE_URGENT",
+      message: `${client.workspace?.name ?? "Another team"} moved an urgent run to the front (${client.name})${run.urgentReason ? `: "${run.urgentReason}"` : ""}. Your queued runs start right after it.`,
+      clientId: run.clientId,
+      runId: null,
+    });
+  }
+}
+
 /** Fires from approveAndSend.ts right after a send succeeds (markSent). */
 export async function notifyReportSent(report: { id: string; clientId: string }): Promise<void> {
   const client = await prisma.client.findUnique({ where: { id: report.clientId }, select: { workspaceId: true, name: true } });

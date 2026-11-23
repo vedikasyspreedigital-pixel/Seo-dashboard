@@ -9,6 +9,7 @@ import { consolidatedClientsRouter, consolidatedReportsRouter } from "./routes/c
 import { baselineReportRouter } from "./routes/baselineReport.js";
 import { compareReportsRouter } from "./routes/compareReports.js";
 import { createRunsRouter } from "./routes/runs.js";
+import { createRunSlotsRouter } from "./routes/runSlots.js";
 import { createBaselineJobsRouter } from "./routes/baselineJobs.js";
 import { createReportsRouter, type ReportsRouterDeps } from "./routes/reports.js";
 import { createDomainIntelRouter, type DomainIntelRouterDeps } from "./routes/domainIntel.js";
@@ -104,6 +105,7 @@ export function createApp(
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/compare-reports", compareReportsRouter);
   app.use("/api/runs", createRunsRouter(callDataForSeo));
+  app.use("/api/run-slots", createRunSlotsRouter(callDataForSeo));
   app.use("/api/reports", consolidatedReportsRouter);
   app.use("/api/reports", baselineReportRouter);
   app.use("/api/reports", createReportsRouter(reportingDeps));

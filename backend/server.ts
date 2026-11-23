@@ -6,6 +6,8 @@ import { createMockEmailSender } from './reporting/mockEmailSender.js';
 import { createClickUpEmailSender, verifyChromiumLaunch } from './reporting/clickupEmailSender.js';
 import { generateExcelPdfAttachment } from './reporting/generateExcelAttachment.js';
 import { recoverStaleProcessingRows } from './worker/recoverStaleRuns.js';
+import { startRunQueue } from './worker/runQueue.js';
+import { startRunSlotTicker } from './scheduling/runSlots.js';
 import { recoverStandardTasksOnStartup, startStandardQueue } from './worker/standardQueue.js';
 import { createStandardClient } from './dataforseo/standardClient.js';
 import { createMockStandardClient } from './dataforseo/mockStandardClient.js';
@@ -215,6 +217,10 @@ async function start() {
   // Not without DataForSEO's login in live mode: resuming would hang on the first keyword. Runs wait until it's set.
   if (!useLive || hasDataForSeoCredentials()) {
     await recoverStaleProcessingRows(callDataForSeo);
+    // Runs waiting in the run queue carry on, in order (worker/runQueue.ts).
+    startRunQueue(callDataForSeo);
+    // Booked run slots: the reminder at each slot's time, and repeating slots moving to their next date.
+    startRunSlotTicker();
     // Standard runs (workspaces in DATAFORSEO_STANDARD_WORKSPACES): searches still waiting at
     // DataForSEO carry on; the queue's timer keeps submitting and collecting from here.
     await recoverStandardTasksOnStartup();

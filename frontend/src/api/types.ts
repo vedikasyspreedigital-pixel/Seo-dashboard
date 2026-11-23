@@ -1,4 +1,4 @@
-export type RunStatus = 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'COMPLETED_WITH_ERRORS' | 'CANCELLED';
+export type RunStatus = 'UPLOADED' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'COMPLETED_WITH_ERRORS' | 'CANCELLED';
 export type RowStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'ERROR_RETRY' | 'FAILED';
 
 export interface ClientRecord {
@@ -145,6 +145,70 @@ export interface RankingRun {
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  // Run queue (2026-11-23)
+  queuedAt?: string | null;
+  urgent?: boolean;
+  urgentReason?: string | null;
+  urgentBy?: string | null;
+  /** On start/urgent responses: 1 = next to start; null when it's already checking. */
+  queuePosition?: number | null;
+}
+
+/** A team's booked run slot (2026-11-23). The other team's slots come without clients/notes. */
+export interface RunSlot {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  own: boolean;
+  startsAt: string;
+  durationMinutes: number;
+  repeatDays: number | null;
+  state: 'upcoming' | 'open' | 'started' | 'missed';
+  allClients: boolean;
+  clients: { id: string; name: string }[] | null;
+  clientCount: number | null;
+  note: string | null;
+  createdBy: string | null;
+  startedAt: string | null;
+  startedBy: string | null;
+  lastResult: RunSlotStartResult | null;
+}
+
+export interface RunSlotStartResult {
+  queued: { clientId: string; clientName: string; runId: string; reused: boolean; keywords: number }[];
+  skipped: { clientId: string; clientName: string; reason: string }[];
+}
+
+export interface RunSlotClash {
+  slotId: string;
+  workspaceName: string;
+  startsAt: string;
+  durationMinutes: number;
+}
+
+/** The shared run queue: checking first, then waiting in order (backend worker/runQueue.ts). */
+export interface RunQueueEntry {
+  runId: string;
+  status: 'PROCESSING' | 'QUEUED';
+  position: number | null;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  clientId: string;
+  /** null = the other team's run. */
+  clientName: string | null;
+  urgent: boolean;
+  urgentReason: string | null;
+  urgentBy: string | null;
+  queuedAt: string | null;
+  startedAt: string | null;
+  totalRows: number;
+  doneRows: number;
+}
+
+export interface RunQueue {
+  /** Runs checked at the same time; 0 = no limit. */
+  concurrency: number;
+  entries: RunQueueEntry[];
 }
 
 export interface OverviewRecentRun {
@@ -206,6 +270,9 @@ export interface RunProgress {
   engine?: 'live' | 'standard';
   /** Standard runs: searches sent and waiting in DataForSEO's queue (always 0 for Live). */
   waitingAtDataForSeo?: number;
+  /** Waiting in the run queue: 1 = next to start. */
+  queuePosition?: number | null;
+  urgent?: boolean;
 }
 
 export interface RowError {
@@ -343,7 +410,7 @@ export interface RankingReportListItem extends RankingReport {
   run: Pick<RankingRun, 'id' | 'sourceFilename' | 'createdAt'>;
 }
 
-export type NotificationType = 'RUN_COMPLETED' | 'RUN_COMPLETED_WITH_ERRORS' | 'REPORT_SENT' | 'REPORT_SEND_FAILED' | 'REPORT_TYPE_UNCONFIRMED';
+export type NotificationType = 'RUN_COMPLETED' | 'RUN_COMPLETED_WITH_ERRORS' | 'REPORT_SENT' | 'REPORT_SEND_FAILED' | 'REPORT_TYPE_UNCONFIRMED' | 'RUN_MADE_URGENT' | 'RUN_SLOT_DUE';
 
 export interface NotificationRecord {
   id: string;

@@ -15,3 +15,7 @@ process.on("exit", () => {
     // best effort -- it's in the OS temp folder anyway
   }
 });
+
+// Run queue (2026-11-23): tests share one database and run files in parallel, so a one-at-a-time queue would make
+// one file's runs wait on another's. No limit by default here; the run-queue tests set their own.
+process.env.RUN_QUEUE_CONCURRENCY ??= "0";

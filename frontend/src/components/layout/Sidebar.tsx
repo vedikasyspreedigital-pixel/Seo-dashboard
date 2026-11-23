@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import type { ComponentType, SVGProps } from 'react';
-import { BarChartIcon, CompareIcon, DocumentIcon, GlobeIcon, GridIcon, LayoutIcon, SettingsIcon, UserIcon } from '../ui/icons';
+import { BarChartIcon, ClockIcon, CompareIcon, DocumentIcon, GlobeIcon, GridIcon, LayoutIcon, SettingsIcon, UserIcon } from '../ui/icons';
 
 function SidebarIcon({
   to,
@@ -56,6 +56,7 @@ export function Sidebar() {
       <nav className="flex flex-col items-center gap-2">
         <SidebarIcon to="/overview" icon={LayoutIcon} label="Overview" />
         <SidebarIcon to="/runs" icon={GridIcon} label="Runs" />
+        <SidebarIcon to="/run-slots" icon={ClockIcon} label="Run slots" />
         <SidebarIcon to="/reports" icon={DocumentIcon} label="Reports" />
         <SidebarIcon to="/compare" icon={CompareIcon} label="Compare Reports" />
         <SidebarIcon to="/domain-intelligence" icon={GlobeIcon} label="Domain Intelligence" />

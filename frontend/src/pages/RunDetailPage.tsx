@@ -20,7 +20,8 @@ import { useRunProgress } from '../hooks/useRunProgress';
 import { useToast } from '../context/ToastContext';
 import { isRunReportable } from '../components/run/runStatus';
 import { resolveRunCompletionNotification } from '../components/run/runCompletionNotification';
-import { cancelRun, getExportUrl, getRun, getRunRows, rerunFailedRows, startRun } from '../api/client';
+import { cancelRun, getExportUrl, getRun, getRunRows, makeRunUrgent, rerunFailedRows, startRun } from '../api/client';
+import { TextInput } from '../components/ui/TextInput';
 import type { RankingRun, RunRow, RunStatus } from '../api/types';
 
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'COMPLETED_WITH_ERRORS', 'CANCELLED']);
@@ -44,6 +45,9 @@ export function RunDetailPage() {
   const [rows, setRows] = useState<RunRow[]>([]);
   const [filter, setFilter] = useState<Filter>('All');
   const [starting, setStarting] = useState(false);
+  // Run queue (2026-11-23): start as urgent / make a waiting run urgent, with a reason the other team sees.
+  const [urgentOpen, setUrgentOpen] = useState(false);
+  const [urgentReason, setUrgentReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -70,6 +74,8 @@ export function RunDetailPage() {
     setActionError(null);
     setLoadError(null);
     setConfirmingRerun(false);
+    setUrgentOpen(false);
+    setUrgentReason('');
     previousStatusRef.current = null;
   }, [runId]);
 
@@ -127,11 +133,28 @@ export function RunDetailPage() {
     setStarting(true);
     setActionError(null);
     try {
-      const updated = await startRun(runId);
+      const updated = await startRun(runId, urgentOpen ? { reason: urgentReason.trim() } : undefined);
+      setUrgentOpen(false);
       // Merge, don't replace -- startRun's response doesn't include the
       // nested `client` relation (only /runs/:id does), so replacing
       // outright would drop it and crash the client-name display above.
       setRun((prev) => (prev ? { ...prev, ...updated } : updated));
+    } catch (err) {
+      setActionError((err as Error).message);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function handleMakeUrgent() {
+    if (!runId) return;
+    setStarting(true);
+    setActionError(null);
+    try {
+      const updated = await makeRunUrgent(runId, urgentReason.trim());
+      setRun((prev) => (prev ? { ...prev, ...updated } : updated));
+      setUrgentOpen(false);
+      refreshProgress();
     } catch (err) {
       setActionError((err as Error).message);
     } finally {
@@ -261,15 +284,60 @@ export function RunDetailPage() {
         would just be a redundant duplicate of the same button.
       */}
       {status === 'UPLOADED' && run && (
-        <div className="mt-3 flex items-center justify-end gap-3 text-sm">
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-3 text-sm">
           <span className="font-medium text-amber-300">
             Process {run.totalRows} row{run.totalRows === 1 ? '' : 's'} &mdash; confirm?
           </span>
-          <Button disabled={starting || cancelling} onClick={handleStart}>
+          <label className="flex cursor-pointer items-center gap-2 text-[var(--color-ink-muted)]">
+            <input type="checkbox" className="h-4 w-4 accent-rose-400" checked={urgentOpen} onChange={(e) => setUrgentOpen(e.target.checked)} />
+            Urgent
+          </label>
+          {urgentOpen && (
+            <div className="w-64">
+              <TextInput value={urgentReason} onChange={(e) => setUrgentReason(e.target.value)} placeholder="Why? (the other team sees this)" autoFocus />
+            </div>
+          )}
+          <Button disabled={starting || cancelling || (urgentOpen && urgentReason.trim().length < 3)} onClick={handleStart}>
             {starting && <Spinner />}
-            Confirm Start Run
+            {urgentOpen ? 'Start as urgent' : 'Confirm Start Run'}
           </Button>
         </div>
+      )}
+
+      {status === 'QUEUED' && run && (
+        <Card className="mt-6 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <p className="font-semibold text-[var(--color-ink)]">
+                Waiting in the run queue{progress?.queuePosition ? ` · #${progress.queuePosition} in line` : ''}
+                {(progress?.urgent ?? run.urgent) && <span className="ml-2 text-sm font-medium text-rose-300">Urgent</span>}
+              </p>
+              <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
+                Runs check one after another so both teams share the same account fairly. This one starts on its own when its turn comes; you can
+                leave this page. See the whole queue on the <Link to="/runs" className="text-brand-300 hover:text-brand-200">Runs</Link> page.
+              </p>
+            </div>
+            {!(progress?.urgent ?? run.urgent) &&
+              (urgentOpen ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="w-64">
+                    <TextInput value={urgentReason} onChange={(e) => setUrgentReason(e.target.value)} placeholder="Why? (the other team sees this)" autoFocus />
+                  </div>
+                  <Button variant="ghost" onClick={() => setUrgentOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button disabled={starting || urgentReason.trim().length < 3} onClick={handleMakeUrgent}>
+                    {starting && <Spinner />}
+                    Move to front
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="secondary" onClick={() => setUrgentOpen(true)}>
+                  Make urgent
+                </Button>
+              ))}
+          </div>
+        </Card>
       )}
 
       {confirmingRerun && status === 'COMPLETED_WITH_ERRORS' && totals.failed > 0 && (
@@ -304,7 +372,7 @@ export function RunDetailPage() {
       )}
       <InlineError message={actionError} className="mt-2" />
 
-      {progress && !isTerminal && (
+      {progress && !isTerminal && status !== 'QUEUED' && (
         <div className="mt-6">
           <ProcessingSummary progress={progress} />
         </div>
