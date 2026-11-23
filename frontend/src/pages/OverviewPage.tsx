@@ -9,7 +9,7 @@ import { Button } from "../components/ui/Button";
 import { useActiveClient } from "../context/ClientContext";
 import { useSession } from "../context/SessionContext";
 import { getOverview } from "../api/client";
-import { useIsChristmas } from "../components/layout/Festive";
+import { ChristmasTree, useIsChristmas } from "../components/layout/Festive";
 import type { OverviewData } from "../api/types";
 import {
   MinusCircleIcon,
@@ -86,7 +86,9 @@ export function OverviewPage() {
               client={activeClient}
               totalRunsForClient={activeClient ? overview.totalRuns : null}
             />
-            <div className="grid grid-cols-2 grid-rows-2 gap-3.5">
+            <div className="relative grid grid-cols-2 grid-rows-2 gap-3.5">
+              {/* Christmas: a little tree standing on the "Ranking Increased" card */}
+              <ChristmasTree />
               <KpiCard
                 icon={PlayCircleIcon}
                 label="Total Runs"

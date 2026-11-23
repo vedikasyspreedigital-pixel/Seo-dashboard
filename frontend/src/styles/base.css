@@ -299,7 +299,31 @@ textarea:focus-visible {
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
 }
 
+/* Little tree standing on the Overview's client card. */
+.festive-tree {
+  position: absolute;
+  bottom: 100%;
+  right: 34px;
+  width: 58px;
+  height: 74px;
+  margin-bottom: -6px;
+  pointer-events: none;
+  z-index: 2;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35));
+}
+.festive-tree-star {
+  transform-origin: 30px 5.5px;
+  animation: festive-star 3.2s ease-in-out infinite;
+}
+@keyframes festive-star {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.15); opacity: 0.85; }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .festive-tree-star {
+    animation: none;
+  }
   .festive-bulb {
     animation: none;
   }

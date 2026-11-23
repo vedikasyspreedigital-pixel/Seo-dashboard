@@ -10,8 +10,26 @@ import { festiveOn, useIsChristmas } from './Festive';
 const EVENT = 'festive:report-sent';
 const DURATION_MS = 6500;
 
-export function celebrateReportSent(label = 'Report delivered') {
-  window.dispatchEvent(new CustomEvent(EVENT, { detail: { label } }));
+/** `label` reads "<label>. Santa's on his way with it"; pass `message` to show your own line instead. */
+export function celebrateReportSent(label = 'Report delivered', message?: string) {
+  window.dispatchEvent(new CustomEvent(EVENT, { detail: { label, message } }));
+}
+
+/** "Send Santa" chip for the top bar, next to the Christmas countdown -- sends the sleigh across for fun. */
+export function SendSantaButton() {
+  const on = useIsChristmas();
+  if (!on) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => celebrateReportSent('', 'Merry Christmas from Santa and the whole team! 🎄')}
+      title="Send Santa across the screen"
+      className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-xs font-medium text-[var(--festive-gold)] transition-colors hover:border-[var(--festive-gold)] xl:inline-flex"
+    >
+      <span aria-hidden>🎅</span>
+      Send Santa
+    </button>
+  );
 }
 
 type Spark = { id: number; x: number; y: number; born: number; size: number };
@@ -76,7 +94,7 @@ function Sleigh({ phase }: { phase: number }) {
 
 export function FestiveSleigh() {
   const christmas = useIsChristmas();
-  const [flight, setFlight] = useState<{ start: number; label: string } | null>(null);
+  const [flight, setFlight] = useState<{ start: number; text: string } | null>(null);
   const [now, setNow] = useState(0);
   const [sparks, setSparks] = useState<Spark[]>([]);
   const nextId = useRef(0);
@@ -86,7 +104,9 @@ export function FestiveSleigh() {
       if (!festiveOn()) return;
       if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
       setSparks([]);
-      setFlight({ start: performance.now(), label: (e as CustomEvent<{ label?: string }>).detail?.label ?? 'Report delivered' });
+      const detail = (e as CustomEvent<{ label?: string; message?: string }>).detail;
+      const text = detail?.message ?? `${detail?.label || 'Report delivered'}. Santa's on his way with it 🎁`;
+      setFlight({ start: performance.now(), text });
     };
     window.addEventListener(EVENT, onSent);
     return () => window.removeEventListener(EVENT, onSent);
@@ -156,7 +176,7 @@ export function FestiveSleigh() {
         style={{ opacity: banner ? 1 : 0, transform: `translate(-50%, ${banner ? 0 : -10}px)` }}
       >
         <p className="text-lg font-bold text-[#f4c95d]">Ho ho ho! 🎅</p>
-        <p className="text-sm text-[#f6f3ea]">{flight.label}. Santa's on his way with it 🎁</p>
+        <p className="text-sm text-[#f6f3ea]">{flight.text}</p>
       </div>
     </div>
   );

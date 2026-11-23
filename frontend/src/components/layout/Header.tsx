@@ -6,6 +6,7 @@ import { IconButton } from '../ui/IconButton';
 import { MoonIcon, SearchIcon, SunIcon, UserIcon } from '../ui/icons';
 import { OPEN_COMMAND_PALETTE } from './CommandPalette';
 import { ChristmasCountdown, FestiveLights } from './Festive';
+import { SendSantaButton } from './FestiveSleigh';
 import { useTheme } from '../../hooks/useTheme';
 
 /** Global top bar, present on every page inside AppShell -- houses the
@@ -60,6 +61,7 @@ export function Header({ hideClientPicker = false }: { hideClientPicker?: boolea
       </div>
 
       <div className="flex items-center gap-3">
+        <SendSantaButton />
         <ChristmasCountdown />
         <IconButton title={theme === 'light' ? 'Switch to dark theme' : 'Switch to white theme'} onClick={toggleTheme}>
           {theme === 'light' ? <MoonIcon className="h-4.5 w-4.5" /> : <SunIcon className="h-4.5 w-4.5" />}

@@ -613,6 +613,63 @@ export function SantaHat() {
   );
 }
 
+/**
+ * A little Christmas tree standing on top of a card (Overview, 2026-11-23): snow on its branches, a gold
+ * garland, twinkling baubles, a glowing star and a present at its foot. Put it inside a `relative` box.
+ */
+export function ChristmasTree({ className = '' }: { className?: string }) {
+  const baubles: [number, number, string][] = [
+    [24, 25, '#e23b4e'],
+    [36, 27, '#5aa9ff'],
+    [19, 40, '#f4c95d'],
+    [31, 42, '#e23b4e'],
+    [42, 40, '#fff8f0'],
+    [14, 56, '#5aa9ff'],
+    [26, 57, '#f4c95d'],
+    [38, 56, '#e23b4e'],
+    [47, 54, '#f4c95d'],
+  ];
+  return (
+    <svg className={`festive-only festive-tree ${className}`} viewBox="0 0 60 76" aria-hidden>
+      <defs>
+        <linearGradient id="festive-tree-green" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor="#1d6b3d" />
+          <stop offset="0.55" stopColor="#2a9554" />
+          <stop offset="1" stopColor="#1a5c35" />
+        </linearGradient>
+      </defs>
+      {/* trunk */}
+      <rect x="27" y="61" width="6" height="9" rx="1" fill="#7a4a2a" />
+      {/* three tiers, bottom first, each with snow along its lower edge */}
+      <path d="M30 30 L5 63 Q30 67 55 63 Z" fill="url(#festive-tree-green)" />
+      <path d="M7 62.5 Q13 60 18 63 Q24 61 30 64 Q36 61 42 63 Q48 60 53 62.5" stroke="#fbfdff" strokeWidth="2.4" strokeLinecap="round" fill="none" />
+      <path d="M30 17 L9 46 Q30 50 51 46 Z" fill="url(#festive-tree-green)" />
+      <path d="M11 45.5 Q17 43 22 46 Q30 44 38 46 Q44 43 49 45.5" stroke="#fbfdff" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+      <path d="M30 6 L14 31 Q30 34 46 31 Z" fill="url(#festive-tree-green)" />
+      <path d="M16 30.5 Q22 28.5 27 31 Q33 29 38 31 Q42 28.5 44 30.5" stroke="#fbfdff" strokeWidth="2" strokeLinecap="round" fill="none" />
+      {/* garland */}
+      <path d="M18 24 Q30 31 41 23 M14 38 Q30 47 46 37 M10 53 Q30 63 50 52" stroke="#f4c95d" strokeWidth="1" fill="none" opacity="0.85" />
+      {/* baubles */}
+      {baubles.map(([cx, cy, c], i) => (
+        <g key={i} className="festive-bulb" style={{ animationDelay: `${(i * 0.53) % 2.6}s` }}>
+          <circle cx={cx} cy={cy} r="2.1" fill={c} />
+          <circle cx={cx - 0.6} cy={cy - 0.7} r="0.6" fill="#fff" opacity="0.8" />
+        </g>
+      ))}
+      {/* star */}
+      <g className="festive-tree-star">
+        <circle cx="30" cy="5.5" r="5" fill="#f4c95d" opacity="0.25" />
+        <path d="M30 0.5 L31.5 4 L35.2 4.2 L32.3 6.5 L33.3 10 L30 8 L26.7 10 L27.7 6.5 L24.8 4.2 L28.5 4 Z" fill="#f4c95d" />
+      </g>
+      {/* present */}
+      <rect x="37" y="64" width="11" height="8" rx="1" fill="#e23b4e" />
+      <rect x="41.6" y="64" width="1.8" height="8" fill="#f4c95d" />
+      <rect x="37" y="67.1" width="11" height="1.6" fill="#f4c95d" />
+      <path d="M42.5 64 Q39 60.5 40 63.5 M42.5 64 Q46 60.5 45 63.5" stroke="#f4c95d" strokeWidth="1.2" fill="none" />
+    </svg>
+  );
+}
+
 function christmasCountdown(now = new Date()) {
   const year = now.getMonth() === 0 && now.getDate() <= 6 ? now.getFullYear() - 1 : now.getFullYear();
   const christmas = new Date(year, 11, 25);
@@ -631,7 +688,7 @@ export function ChristmasCountdown() {
   const on = useIsChristmas();
   if (!on) return null;
   return (
-    <span className="hidden items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-xs font-medium text-[var(--festive-gold)] lg:inline-flex">
+    <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-xs font-medium text-[var(--festive-gold)] xl:inline-flex">
       <span aria-hidden>🎄</span>
       {christmasCountdown()}
     </span>
