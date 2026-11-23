@@ -27,7 +27,7 @@ export function StatusBadge({
   className?: string;
 }) {
   return (
-    <span className={`inline-flex items-center rounded-full font-semibold tracking-wide ${SIZE_CLASSES[size]} ${mono ? 'font-mono' : ''} ${toneClassName} ${className}`.trim()}>
+    <span className={`inline-flex items-center whitespace-nowrap rounded-full font-semibold tracking-wide ${SIZE_CLASSES[size]} ${mono ? 'font-mono' : ''} ${toneClassName} ${className}`.trim()}>
       {dot && <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-current opacity-80" />}
       {label}
     </span>

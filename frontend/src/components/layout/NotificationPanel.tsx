@@ -7,6 +7,7 @@ const DOT_CLASSES: Record<NotificationType, string> = {
   RUN_COMPLETED_WITH_ERRORS: 'bg-amber-400',
   REPORT_SENT: 'bg-brand-300',
   REPORT_SEND_FAILED: 'bg-rose-400',
+  REPORT_TYPE_UNCONFIRMED: 'bg-amber-300',
 };
 
 function formatRelativeTime(iso: string): string {
@@ -77,7 +78,9 @@ export function NotificationPanel({ open, onClose, notifications }: Props) {
           ) : (
             <ul>
               {notifications.map((n) => {
-                const clickable = Boolean(n.runId);
+                // "Confirm the report type" opens that client's Report settings; everything else opens its run.
+                const target = n.type === 'REPORT_TYPE_UNCONFIRMED' && n.clientId ? `/clients?reportSettings=${n.clientId}` : n.runId ? `/runs/${n.runId}` : null;
+                const clickable = target !== null;
                 return (
                   <li
                     key={n.id}
@@ -85,7 +88,7 @@ export function NotificationPanel({ open, onClose, notifications }: Props) {
                       clickable
                         ? () => {
                             onClose();
-                            navigate(`/runs/${n.runId}`);
+                            navigate(target);
                           }
                         : undefined
                     }

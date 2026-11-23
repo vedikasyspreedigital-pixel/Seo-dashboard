@@ -193,6 +193,25 @@ function ownFormula(ws: ExcelJS.Worksheet, cell: ExcelJS.Cell): { formula: strin
   return null;
 }
 
+/** Conditional-format rule types ExcelJS can write back. */
+const WRITABLE_CF_TYPES = new Set(["expression", "cellIs", "top10", "aboveAverage", "colorScale", "iconSet", "dataBar", "containsText", "timePeriod"]);
+
+/**
+ * ExcelJS reads rules like "Highlight duplicate values" but writes them as an EMPTY <conditionalFormatting>, which
+ * Excel calls a corrupt file -- its "repair" then drops the merges and column widths (2026-11-23, Vastrado's file).
+ * Those rules are left out; the rest of the formatting stays.
+ */
+function dropUnwritableConditionalFormats(workbook: ExcelJS.Workbook) {
+  for (const ws of workbook.worksheets) {
+    const list = (ws as unknown as { conditionalFormattings?: { rules?: { type?: string }[] }[] }).conditionalFormattings;
+    if (!Array.isArray(list)) continue;
+    const kept = list
+      .map((cf) => ({ ...cf, rules: (cf.rules ?? []).filter((r) => WRITABLE_CF_TYPES.has(String(r.type))) }))
+      .filter((cf) => cf.rules.length > 0);
+    list.splice(0, list.length, ...kept);
+  }
+}
+
 /**
  * The next consolidated report: `history` (the client's last consolidated file) with a new date column in
  * front of the old ones, holding `rows` (this report's ranks), rows sorted by the new rank.
@@ -308,6 +327,7 @@ export async function buildConsolidatedReport(history: Buffer, input: { reportDa
     ws.mergeCells(p.top, left, p.bottom, right);
   }
 
+  dropUnwritableConditionalFormats(workbook);
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
   return { buffer, newColumnLabel: label, dropped, added: added.map((a) => a.keyword), dateColumns: layout.dateColumns.length + 1, keywordCount: totalRows };
 }

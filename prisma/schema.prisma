@@ -134,6 +134,8 @@ enum NotificationType {
   RUN_COMPLETED_WITH_ERRORS
   REPORT_SENT
   REPORT_SEND_FAILED
+  // 2026-11-23: a run finished for a client whose report type (normal PDF / consolidated) isn't confirmed yet.
+  REPORT_TYPE_UNCONFIRMED
 }
 
 model Notification {
@@ -245,6 +247,9 @@ model Client {
   // "Consolidated report" (2026-11-10): this client gets ONE Excel with every past ranking date as a column
   // (newest first) INSTEAD of the 2-date PDF. Its history lives in ConsolidatedHistory.
   consolidatedReport Boolean @default(false) @map("consolidated_report")
+  // 2026-11-23: the team has confirmed which report this client gets (normal PDF or consolidated). Until then
+  // Client Management shows "Not confirmed" and every finished run raises a REPORT_TYPE_UNCONFIRMED notification.
+  reportTypeConfirmed Boolean @default(false) @map("report_type_confirmed")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 

@@ -36,24 +36,43 @@ const HISTORY_SELECT = { filename: true, newestDate: true, dateColumns: true, ke
 export const consolidatedClientsRouter = Router();
 consolidatedClientsRouter.use(requireAuth);
 
+/** "normal" (the 2-date PDF), "consolidated", or "unconfirmed" (nobody has said yet). */
+export type ReportType = "normal" | "consolidated" | "unconfirmed";
+const REPORT_TYPES: ReportType[] = ["normal", "consolidated", "unconfirmed"];
+
+export function reportTypeOf(client: { consolidatedReport: boolean; reportTypeConfirmed: boolean }): ReportType {
+  if (client.consolidatedReport) return "consolidated";
+  return client.reportTypeConfirmed ? "normal" : "unconfirmed";
+}
+
 consolidatedClientsRouter.get("/:id/consolidated", async (req, res) => {
   const client = await findOwnedClientOrRespond(req, res, req.params.id as string);
   if (!client) return;
   const history = await prisma.consolidatedHistory.findUnique({ where: { clientId: client.id }, select: HISTORY_SELECT });
-  res.json({ enabled: client.consolidatedReport, history: historySummary(history) });
+  res.json({ enabled: client.consolidatedReport, reportType: reportTypeOf(client), history: historySummary(history) });
 });
 
 consolidatedClientsRouter.patch("/:id/consolidated", async (req, res) => {
   const client = await findOwnedClientOrRespond(req, res, req.params.id as string, { requireActive: true });
   if (!client) return;
-  const { enabled } = req.body ?? {};
-  if (typeof enabled !== "boolean") {
-    res.status(400).json({ error: "enabled must be true or false" });
+  // Body: { reportType } from Client Management, or { enabled } from the report page's switch (also a confirmation).
+  const { enabled, reportType } = req.body ?? {};
+  let data: { consolidatedReport: boolean; reportTypeConfirmed: boolean };
+  if (reportType !== undefined) {
+    if (!REPORT_TYPES.includes(reportType)) {
+      res.status(400).json({ error: "reportType must be normal, consolidated or unconfirmed" });
+      return;
+    }
+    data = { consolidatedReport: reportType === "consolidated", reportTypeConfirmed: reportType !== "unconfirmed" };
+  } else if (typeof enabled === "boolean") {
+    data = { consolidatedReport: enabled, reportTypeConfirmed: true };
+  } else {
+    res.status(400).json({ error: "reportType (normal, consolidated or unconfirmed) is required" });
     return;
   }
-  await prisma.client.update({ where: { id: client.id }, data: { consolidatedReport: enabled } });
+  const updated = await prisma.client.update({ where: { id: client.id }, data });
   const history = await prisma.consolidatedHistory.findUnique({ where: { clientId: client.id }, select: HISTORY_SELECT });
-  res.json({ enabled, history: historySummary(history) });
+  res.json({ enabled: updated.consolidatedReport, reportType: reportTypeOf(updated), history: historySummary(history) });
 });
 
 /** The team's last consolidated Excel for this client -- every later one adds a column to it. Replaces any earlier one. */
@@ -86,7 +105,7 @@ consolidatedClientsRouter.post("/:id/consolidated/history", upload.single("file"
     updatedBy: req.authUser!.email,
   };
   const saved = await prisma.consolidatedHistory.upsert({ where: { clientId: client.id }, create: { clientId: client.id, ...data }, update: data, select: HISTORY_SELECT });
-  res.json({ enabled: client.consolidatedReport, history: historySummary(saved), newestLabel: info.newestLabel });
+  res.json({ enabled: client.consolidatedReport, reportType: reportTypeOf(client), history: historySummary(saved), newestLabel: info.newestLabel });
 });
 
 consolidatedClientsRouter.get("/:id/consolidated/history/file", async (req, res) => {

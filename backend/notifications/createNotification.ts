@@ -36,7 +36,10 @@ export async function createNotification(input: CreateNotificationInput) {
 /** Fires from processRun.ts right after recomputeRunCompletion resolves a run to a terminal, genuinely-completed state (never for CANCELLED -- that's a user action, not an outcome worth a notification). */
 export async function notifyRunCompletion(run: { id: string; clientId: string; status: string; sourceFilename: string }): Promise<void> {
   if (run.status !== "COMPLETED" && run.status !== "COMPLETED_WITH_ERRORS") return;
-  const client = await prisma.client.findUnique({ where: { id: run.clientId }, select: { workspaceId: true, name: true } });
+  const client = await prisma.client.findUnique({
+    where: { id: run.clientId },
+    select: { workspaceId: true, name: true, kind: true, consolidatedReport: true, reportTypeConfirmed: true },
+  });
   if (!client?.workspaceId) return;
 
   const withErrors = run.status === "COMPLETED_WITH_ERRORS";
@@ -49,6 +52,17 @@ export async function notifyRunCompletion(run: { id: string; clientId: string; s
     clientId: run.clientId,
     runId: run.id,
   });
+
+  // 2026-11-23: nobody has said whether this client gets the normal PDF or the consolidated Excel -- ask, on every run, until someone does.
+  if (client.kind === "ranking" && !client.consolidatedReport && !client.reportTypeConfirmed) {
+    await createNotification({
+      workspaceId: client.workspaceId,
+      type: "REPORT_TYPE_UNCONFIRMED",
+      message: `Confirm the report type for ${client.name}: normal PDF or consolidated Excel? Its run just finished.`,
+      clientId: run.clientId,
+      runId: run.id,
+    });
+  }
 }
 
 /** Fires from approveAndSend.ts right after a send succeeds (markSent). */

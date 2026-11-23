@@ -1,4 +1,5 @@
 import type {
+  ReportType,
   BaselineClientPreview,
   BaselinePreview,
   BaselineRecord,
@@ -410,6 +411,16 @@ export async function setConsolidatedEnabled(clientId: string, enabled: boolean)
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
+  });
+  return handle<ConsolidatedSettings>(res);
+}
+
+/** Client Management's report type: normal PDF, consolidated Excel, or not confirmed yet. */
+export async function setClientReportType(clientId: string, reportType: ReportType): Promise<ConsolidatedSettings> {
+  const res = await apiFetch(`/clients/${clientId}/consolidated`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reportType }),
   });
   return handle<ConsolidatedSettings>(res);
 }

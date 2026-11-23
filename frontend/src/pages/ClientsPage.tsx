@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -10,16 +11,17 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { InlineError } from '../components/ui/InlineError';
-import { GridIcon, PencilIcon, PlusIcon, PowerIcon, TrashIcon, UndoIcon, UploadIcon } from '../components/ui/icons';
+import { AlertPanel } from '../components/ui/AlertPanel';
+import { PencilIcon, PlusIcon, PowerIcon, SettingsIcon, TrashIcon, UndoIcon, UploadIcon } from '../components/ui/icons';
 import { BaselineUploadModal } from '../components/baselines/BaselineUploadModal';
-import { ConsolidatedReportModal } from '../components/baselines/ConsolidatedReportModal';
+import { ReportSettingsModal } from '../components/clients/ReportSettingsModal';
 import { parseRecipientsInput } from '../components/report/reportStatus';
 import { useSession } from '../context/SessionContext';
 import { useActiveClient } from '../context/ClientContext';
 import { activateClient, archiveClient, createClient, deactivateClient, getClientsForManagement, restoreClient, updateClient } from '../api/client';
-import type { ClientRecord } from '../api/types';
+import { clientReportType, type ClientRecord, type ReportType } from '../api/types';
 
-const FILTERS = ['All', 'Active', 'Inactive', 'Archived'] as const;
+const FILTERS = ['All', 'Active', 'Inactive', 'Report not confirmed', 'Archived'] as const;
 type Filter = (typeof FILTERS)[number];
 
 interface ClientFormState {
@@ -40,6 +42,12 @@ function clientStatusBadge(client: ClientRecord) {
   if (client.isActive) return <StatusBadge label="Active" toneClassName="bg-emerald-500/15 text-emerald-300" />;
   return <StatusBadge label="Inactive" toneClassName="bg-amber-500/10 text-amber-300" />;
 }
+
+const REPORT_TYPE_BADGES: Record<ReportType, { label: string; tone: string }> = {
+  normal: { label: 'PDF report', tone: 'bg-sky-500/15 text-sky-300' },
+  consolidated: { label: 'Consolidated', tone: 'bg-violet-500/15 text-violet-300' },
+  unconfirmed: { label: 'Not confirmed', tone: 'bg-amber-500/15 text-amber-300' },
+};
 
 /** Previous-rank baseline upload status -- shows when the most recently
  * uploaded baseline was added, not the baseline's own date column (that's
@@ -76,7 +84,9 @@ export function ClientsPage() {
   const [archiving, setArchiving] = useState(false);
   const [rowActionError, setRowActionError] = useState<string | null>(null);
   const [baselineTarget, setBaselineTarget] = useState<ClientRecord | null>(null);
-  const [consolidatedTarget, setConsolidatedTarget] = useState<ClientRecord | null>(null);
+  const [settingsTarget, setSettingsTarget] = useState<ClientRecord | null>(null);
+  // "Confirm the report type" notifications link here with ?reportSettings=<clientId>.
+  const [searchParams, setSearchParams] = useSearchParams();
 
   function load() {
     if (!activeWorkspace) return;
@@ -88,6 +98,22 @@ export function ClientsPage() {
 
   useEffect(load, [activeWorkspace]);
 
+  useEffect(() => {
+    const id = searchParams.get('reportSettings');
+    if (!id || clients.length === 0) return;
+    const target = clients.find((c) => c.id === id);
+    if (target) setSettingsTarget(target);
+    setSearchParams(
+      (params) => {
+        params.delete('reportSettings');
+        return params;
+      },
+      { replace: true },
+    );
+  }, [searchParams, clients, setSearchParams]);
+
+  const unconfirmedCount = useMemo(() => clients.filter((c) => !c.archivedAt && clientReportType(c) === 'unconfirmed').length, [clients]);
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return clients.filter((c) => {
@@ -95,6 +121,7 @@ export function ClientsPage() {
       if (filter === 'Active') return c.isActive && !c.archivedAt;
       if (filter === 'Inactive') return !c.isActive && !c.archivedAt;
       if (filter === 'Archived') return !!c.archivedAt;
+      if (filter === 'Report not confirmed') return !c.archivedAt && clientReportType(c) === 'unconfirmed';
       return !c.archivedAt;
     });
   }, [clients, search, filter]);
@@ -225,6 +252,21 @@ export function ClientsPage() {
         </div>
       </div>
 
+      {unconfirmedCount > 0 && filter !== 'Report not confirmed' && (
+        <AlertPanel tone="warning" className="mt-4 flex flex-wrap items-center justify-between gap-3 !py-3">
+          <p className="text-sm text-amber-200">
+            <span className="font-semibold">
+              {unconfirmedCount} client{unconfirmedCount === 1 ? '' : 's'}
+            </span>{' '}
+            {unconfirmedCount === 1 ? 'has' : 'have'} no confirmed report type (normal PDF or consolidated Excel). You'll get a notification after each of
+            their runs until it's set.
+          </p>
+          <Button variant="secondary" className="!py-1.5 text-xs" onClick={() => setFilter('Report not confirmed')}>
+            Review them
+          </Button>
+        </AlertPanel>
+      )}
+
       <InlineError message={rowActionError} className="mt-4" />
 
       <Card className="mt-4 overflow-hidden p-0">
@@ -236,10 +278,11 @@ export function ClientsPage() {
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--color-border)] eyebrow-label">
-                <th className="cell-compact">Name</th>
-                <th className="cell-compact">ClickUp Task ID</th>
+                <th className="cell-compact">Client</th>
+                <th className="cell-compact">Report</th>
                 <th className="cell-compact">Status</th>
                 <th className="cell-compact">Previous Rank</th>
+                <th className="cell-compact">ClickUp Task ID</th>
                 <th className="cell-compact">Notes</th>
                 <th className="cell-compact" />
               </tr>
@@ -247,17 +290,22 @@ export function ClientsPage() {
             <tbody>
               {filtered.map((client) => (
                 <tr key={client.id} className="border-b border-[var(--color-border)] last:border-0 even:bg-[var(--color-surface-2)]/40">
-                  <td className="cell-cozy text-[var(--color-ink)]">
-                    {client.name}
-                    {client.consolidatedReport && (
-                      <span className="ml-2 align-middle">
-                        <StatusBadge label="Consolidated" toneClassName="bg-violet-500/15 text-violet-300" />
-                      </span>
+                  <td className="cell-cozy">
+                    <span className="block font-medium text-[var(--color-ink)]">{client.name}</span>
+                    {client.domain && <span className="mt-0.5 block text-xs text-[var(--color-ink-faint)]">{client.domain}</span>}
+                  </td>
+                  <td className="cell-cozy">
+                    {client.archivedAt ? (
+                      <StatusBadge label={REPORT_TYPE_BADGES[clientReportType(client)].label} toneClassName={REPORT_TYPE_BADGES[clientReportType(client)].tone} />
+                    ) : (
+                      <button type="button" title="Report settings" onClick={() => setSettingsTarget(client)} className="rounded-full transition-opacity hover:opacity-80">
+                        <StatusBadge label={REPORT_TYPE_BADGES[clientReportType(client)].label} toneClassName={REPORT_TYPE_BADGES[clientReportType(client)].tone} />
+                      </button>
                     )}
                   </td>
-                  <td className="cell-cozy font-mono text-[var(--color-ink-muted)]">{client.clickupTaskId ?? '—'}</td>
                   <td className="cell-cozy">{clientStatusBadge(client)}</td>
                   <td className="cell-cozy">{baselineStatusBadge(client)}</td>
+                  <td className="cell-cozy font-mono text-xs text-[var(--color-ink-muted)]">{client.clickupTaskId ?? '—'}</td>
                   <td className="cell-cozy max-w-xs truncate text-[var(--color-ink-muted)]" title={client.notes ?? undefined}>
                     {client.notes ?? '—'}
                   </td>
@@ -282,11 +330,11 @@ export function ClientsPage() {
                           </button>
                           <button
                             type="button"
-                            title="Consolidated report"
-                            onClick={() => setConsolidatedTarget(client)}
-                            className={`rounded-full p-1.5 hover:bg-overlay/[0.06] hover:text-[var(--color-ink)] ${client.consolidatedReport ? 'text-violet-300' : 'text-[var(--color-ink-muted)]'}`}
+                            title="Report settings"
+                            onClick={() => setSettingsTarget(client)}
+                            className="rounded-full p-1.5 text-[var(--color-ink-muted)] hover:bg-overlay/[0.06] hover:text-[var(--color-ink)]"
                           >
-                            <GridIcon className="h-4 w-4" />
+                            <SettingsIcon className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
@@ -389,11 +437,11 @@ export function ClientsPage() {
         />
       )}
 
-      {consolidatedTarget && (
-        <ConsolidatedReportModal
-          clientId={consolidatedTarget.id}
-          clientName={consolidatedTarget.name}
-          onClose={() => setConsolidatedTarget(null)}
+      {settingsTarget && (
+        <ReportSettingsModal
+          clientId={settingsTarget.id}
+          clientName={settingsTarget.name}
+          onClose={() => setSettingsTarget(null)}
           onChanged={load}
         />
       )}

@@ -10,6 +10,7 @@ import { buildConsolidatedReport, columnLabel, describeConsolidatedFile, shiftFo
 import { createAuthenticatedSession, type AuthFixture } from "./helpers/auth.js";
 import { authedRequest } from "./helpers/authedRequest.js";
 import type { CallDataForSeoFn } from "../backend/worker/processRun.js";
+import { notifyRunCompletion } from "../backend/notifications/createNotification.js";
 
 // "Consolidated report" (2026-11-10): AKT/Vastrado get ONE Excel with every past date as a column instead of
 // the 2-date PDF. The dashboard keeps the client's last consolidated file and adds the new column in front.
@@ -132,6 +133,21 @@ test("buildConsolidatedReport: a file with shared formulas (Vastrado's GSC 'Clic
   assert.equal(s.getCell(4, 5).value, 202);
 });
 
+test("buildConsolidatedReport: a 'highlight duplicates' rule ExcelJS can't write is left out (no empty <conditionalFormatting> for Excel to call corrupt)", async () => {
+  const history = await historyFile([["divorce lawyer", [1, 2, 3]]]);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(history as unknown as ArrayBuffer);
+  const ws = wb.worksheets[0];
+  ws.addConditionalFormatting({ ref: "A4", rules: [{ type: "expression", priority: 2, formulae: ["A4=\"x\""], style: {} }] });
+  (ws as unknown as { conditionalFormattings: unknown[] }).conditionalFormattings.push({ ref: "A5", rules: [{ type: "duplicateValues", priority: 1, style: {} }] });
+  const withRules = Buffer.from(await wb.xlsx.writeBuffer());
+  const built = await buildConsolidatedReport(withRules, { reportDate: new Date("2026-11-23T00:00:00Z"), rows: [{ keyword: "divorce lawyer", rankValue: 1, rankDisplay: "1" }] });
+  const JSZip = (await import("jszip")).default;
+  const xml = await (await JSZip.loadAsync(built.buffer)).file("xl/worksheets/sheet1.xml")!.async("string");
+  assert.doesNotMatch(xml, /<conditionalFormatting[^>]*\/>/);
+  assert.match(xml, /<cfRule type="expression"/);
+});
+
 test("columnLabel follows the file's own date style", () => {
   assert.equal(columnLabel(new Date("2026-11-03T10:00:00Z"), "30th Oct 26"), "03rd Nov 26");
   assert.equal(columnLabel(new Date("2026-09-15T10:00:00Z"), "30th Oct 26"), "15th Sept 26");
@@ -247,6 +263,43 @@ test("switching the consolidated report on/off; a normal client's report isn't a
     assert.equal(on.body.history, null);
     assert.equal((await t.api.patch(`/api/clients/${t.client.id}/consolidated`).send({ enabled: "yes" })).status, 400);
     assert.equal((await t.api.patch(`/api/clients/${t.client.id}/consolidated`).send({ enabled: false })).body.enabled, false);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("report type (2026-11-23): normal / consolidated / not confirmed; the report page's switch also confirms", async () => {
+  const t = await setup({ consolidated: false });
+  try {
+    const url = `/api/clients/${t.client.id}/consolidated`;
+    assert.equal((await t.api.get(url)).body.reportType, "unconfirmed");
+    assert.equal((await t.api.patch(url).send({ reportType: "normal" })).body.reportType, "normal");
+    const consolidated = (await t.api.patch(url).send({ reportType: "consolidated" })).body;
+    assert.deepEqual([consolidated.reportType, consolidated.enabled], ["consolidated", true]);
+    assert.equal((await t.api.patch(url).send({ reportType: "unconfirmed" })).body.reportType, "unconfirmed");
+    assert.equal((await t.api.patch(url).send({ reportType: "pdf" })).status, 400);
+    assert.equal((await t.api.patch(url).send({})).status, 400);
+    assert.equal((await t.api.patch(url).send({ enabled: false })).body.reportType, "normal");
+    const row = await prisma.client.findUniqueOrThrow({ where: { id: t.client.id } });
+    assert.deepEqual([row.consolidatedReport, row.reportTypeConfirmed], [false, true]);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("a finished run asks to confirm the report type until it's set", async () => {
+  const t = await setup({ consolidated: false });
+  try {
+    const run = await prisma.rankingRun.findFirstOrThrow({ where: { clientId: t.client.id } });
+    const asks = () => prisma.notification.count({ where: { clientId: t.client.id, type: "REPORT_TYPE_UNCONFIRMED" } });
+    await notifyRunCompletion(run);
+    assert.equal(await asks(), 1);
+    const ask = await prisma.notification.findFirstOrThrow({ where: { clientId: t.client.id, type: "REPORT_TYPE_UNCONFIRMED" } });
+    assert.match(ask.message, /Confirm the report type for Consolidated/);
+    await t.api.patch(`/api/clients/${t.client.id}/consolidated`).send({ reportType: "normal" });
+    await notifyRunCompletion(run);
+    assert.equal(await asks(), 1);
+    assert.equal(await prisma.notification.count({ where: { clientId: t.client.id, type: "RUN_COMPLETED" } }), 2);
   } finally {
     await t.cleanup();
   }

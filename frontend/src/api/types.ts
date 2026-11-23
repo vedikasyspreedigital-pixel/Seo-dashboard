@@ -26,11 +26,22 @@ export interface ClientRecord {
   latestBaseline?: { baselineDate: string; uploadedAt: string } | null;
   /** Gets the consolidated Excel (every past date as a column) instead of the 2-date PDF. */
   consolidatedReport?: boolean;
+  /** 2026-11-23: someone confirmed which report this client gets (always true for consolidated clients). */
+  reportTypeConfirmed?: boolean;
+}
+
+/** Which report a client gets: the 2-date PDF, the consolidated Excel, or nobody has said yet. */
+export type ReportType = 'normal' | 'consolidated' | 'unconfirmed';
+
+export function clientReportType(client: Pick<ClientRecord, 'consolidatedReport' | 'reportTypeConfirmed'>): ReportType {
+  if (client.consolidatedReport) return 'consolidated';
+  return client.reportTypeConfirmed ? 'normal' : 'unconfirmed';
 }
 
 /** The client's consolidated-report switch and saved history (its last consolidated Excel). */
 export interface ConsolidatedSettings {
   enabled: boolean;
+  reportType: ReportType;
   history: {
     filename: string;
     newestDate: string;
@@ -332,7 +343,7 @@ export interface RankingReportListItem extends RankingReport {
   run: Pick<RankingRun, 'id' | 'sourceFilename' | 'createdAt'>;
 }
 
-export type NotificationType = 'RUN_COMPLETED' | 'RUN_COMPLETED_WITH_ERRORS' | 'REPORT_SENT' | 'REPORT_SEND_FAILED';
+export type NotificationType = 'RUN_COMPLETED' | 'RUN_COMPLETED_WITH_ERRORS' | 'REPORT_SENT' | 'REPORT_SEND_FAILED' | 'REPORT_TYPE_UNCONFIRMED';
 
 export interface NotificationRecord {
   id: string;
