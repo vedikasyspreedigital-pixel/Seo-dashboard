@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 // Dashboard colour theme, picked in Settings (the header button flips between
 // black and white). Dark is the default; the choice is remembered per
@@ -6,22 +6,29 @@ import { useCallback, useState } from 'react';
 // this hook only reads/changes it. Purely visual -- the client report PDF and
 // emails are not affected.
 
-export type Theme = 'dark' | 'light' | 'violet';
+export type Theme = 'dark' | 'light' | 'violet' | 'christmas';
 const STORAGE_KEY = 'serp-console-theme';
 
 export const THEMES: { value: Theme; name: string; description: string; swatches: string[] }[] = [
   { value: 'dark', name: 'Black + Orange', description: 'Flat black, white buttons, orange details', swatches: ['#0c0c0c', '#1a1a1a', '#f5f5f5', '#dc5532', '#f08a6c'] },
   { value: 'light', name: 'White + Orange', description: 'Flat white, black buttons, orange details', swatches: ['#ffffff', '#f4f4f4', '#141414', '#dc5532', '#d9532f'] },
   { value: 'violet', name: 'Violet', description: 'The original look: violet gradients, glow and grid', swatches: ['#050507', '#121117', '#9b5cff', '#7c3aed', '#c4a6ff'] },
+  { value: 'christmas', name: 'Christmas', description: 'Pine night, red and gold, snow and twinkling lights', swatches: ['#06100c', '#0f1f19', '#f6f3ea', '#e23b4e', '#f4c95d'] },
 ];
 
 function currentTheme(): Theme {
   const t = document.documentElement.dataset.theme;
-  return t === 'light' || t === 'violet' ? t : 'dark';
+  return t === 'light' || t === 'violet' || t === 'christmas' ? t : 'dark';
 }
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(currentTheme);
+  // Follow changes made anywhere else (the header's black/white button while Settings is open, 2026-11-23).
+  useEffect(() => {
+    const observer = new MutationObserver(() => setThemeState(currentTheme()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
   const setTheme = useCallback((next: Theme) => {
     document.documentElement.dataset.theme = next;
     try {

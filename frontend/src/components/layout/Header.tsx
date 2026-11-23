@@ -3,7 +3,9 @@ import { useSession } from '../../context/SessionContext';
 import { Select } from '../ui/Select';
 import { NotificationBell } from './NotificationBell';
 import { IconButton } from '../ui/IconButton';
-import { MoonIcon, SunIcon, UserIcon } from '../ui/icons';
+import { MoonIcon, SearchIcon, SunIcon, UserIcon } from '../ui/icons';
+import { OPEN_COMMAND_PALETTE } from './CommandPalette';
+import { ChristmasCountdown, FestiveLights } from './Festive';
 import { useTheme } from '../../hooks/useTheme';
 
 /** Global top bar, present on every page inside AppShell -- houses the
@@ -21,7 +23,8 @@ export function Header({ hideClientPicker = false }: { hideClientPicker?: boolea
   const { theme, toggleTheme } = useTheme();
 
   return (
-    <header className="flex items-center justify-between gap-4 border-b border-[var(--color-border)] px-8 py-4">
+    <header className="relative flex items-center justify-between gap-4 border-b border-[var(--color-border)] px-8 py-4">
+      <FestiveLights />
       <div className="flex items-center gap-3">
         {workspaces.length > 1 && (
           <div className="w-40">
@@ -44,9 +47,20 @@ export function Header({ hideClientPicker = false }: { hideClientPicker?: boolea
             />
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event(OPEN_COMMAND_PALETTE))}
+          title="Quick search (Ctrl+K)"
+          className="flex items-center gap-2 rounded-full border border-overlay/[0.06] bg-overlay/[0.02] px-3.5 py-2 text-xs text-[var(--color-ink-faint)] hover:border-overlay/[0.1] hover:text-[var(--color-ink-muted)]"
+        >
+          <SearchIcon className="h-3.5 w-3.5" />
+          Search
+          <kbd className="rounded border border-[var(--color-border-strong)] px-1.5 py-0.5 font-mono text-[10px]">Ctrl K</kbd>
+        </button>
       </div>
 
       <div className="flex items-center gap-3">
+        <ChristmasCountdown />
         <IconButton title={theme === 'light' ? 'Switch to dark theme' : 'Switch to white theme'} onClick={toggleTheme}>
           {theme === 'light' ? <MoonIcon className="h-4.5 w-4.5" /> : <SunIcon className="h-4.5 w-4.5" />}
         </IconButton>

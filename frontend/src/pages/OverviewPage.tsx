@@ -9,6 +9,7 @@ import { Button } from "../components/ui/Button";
 import { useActiveClient } from "../context/ClientContext";
 import { useSession } from "../context/SessionContext";
 import { getOverview } from "../api/client";
+import { useIsChristmas } from "../components/layout/Festive";
 import type { OverviewData } from "../api/types";
 import {
   MinusCircleIcon,
@@ -24,6 +25,7 @@ export function OverviewPage() {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const christmas = useIsChristmas();
 
   // Scoped to the active CLIENT (falls back to workspace-wide only if none
   // is selected) -- every tile on this page must reflect whichever client
@@ -56,7 +58,7 @@ export function OverviewPage() {
 
   return (
     <AppShell wide>
-      <PageTitle title="Overall Overview" subtitle="Welcome back, Admin 👋" className="mb-6" />
+      <PageTitle title="Overall Overview" subtitle={christmas ? "Merry Christmas, Admin 🎄 Wishing the team a great season." : "Welcome back, Admin 👋"} className="mb-6" />
 
       {!overview && loadError ? (
         <div className="py-24 text-center text-sm">

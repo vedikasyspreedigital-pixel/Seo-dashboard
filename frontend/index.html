@@ -6,7 +6,8 @@
       // Apply the saved dashboard theme before first paint (dark by default). See src/hooks/useTheme.ts.
       try {
         var savedTheme = localStorage.getItem('serp-console-theme');
-        if (savedTheme === 'light' || savedTheme === 'violet') document.documentElement.dataset.theme = savedTheme;
+        if (savedTheme === 'light' || savedTheme === 'violet' || savedTheme === 'christmas') document.documentElement.dataset.theme = savedTheme;
+        if (localStorage.getItem('serp-console-festive') === 'on') document.documentElement.dataset.festive = 'on';
       } catch (e) {}
     </script>
     <link rel="icon" type="image/png" href="/favicon.png" />

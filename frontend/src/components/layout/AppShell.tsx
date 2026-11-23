@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { TestModeBanner } from "./TestModeBanner";
+import { CommandPalette } from "./CommandPalette";
+import { FestiveSnow } from "./Festive";
+import { FestiveSleigh } from "./FestiveSleigh";
 
 export function AppShell({
   children,
@@ -25,6 +28,9 @@ export function AppShell({
           </div>
         </main>
       </div>
+      <CommandPalette />
+      <FestiveSnow />
+      <FestiveSleigh />
     </div>
   );
 }

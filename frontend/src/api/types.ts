@@ -154,6 +154,71 @@ export interface RankingRun {
   queuePosition?: number | null;
 }
 
+// -- Client view + portfolio (2026-11-23) --------------------------------------
+
+export interface RankBuckets {
+  total: number;
+  top3: number;
+  top10: number;
+  top100: number;
+}
+
+/** "baseline" = verified ranks from a sent/imported report; "run" = latest check, not verified yet. */
+export type HistoryKind = 'baseline' | 'run';
+
+export interface Movement {
+  improved: number;
+  declined: number;
+  unchanged: number;
+}
+
+export interface ClientInsights {
+  client: {
+    id: string;
+    name: string;
+    domain: string | null;
+    isActive: boolean;
+    archivedAt: string | null;
+    notes: string | null;
+    reportType: ReportType;
+  };
+  trend: (RankBuckets & { kind: HistoryKind; id: string; date: string })[];
+  latest: (RankBuckets & { kind: HistoryKind; id: string; date: string }) | null;
+  previous: (RankBuckets & { kind: HistoryKind; id: string; date: string }) | null;
+  movement: Movement | null;
+  points: { kind: HistoryKind; id: string; date: string }[];
+  keywords: { keyword: string; ranks: (number | null)[]; inPoint: boolean[]; latest: number | null; previous: number | null; hadPrevious: boolean }[];
+  reports: { id: string; status: string; reportDate: string | null; createdAt: string; runId: string; attachment: string; sentAt: string | null; sentManually: boolean; sentBy: string | null }[];
+  baselines: { id: string; baselineDate: string; uploadedAt: string; sourceFilename: string; sourceType: string; fromRun: boolean; keywords: number }[];
+  openRun: { id: string; status: RunStatus; createdAt: string; totalRows: number } | null;
+  nextSlot: { id: string; startsAt: string; durationMinutes: number } | null;
+  lastSent: { sentAt: string; reportId: string; manual: boolean } | null;
+}
+
+export interface PortfolioClient {
+  clientId: string;
+  name: string;
+  domain: string | null;
+  reportType: ReportType;
+  lastRunAt: string | null;
+  lastRunId: string | null;
+  latestKind: HistoryKind | null;
+  latestDate: string | null;
+  latest: RankBuckets | null;
+  previous: RankBuckets | null;
+  movement: Movement | null;
+  runningNow: 'QUEUED' | 'PROCESSING' | null;
+  lastSentAt: string | null;
+  daysSinceSent: number | null;
+  reportDue: boolean;
+  nextSlotAt: string | null;
+}
+
+export interface Portfolio {
+  clients: PortfolioClient[];
+  reportDueDays: number;
+}
+
 /** A team's booked run slot (2026-11-23). The other team's slots come without clients/notes. */
 export interface RunSlot {
   id: string;

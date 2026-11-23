@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { celebrateReportSent } from '../layout/FestiveSleigh';
 import { useDropzone } from 'react-dropzone';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -146,6 +147,7 @@ function EmailForm({ job, onSent, onCancel }: { job: BaselineJob; onSent: (job: 
     setError(null);
     try {
       onSent(await sendBaselineJobEmail(job.id, { to, cc, clickupTask: task, subject, body }));
+      celebrateReportSent('Baseline Report sent');
     } catch (err) {
       setError((err as Error).message);
     } finally {

@@ -24,6 +24,12 @@
   --color-surface: #0c0c0c;
   --color-surface-2: #242424;
   --color-surface-3: #2a2a2a;
+
+  /* Chart series (2026-11-23, validated with the dataviz palette checker against the dark and light cards):
+     top 3 / top 10 / top 100 on the client trend chart. */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
   --color-border: rgba(255, 255, 255, 0.06);
   --color-border-strong: rgba(255, 255, 255, 0.1);
 
@@ -45,6 +51,10 @@
   --color-ink: #141414;
   --color-ink-muted: #5f5f5f;
   --color-ink-faint: #9b9b9b;
+
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
 
   --color-surface: #ffffff;
   --color-surface-2: #ffffff;
@@ -85,4 +95,46 @@
 
 :root:not([data-theme="light"]) {
   color-scheme: dark;
+}
+
+/* Christmas decorations (any theme): gold reads on dark, a deeper gold on white. */
+:root {
+  --festive-gold: #f4c95d;
+  --festive-red: #e23b4e;
+  --festive-green: #2fa864;
+  --festive-snow: rgba(255, 255, 255, 1);
+}
+:root[data-theme="light"] {
+  --festive-gold: #a86f0c;
+  --festive-snow: rgba(120, 150, 190, 1);
+}
+
+/* ---- Christmas theme (Settings, 2026-11-23) ----
+   Midnight-pine night, Christmas-red accent, warm gold details. Dark, so the
+   dark colour-scheme rule above applies. */
+:root[data-theme="christmas"] {
+  --color-brand-50: #fff1f1;
+  --color-brand-100: #ffdede;
+  --color-brand-200: #ffb4b4;
+  --color-brand-300: #ff8a8a;
+  --color-brand-400: #e23b4e;
+  --color-brand-500: #c92a3e;
+  --color-brand-600: #a51f31;
+  --color-brand-700: #851827;
+  --color-brand-800: #62121d;
+  --color-brand-900: #420c14;
+
+  --color-ink: #f6f3ea;
+  --color-ink-muted: #b9c2b8;
+  --color-ink-faint: #7f8f84;
+
+  --color-surface: #06100c;
+  --color-surface-2: #0f1f19;
+  --color-surface-3: #16291f;
+  --color-border: rgba(244, 201, 93, 0.09);
+  --color-border-strong: rgba(244, 201, 93, 0.18);
+
+  --festive-gold: #f4c95d;
+  --festive-red: #e23b4e;
+  --festive-green: #2fa864;
 }

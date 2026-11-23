@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import type { ComponentType, SVGProps } from 'react';
-import { BarChartIcon, ClockIcon, CompareIcon, DocumentIcon, GlobeIcon, GridIcon, LayoutIcon, SettingsIcon, UserIcon } from '../ui/icons';
+import { SantaHat } from './Festive';
+import { BarChartIcon, ClockIcon, TargetIcon, CompareIcon, DocumentIcon, GlobeIcon, GridIcon, LayoutIcon, SettingsIcon, UserIcon } from '../ui/icons';
 
 function SidebarIcon({
   to,
@@ -49,12 +50,14 @@ function SidebarIcon({
 export function Sidebar() {
   return (
     <aside className="flex h-screen w-[84px] shrink-0 flex-col items-center gap-1.5 border-r border-[var(--color-border)] py-6">
-      <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-full accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]">
+      <div className="relative mb-5 flex h-11 w-11 items-center justify-center rounded-full accent-fill bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3),0_0_35px_rgba(139,92,246,0.12)]">
         <BarChartIcon className="h-5 w-5" />
+        <SantaHat />
       </div>
 
       <nav className="flex flex-col items-center gap-2">
         <SidebarIcon to="/overview" icon={LayoutIcon} label="Overview" />
+        <SidebarIcon to="/portfolio" icon={TargetIcon} label="Portfolio" />
         <SidebarIcon to="/runs" icon={GridIcon} label="Runs" />
         <SidebarIcon to="/run-slots" icon={ClockIcon} label="Run slots" />
         <SidebarIcon to="/reports" icon={DocumentIcon} label="Reports" />

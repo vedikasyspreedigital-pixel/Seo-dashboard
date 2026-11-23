@@ -8,6 +8,8 @@ import { RunDetailPage } from './pages/RunDetailPage';
 import { ReportsListPage } from './pages/ReportsListPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { RunSlotsPage } from './pages/RunSlotsPage';
+import { PortfolioPage } from './pages/PortfolioPage';
+import { ClientViewPage } from './pages/ClientViewPage';
 import { CompareReportsPage } from './pages/CompareReportsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { DomainIntelligencePage } from './pages/DomainIntelligencePage';
@@ -39,6 +41,8 @@ export default function App() {
         <Route path="/run-slots" element={<RunSlotsPage />} />
         <Route path="/reports" element={<ReportsListPage />} />
         <Route path="/clients" element={<ClientsPage />} />
+        <Route path="/clients/:clientId" element={<ClientViewPage />} />
+        <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/compare" element={<CompareReportsPage />} />
         <Route path="/domain-intelligence" element={<DomainIntelligencePage />} />
         <Route path="/settings" element={<SettingsPage />} />

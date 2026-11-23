@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { celebrateReportSent } from '../../components/layout/FestiveSleigh';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AppShell } from '../../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../../components/layout/PageHeader';
@@ -103,6 +104,7 @@ export function SendConfirmationPage() {
       // so e.g. sentAt below reflects what was actually persisted.
       await getReport(reportId).then(setReport);
       setSent(true);
+      celebrateReportSent();
     } catch (err) {
       setError((err as Error).message);
       setSending(false);

@@ -1,4 +1,6 @@
 import type {
+  ClientInsights,
+  Portfolio,
   ReportType,
   RunQueue,
   RunSlot,
@@ -207,6 +209,16 @@ export async function makeRunUrgent(runId: string, reason: string): Promise<Rank
 
 export async function getRunQueue(): Promise<RunQueue> {
   return handle<RunQueue>(await apiFetch('/runs/queue'));
+}
+
+// -- Client view + portfolio (2026-11-23) ------------------------------------
+
+export async function getClientInsights(clientId: string): Promise<ClientInsights> {
+  return handle<ClientInsights>(await apiFetch(`/insights/clients/${clientId}`));
+}
+
+export async function getPortfolio(workspaceId: string): Promise<Portfolio> {
+  return handle<Portfolio>(await apiFetch(`/insights/portfolio?workspaceId=${encodeURIComponent(workspaceId)}`));
 }
 
 // -- Run slots (2026-11-23) --------------------------------------------------

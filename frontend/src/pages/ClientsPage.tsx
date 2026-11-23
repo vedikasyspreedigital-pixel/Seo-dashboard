@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader, PageTitle } from '../components/layout/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -18,7 +18,7 @@ import { ReportSettingsModal } from '../components/clients/ReportSettingsModal';
 import { parseRecipientsInput } from '../components/report/reportStatus';
 import { useSession } from '../context/SessionContext';
 import { useActiveClient } from '../context/ClientContext';
-import { activateClient, archiveClient, createClient, deactivateClient, getClientsForManagement, restoreClient, updateClient } from '../api/client';
+import { activateClient, archiveClient, createClient, deactivateClient, getClientsForManagement, restoreClient, setClientReportType, updateClient } from '../api/client';
 import { clientReportType, type ClientRecord, type ReportType } from '../api/types';
 
 const FILTERS = ['All', 'Active', 'Inactive', 'Report not confirmed', 'Archived'] as const;
@@ -85,6 +85,9 @@ export function ClientsPage() {
   const [rowActionError, setRowActionError] = useState<string | null>(null);
   const [baselineTarget, setBaselineTarget] = useState<ClientRecord | null>(null);
   const [settingsTarget, setSettingsTarget] = useState<ClientRecord | null>(null);
+  // Bulk report type (2026-11-23): tick clients, set them all at once.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   // "Confirm the report type" notifications link here with ?reportSettings=<clientId>.
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -194,6 +197,25 @@ export function ClientsPage() {
     }
   }
 
+  async function handleBulkReportType(type: ReportType) {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    setRowActionError(null);
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        await setClientReportType(id, type);
+      } catch {
+        failed.push(clients.find((c) => c.id === id)?.name ?? id);
+      }
+    }
+    setBulkBusy(false);
+    setSelected(new Set());
+    if (failed.length) setRowActionError(`Couldn't change: ${failed.join(', ')} (inactive or archived clients can't be changed).`);
+    load();
+  }
+
   async function handleToggleActive(client: ClientRecord) {
     setRowActionError(null);
     try {
@@ -233,7 +255,7 @@ export function ClientsPage() {
   }
 
   return (
-    <AppShell>
+    <AppShell wide>
       <PageHeader
         breadcrumbs={[{ label: 'Client Management' }]}
         action={
@@ -267,6 +289,21 @@ export function ClientsPage() {
         </AlertPanel>
       )}
 
+      {selected.size > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-brand-400/30 bg-brand-400/[0.06] px-4 py-3 text-sm">
+          <span className="font-semibold text-[var(--color-ink)]">{selected.size} selected</span>
+          <span className="text-[var(--color-ink-muted)]">Set report type:</span>
+          {(['normal', 'consolidated', 'unconfirmed'] as ReportType[]).map((t) => (
+            <Button key={t} variant="secondary" className="!py-1.5 text-xs" disabled={bulkBusy} onClick={() => void handleBulkReportType(t)}>
+              {t === 'normal' ? 'Normal PDF' : t === 'consolidated' ? 'Consolidated' : 'Not confirmed'}
+            </Button>
+          ))}
+          <button type="button" className="ml-auto text-xs text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
+
       <InlineError message={rowActionError} className="mt-4" />
 
       <Card className="mt-4 overflow-hidden p-0">
@@ -275,9 +312,19 @@ export function ClientsPage() {
         ) : filtered.length === 0 ? (
           <EmptyState label={clients.length === 0 ? 'No clients yet for this workspace.' : 'No clients match your search/filter.'} />
         ) : (
-          <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--color-border)] eyebrow-label">
+                <th className="cell-compact w-10">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all shown clients"
+                    className="h-4 w-4 accent-[var(--color-brand,#8b5cf6)]"
+                    checked={filtered.length > 0 && filtered.filter((c) => !c.archivedAt).every((c) => selected.has(c.id))}
+                    onChange={(e) => setSelected(e.target.checked ? new Set(filtered.filter((c) => !c.archivedAt).map((c) => c.id)) : new Set())}
+                  />
+                </th>
                 <th className="cell-compact">Client</th>
                 <th className="cell-compact">Report</th>
                 <th className="cell-compact">Status</th>
@@ -291,7 +338,27 @@ export function ClientsPage() {
               {filtered.map((client) => (
                 <tr key={client.id} className="border-b border-[var(--color-border)] last:border-0 even:bg-[var(--color-surface-2)]/40">
                   <td className="cell-cozy">
-                    <span className="block font-medium text-[var(--color-ink)]">{client.name}</span>
+                    {!client.archivedAt && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${client.name}`}
+                        className="h-4 w-4 accent-[var(--color-brand,#8b5cf6)]"
+                        checked={selected.has(client.id)}
+                        onChange={() =>
+                          setSelected((s) => {
+                            const next = new Set(s);
+                            if (next.has(client.id)) next.delete(client.id);
+                            else next.add(client.id);
+                            return next;
+                          })
+                        }
+                      />
+                    )}
+                  </td>
+                  <td className="cell-cozy">
+                    <Link to={`/clients/${client.id}`} className="block font-medium text-[var(--color-ink)] hover:text-brand-200">
+                      {client.name}
+                    </Link>
                     {client.domain && <span className="mt-0.5 block text-xs text-[var(--color-ink-faint)]">{client.domain}</span>}
                   </td>
                   <td className="cell-cozy">
@@ -306,7 +373,7 @@ export function ClientsPage() {
                   <td className="cell-cozy">{clientStatusBadge(client)}</td>
                   <td className="cell-cozy">{baselineStatusBadge(client)}</td>
                   <td className="cell-cozy font-mono text-xs text-[var(--color-ink-muted)]">{client.clickupTaskId ?? '—'}</td>
-                  <td className="cell-cozy max-w-xs truncate text-[var(--color-ink-muted)]" title={client.notes ?? undefined}>
+                  <td className="cell-cozy max-w-[11rem] truncate text-[var(--color-ink-muted)]" title={client.notes ?? undefined}>
                     {client.notes ?? '—'}
                   </td>
                   <td className="cell-cozy">
@@ -355,6 +422,7 @@ export function ClientsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 

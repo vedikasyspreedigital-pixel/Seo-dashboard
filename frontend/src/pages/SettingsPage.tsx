@@ -6,6 +6,8 @@ import { Button } from '../components/ui/Button';
 import { Spinner } from '../components/ui/Spinner';
 import { LayoutIcon, RefreshIcon, UploadDropIcon, UserIcon } from '../components/ui/icons';
 import { THEMES, useTheme } from '../hooks/useTheme';
+import { celebrateReportSent } from '../components/layout/FestiveSleigh';
+import { setFestive, useIsChristmas } from '../components/layout/Festive';
 import { useSession } from '../context/SessionContext';
 import { getStorageUsage, type StorageUsage } from '../api/client';
 
@@ -101,9 +103,10 @@ function SectionCard({ title, description, children }: { title: string; descript
 
 function AppearanceSection() {
   const { theme, setTheme } = useTheme();
+  const festive = useIsChristmas();
   return (
     <SectionCard title="Theme" description="Applies to this browser only. Client report PDFs and emails keep their own look.">
-      <div className="grid gap-4 sm:grid-cols-3" role="radiogroup" aria-label="Colour theme">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" role="radiogroup" aria-label="Colour theme">
         {THEMES.map((t) => {
           const selected = theme === t.value;
           const [page, card, ink, accent] = t.swatches;
@@ -144,6 +147,33 @@ function AppearanceSection() {
           );
         })}
       </div>
+      <label className={`mt-5 flex items-center gap-3 rounded-xl border border-[var(--color-border-strong)] px-4 py-3 text-sm ${theme === 'christmas' ? 'opacity-60' : 'cursor-pointer'}`}>
+        <input
+          type="checkbox"
+          className="h-4 w-4 accent-[var(--color-brand,#e23b4e)]"
+          checked={festive}
+          disabled={theme === 'christmas'}
+          onChange={(e) => setFestive(e.target.checked)}
+        />
+        <span>
+          <span className="block font-semibold text-[var(--color-ink)]">🎄 Christmas decorations</span>
+          <span className="block text-xs text-[var(--color-ink-muted)]">
+            {theme === 'christmas' ? 'Always on with the Christmas theme.' : 'Snow, twinkling lights, a Santa hat, the countdown and Santa flying when a report is sent, on top of this theme.'}
+          </span>
+        </span>
+      </label>
+      {festive && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-[var(--color-ink-muted)]">
+          <button
+            type="button"
+            onClick={() => celebrateReportSent('Test sleigh ride')}
+            className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-ink-faint)]"
+          >
+            Send Santa ✨
+          </button>
+          Santa flies across the screen every time a report is sent. This shows you what it looks like.
+        </div>
+      )}
     </SectionCard>
   );
 }

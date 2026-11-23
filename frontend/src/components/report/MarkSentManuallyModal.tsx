@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { celebrateReportSent } from '../layout/FestiveSleigh';
 import { useDropzone } from 'react-dropzone';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -95,6 +96,7 @@ export function MarkSentManuallyModal({ open, reportId, defaultSentDate, onClose
       await markReportSentManually(reportId, preview, new Date(`${sentDate}T12:00:00`).toISOString());
       reset();
       onMarked();
+      celebrateReportSent('Report marked as sent');
     } catch (err) {
       setError((err as Error).message);
     } finally {
