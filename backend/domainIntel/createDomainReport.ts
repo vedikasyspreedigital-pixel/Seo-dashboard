@@ -3,9 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { prisma } from "../db/client.js";
 import { formatOrdinalDate } from "../reporting/formatOrdinalDate.js";
-import { KeywordExportError, SOURCE_LABELS, keywordKey, readKeywordExport, type KeywordExport, type KeywordSource } from "./readKeywordExport.js";
-import { classifyIntents, INTENTS, type ClassifyWithAiFn, type Intent } from "./classifyIntent.js";
-import { buildDomainReportExcel, competitorSheetRows, type CompetitorSheet, type ReportBlock, type SiteKeywords } from "./buildDomainReportExcel.js";
+import { KeywordExportError, keywordKey, readKeywordExport, type KeywordExport, type KeywordSource } from "./readKeywordExport.js";
+import { brandTerms, classifyIntents, INTENTS, matchesBrand, type ClassifyWithAiFn, type Intent } from "./classifyIntent.js";
+import { BLOCK_LABELS, buildDomainReportExcel, competitorSheetRows, type CompetitorSheet, type ReportBlock, type SiteKeywords } from "./buildDomainReportExcel.js";
+import { PLANNER_CANDIDATES, PLANNER_MAX_ROWS, SERVICE_INTENTS, type PlannerIdeasFn } from "./plannerIdeas.js";
+import type { PlannerIdea } from "../reporting/keywordPlanner.js";
 import { bareDomain } from "./fetchers/flikoverAhrefs.js";
 import { buildGapWorkbook, findGaps, siteOverview, type GapAdvice, type GapAdvisor } from "./gapReport.js";
 import type { PostCommentFn } from "./clickupCommentPoster.js";
@@ -46,7 +48,12 @@ export interface ReportFile {
   path: string;
 }
 
-export async function createDomainReport(input: CreateDomainReportInput, classifyWithAi?: ClassifyWithAiFn | null, gapAdvisor?: GapAdvisor | null) {
+export async function createDomainReport(
+  input: CreateDomainReportInput,
+  classifyWithAi?: ClassifyWithAiFn | null,
+  gapAdvisor?: GapAdvisor | null,
+  plannerIdeas?: PlannerIdeasFn | null,
+) {
   const exports: KeywordExport[] = [];
   const problems: string[] = [];
   for (const source of SOURCES) {
@@ -80,6 +87,24 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
   const competitorKeywords = sheetBase ? competitorSheetRows(sheetBase).map((r) => r.keyword) : [];
   const competitorRows = new Map(competitors.flatMap((c) => c.rows).map((r) => [keywordKey(r.keyword), r]));
 
+  // The 4th section, Google Keyword Planner (2026-11-27): Google's keyword ideas for the whole site, biggest
+  // first, the client's own brand searches left out. Optional -- without the Google Ads variables, or when Google
+  // says no, the report is built without it and the summary says why.
+  let plannerCandidates: PlannerIdea[] = [];
+  let plannerError: string | null = null;
+  if (plannerIdeas) {
+    try {
+      const brands = brandTerms(input.client.name, input.websiteUrl);
+      plannerCandidates = (await plannerIdeas({ websiteUrl: input.websiteUrl, location: input.location }))
+        .filter((i) => !matchesBrand(i.keyword, brands))
+        .sort((a, b) => (b.avgMonthlySearches ?? 0) - (a.avgMonthlySearches ?? 0))
+        .slice(0, PLANNER_CANDIDATES);
+    } catch (err) {
+      console.error(`[domainIntel] Keyword Planner ideas failed:`, (err as Error).message);
+      plannerError = (err as Error).message;
+    }
+  }
+
   // ONE intent per keyword, the same in every tool's block. The tools' own
   // labels (Semrush's "Keyword Intents", Ahrefs' intent columns -- often
   // several at once) are only hints for it (classifyIntent.ts).
@@ -92,12 +117,33 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
     const r = competitorRows.get(keywordKey(k));
     if (r && !toolLabels.has(keywordKey(k))) addLabel(r);
   }
-  const allKeywords = [...exports.flatMap((e) => e.rows.map((r) => r.keyword)), ...competitorKeywords];
+  const allKeywords = [...exports.flatMap((e) => e.rows.map((r) => r.keyword)), ...competitorKeywords, ...plannerCandidates.map((i) => i.keyword)];
   const intent = await classifyIntents(allKeywords, { clientName: input.client.name, websiteUrl: input.websiteUrl }, classifyWithAi, toolLabels);
   const blocks: ReportBlock[] = exports.map((e) => ({
     source: e.source,
     rows: e.rows.map((r) => ({ ...r, intent: intent.intents.get(keywordKey(r.keyword)) ?? "Informational" })),
   }));
+  if (plannerIdeas && !plannerError) {
+    // Only service keywords (someone looking to hire/buy); "Current position" = the site's best position for it in the tools.
+    const rankedAt = new Map<string, number>();
+    for (const e of exports)
+      for (const r of e.rows) {
+        if (r.position === null) continue;
+        const k = keywordKey(r.keyword);
+        if (!rankedAt.has(k) || r.position < rankedAt.get(k)!) rankedAt.set(k, r.position);
+      }
+    const rows = plannerCandidates
+      .map((i) => ({
+        keyword: i.keyword,
+        volume: i.avgMonthlySearches,
+        position: rankedAt.get(keywordKey(i.keyword)) ?? null,
+        competition: i.competition,
+        intent: intent.intents.get(keywordKey(i.keyword)) ?? "Informational",
+      }))
+      .filter((r) => SERVICE_INTENTS.includes(r.intent))
+      .slice(0, PLANNER_MAX_ROWS);
+    blocks.push({ source: "planner", rows });
+  }
 
   const intentCounts = Object.fromEntries(INTENTS.map((i) => [i, 0])) as Record<Intent, number>;
   for (const block of blocks) for (const row of block.rows) if (row.intent in intentCounts) intentCounts[row.intent as Intent]++;
@@ -137,16 +183,16 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
   const clientLabel = safeFileName(input.client.name) || "Client";
   const files: ReportFile[] = [];
   const sheet: CompetitorSheet | null = sheetBase ? { ...sheetBase, intentOf: (k) => intent.intents.get(keywordKey(k)) ?? "Informational" } : null;
-  const save = async (name: string, reportBlocks: ReportBlock[], withCompetitors: boolean) => {
+  const save = async (name: string, reportBlocks: ReportBlock[]) => {
     const filePath = path.join(dir, name);
-    await writeFile(filePath, await buildDomainReportExcel(reportBlocks, withCompetitors ? sheet : null));
+    await writeFile(filePath, await buildDomainReportExcel(reportBlocks));
     files.push({ name, path: filePath });
   };
-  // The competitor sheet goes in the combined report -- or, with individual files only, in the Semrush one.
-  if (input.reportMode !== "individual") await save(`${clientLabel} - Domain Keyword Report - ${date}.xlsx`, blocks, true);
+  // No "Competitors" tab in the keyword report any more (the team's call, 2026-11-27) -- the competitor data
+  // goes into the Gap & Competitor Analysis report below.
+  if (input.reportMode !== "individual") await save(`${clientLabel} - Domain Keyword Report - ${date}.xlsx`, blocks);
   if (input.reportMode !== "combined") {
-    for (const block of blocks)
-      await save(`${clientLabel} - ${SOURCE_LABELS[block.source]} Keywords - ${date}.xlsx`, [block], input.reportMode === "individual" && block.source === "semrush");
+    for (const block of blocks) await save(`${clientLabel} - ${BLOCK_LABELS[block.source]} Keywords - ${date}.xlsx`, [block]);
   }
 
   // Report 4, Gap & Competitor Analysis -- from the same competitor data. Gemini's part is optional:
@@ -185,6 +231,8 @@ export async function createDomainReport(input: CreateDomainReportInput, classif
       summary: {
         sources: Object.fromEntries(exports.map((e) => [e.source, { keywords: e.rows.length, duplicatesRemoved: e.duplicatesRemoved }])),
         competitors: competitors.map((c) => ({ domain: c.domain, keywords: c.rows.length })),
+        // Google Keyword Planner's section: null = not set up on this server.
+        planner: plannerIdeas ? (plannerError ? { error: plannerError } : { keywords: blocks.find((b) => b.source === "planner")?.rows.length ?? 0, ideas: plannerCandidates.length }) : null,
         gaps: gapSummary,
         intents: intentCounts,
         // Unique keywords decided by each step (a keyword in several tools counts once).

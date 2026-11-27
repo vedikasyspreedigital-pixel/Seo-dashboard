@@ -26,6 +26,8 @@ import { removeOldFetchFiles } from './domainIntel/fetchJob.js';
 import { pruneOldRawResponses, pruneRawResponsesWhenFull } from './dataforseo/pruneRawResponses.js';
 import { promoteMissingBaselines } from './reporting/processVerifiedExcelUpload.js';
 import { createGeminiGapAdvisor } from './domainIntel/gapReport.js';
+import { createGooglePlannerIdeas } from './domainIntel/plannerIdeas.js';
+import { googleAdsConfigured } from './reporting/keywordPlanner.js';
 import { agentStatus, createAgentFetcher } from './domainIntel/agentQueue.js';
 import { access } from 'node:fs/promises';
 
@@ -262,6 +264,8 @@ async function start() {
     auditFetchers: fetchMode === 'agent' ? { siteaudit: createAgentFetcher('siteaudit'), woorank: createAgentFetcher('woorank') } : {},
     competitorFetcher: fetchMode === 'agent' ? createAgentFetcher('competitors') : undefined,
     gapAdvisor: process.env.GEMINI_API_KEY ? createGeminiGapAdvisor(process.env.GEMINI_API_KEY) : null,
+    // The keyword report's 4th section, Google Keyword Planner (2026-11-27) -- only with the Google Ads variables set.
+    plannerIdeas: googleAdsConfigured() ? createGooglePlannerIdeas() : null,
     aiAuditWriter: process.env.GEMINI_API_KEY ? createGeminiAuditWriter(process.env.GEMINI_API_KEY) : null,
   });
   app.listen(PORT, () => {

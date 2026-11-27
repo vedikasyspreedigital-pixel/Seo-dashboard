@@ -12,6 +12,7 @@ import { AUDIT_LABELS, AuditJobError, cancelAudit, getAudit, latestAudits, start
 import { attachFilesToReport, createAuditsOnlyReport, createDomainReport, domainReportDir, keepReportFiles, postDomainReport, type ReportMode } from "./createDomainReport.js";
 import type { ClassifyWithAiFn } from "./classifyIntent.js";
 import type { GapAdvisor } from "./gapReport.js";
+import type { PlannerIdeasFn } from "./plannerIdeas.js";
 import type { AiAuditWriter } from "./aiSeoAudit.js";
 import type { PostCommentFn } from "./clickupCommentPoster.js";
 
@@ -94,6 +95,7 @@ export interface BundleDeps {
   aiAuditWriter?: AiAuditWriter | null;
   classifyWithAi?: ClassifyWithAiFn | null;
   gapAdvisor?: GapAdvisor | null;
+  plannerIdeas?: PlannerIdeasFn | null;
   postComment: PostCommentFn;
   /** How often waiting steps check on their jobs (tests use a few ms). */
   pollMs?: number;
@@ -356,6 +358,7 @@ async function buildKeywordReport(job: BundleJob, input: BundleInput, deps: Bund
       },
       deps.classifyWithAi,
       wantGap ? deps.gapAdvisor : null, // no Gemini call for a report nobody asked for
+      wantKeywords ? deps.plannerIdeas : null, // Keyword Planner is part of the keyword report only
     );
     const names = (report.files as unknown as { name: string }[]).map((f) => f.name);
     const gap = names.find((n) => n.includes(GAP_FILE));

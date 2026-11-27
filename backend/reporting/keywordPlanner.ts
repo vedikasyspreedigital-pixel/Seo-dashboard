@@ -175,6 +175,95 @@ export async function fetchGoogleAdsMetrics(
   country: string,
   { fetchImpl = fetch, env = process.env }: { fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv } = {},
 ): Promise<PlannerMetric[]> {
+  const { geo, base, headers } = await googleAdsSession(country, fetchImpl, env);
+  const out: PlannerMetric[] = [];
+  const unique = [...new Set(keywords.map((k) => k.trim()).filter(Boolean))];
+  for (let i = 0; i < unique.length; i += 1000) {
+    const res = await fetchImpl(`${base}:generateKeywordHistoricalMetrics`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        keywords: unique.slice(i, i + 1000),
+        geoTargetConstants: [`geoTargetConstants/${geo.id}`],
+        language: "languageConstants/1000", // English
+        keywordPlanNetwork: "GOOGLE_SEARCH",
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      results?: { text?: string; closeVariants?: string[]; keywordMetrics?: { avgMonthlySearches?: string | number; competition?: string } }[];
+      error?: { message?: string; status?: string };
+    };
+    if (!res.ok) throw new GoogleAdsError(`The Google Ads API refused the request (${body.error?.status ?? res.status}): ${body.error?.message ?? "no details"}`);
+    for (const r of body.results ?? []) {
+      const m = r.keywordMetrics;
+      const metric = {
+        avgMonthlySearches: m?.avgMonthlySearches !== undefined && m?.avgMonthlySearches !== null ? String(m.avgMonthlySearches) : null,
+        competition: m?.competition ?? null,
+      };
+      if (r.text) out.push({ keyword: r.text, ...metric });
+      for (const v of r.closeVariants ?? []) out.push({ keyword: v, ...metric });
+    }
+  }
+  return out;
+}
+
+/** One keyword idea from Keyword Planner's "Start with a website". */
+export interface PlannerIdea {
+  keyword: string;
+  avgMonthlySearches: number | null;
+  /** LOW / MEDIUM / HIGH (Google's own words), or null when Google has none. */
+  competition: string | null;
+}
+
+/**
+ * Keyword Planner's "Start with a website -> Use the entire site" (2026-11-27, Domain Intelligence's 4th keyword
+ * section): keyword ideas Google draws from the whole site, with their average monthly searches in `country`.
+ * Free with the same Google Ads access as fetchGoogleAdsMetrics.
+ */
+export async function fetchGoogleAdsKeywordIdeas(
+  site: string,
+  country: string,
+  { fetchImpl = fetch, env = process.env, max = 1000 }: { fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv; max?: number } = {},
+): Promise<PlannerIdea[]> {
+  const { geo, base, headers } = await googleAdsSession(country, fetchImpl, env);
+  const res = await fetchImpl(`${base}:generateKeywordIdeas`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      siteSeed: { site },
+      geoTargetConstants: [`geoTargetConstants/${geo.id}`],
+      language: "languageConstants/1000", // English
+      keywordPlanNetwork: "GOOGLE_SEARCH",
+      includeAdultKeywords: false,
+      pageSize: max,
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    results?: { text?: string; keywordIdeaMetrics?: { avgMonthlySearches?: string | number; competition?: string } }[];
+    error?: { message?: string; status?: string };
+  };
+  if (!res.ok) throw new GoogleAdsError(`The Google Ads API refused the request (${body.error?.status ?? res.status}): ${body.error?.message ?? "no details"}`);
+  const seen = new Set<string>();
+  const out: PlannerIdea[] = [];
+  for (const r of body.results ?? []) {
+    const keyword = r.text?.trim();
+    if (!keyword || seen.has(keyword.toLowerCase())) continue;
+    seen.add(keyword.toLowerCase());
+    const volume = Number(r.keywordIdeaMetrics?.avgMonthlySearches);
+    const competition = r.keywordIdeaMetrics?.competition;
+    out.push({
+      keyword,
+      avgMonthlySearches: Number.isFinite(volume) ? volume : null,
+      competition: competition && competition !== "UNSPECIFIED" && competition !== "UNKNOWN" ? competition : null,
+    });
+  }
+  return out;
+}
+
+/** Google sign-in for the Ads API and the request headers, plus the country's location id. */
+async function googleAdsSession(country: string, fetchImpl: typeof fetch, env: NodeJS.ProcessEnv) {
   if (!googleAdsConfigured(env)) throw new GoogleAdsError("The Google Ads API isn't set up on the server yet (GOOGLE_ADS_* variables).");
   const geo = geoTargetOf(country);
   if (!geo) throw new GoogleAdsError(`No Google Ads location is set up for country "${country}".`);
@@ -203,35 +292,5 @@ export async function fetchGoogleAdsMetrics(
   };
   if (env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim()) headers["developer-token"] = env.GOOGLE_ADS_DEVELOPER_TOKEN.trim();
   if (env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.trim()) headers["login-customer-id"] = digitsOnly(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
-
-  const out: PlannerMetric[] = [];
-  const unique = [...new Set(keywords.map((k) => k.trim()).filter(Boolean))];
-  for (let i = 0; i < unique.length; i += 1000) {
-    const res = await fetchImpl(`https://googleads.googleapis.com/${version}/customers/${customerId}:generateKeywordHistoricalMetrics`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        keywords: unique.slice(i, i + 1000),
-        geoTargetConstants: [`geoTargetConstants/${geo.id}`],
-        language: "languageConstants/1000", // English
-        keywordPlanNetwork: "GOOGLE_SEARCH",
-      }),
-      signal: AbortSignal.timeout(60_000),
-    });
-    const body = (await res.json().catch(() => ({}))) as {
-      results?: { text?: string; closeVariants?: string[]; keywordMetrics?: { avgMonthlySearches?: string | number; competition?: string } }[];
-      error?: { message?: string; status?: string };
-    };
-    if (!res.ok) throw new GoogleAdsError(`The Google Ads API refused the request (${body.error?.status ?? res.status}): ${body.error?.message ?? "no details"}`);
-    for (const r of body.results ?? []) {
-      const m = r.keywordMetrics;
-      const metric = {
-        avgMonthlySearches: m?.avgMonthlySearches !== undefined && m?.avgMonthlySearches !== null ? String(m.avgMonthlySearches) : null,
-        competition: m?.competition ?? null,
-      };
-      if (r.text) out.push({ keyword: r.text, ...metric });
-      for (const v of r.closeVariants ?? []) out.push({ keyword: v, ...metric });
-    }
-  }
-  return out;
+  return { geo, headers, base: `https://googleads.googleapis.com/${version}/customers/${customerId}` };
 }

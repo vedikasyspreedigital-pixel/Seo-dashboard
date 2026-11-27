@@ -7,20 +7,24 @@ import { brandTerms, matchesBrand } from "./classifyIntent.js";
 // tool's name) over a blue header row, an empty spacer column between blocks.
 // Each tool keeps its own columns and its own positions -- nothing is merged
 // or averaged across tools. An individual report is the same sheet with one
-// block. With competitors fetched, a second "Competitors" sheet puts the
-// client's Semrush keywords and 3 competitors' side by side (position, landing
-// page, traffic per site; volume, difficulty, intent once per keyword).
+// block. (The "Competitors" sheet was taken out on 2026-11-27, the team's call;
+// competitorSheetRows still feeds the Gap & Competitor Analysis report.)
+
+/** The three tools' exports, plus Google Keyword Planner's ideas for the site (plannerIdeas.ts, 2026-11-27). */
+export type BlockSource = KeywordSource | "planner";
+
+export const BLOCK_LABELS: Record<BlockSource, string> = { ...SOURCE_LABELS, planner: "Google Keyword Planner" };
 
 export interface ReportBlock {
-  source: KeywordSource;
-  /** intent: exactly one label per keyword, the same in every block (classifyIntent.ts). */
-  rows: (KeywordRow & { intent: string })[];
+  source: BlockSource;
+  /** intent: exactly one label per keyword, the same in every block (classifyIntent.ts). competition: Keyword Planner's LOW/MEDIUM/HIGH. */
+  rows: (KeywordRow & { intent: string; competition?: string | null })[];
 }
 
 type Column = { header: string; width: number; value: (r: ReportBlock["rows"][number]) => string | number | null };
 
 // Header wording per tool, as in the sample (Semrush: Position / Search Volume; the others: Volume / Current position).
-const COLUMNS: Record<KeywordSource, Column[]> = {
+const COLUMNS: Record<BlockSource, Column[]> = {
   semrush: [
     { header: "Keyword", width: 38, value: (r) => r.keyword },
     { header: "Position", width: 11, value: (r) => r.position },
@@ -39,9 +43,17 @@ const COLUMNS: Record<KeywordSource, Column[]> = {
     { header: "Current position", width: 16, value: (r) => r.position },
     { header: "Intent", width: 15, value: (r) => r.intent },
   ],
+  // Google's own numbers; "Current position" = where the site ranks for it in the other tools, if anywhere.
+  planner: [
+    { header: "Keyword", width: 38, value: (r) => r.keyword },
+    { header: "Avg. Monthly Searches", width: 14, value: (r) => r.volume },
+    { header: "Competition", width: 13, value: (r) => (r.competition ? r.competition.charAt(0) + r.competition.slice(1).toLowerCase() : null) },
+    { header: "Current position", width: 16, value: (r) => r.position },
+    { header: "Intent", width: 15, value: (r) => r.intent },
+  ],
 };
 
-const SOURCE_ORDER: KeywordSource[] = ["semrush", "ubersuggest", "ahrefs"];
+const SOURCE_ORDER: BlockSource[] = ["semrush", "ubersuggest", "ahrefs", "planner"];
 const YELLOW = "FFFFFF00";
 const BLUE = "FF4472C4";
 const GRID = { style: "thin" as const, color: { argb: "FFD9D9D9" } };
@@ -79,7 +91,7 @@ export interface CompetitorSheet {
 /** Each competitor's best keywords (by traffic) the client doesn't rank for -- added below the client's own. */
 export const GAP_ROWS_PER_COMPETITOR = 200;
 
-export async function buildDomainReportExcel(blocks: ReportBlock[], competitorSheet?: CompetitorSheet | null): Promise<Buffer> {
+export async function buildDomainReportExcel(blocks: ReportBlock[]): Promise<Buffer> {
   const ordered = SOURCE_ORDER.map((s) => blocks.find((b) => b.source === s)).filter((b): b is ReportBlock => !!b);
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Domain Keywords", { views: [{ state: "frozen", ySplit: 2 }] });
@@ -91,7 +103,7 @@ export async function buildDomainReportExcel(blocks: ReportBlock[], competitorSh
 
     sheet.mergeCells(1, startCol, 1, endCol);
     const title = sheet.getCell(1, startCol);
-    title.value = SOURCE_LABELS[block.source];
+    title.value = BLOCK_LABELS[block.source];
     title.font = { bold: true, size: 12 };
     title.alignment = { horizontal: "center", vertical: "middle" };
     for (let c = startCol; c <= endCol; c++) {
@@ -114,7 +126,7 @@ export async function buildDomainReportExcel(blocks: ReportBlock[], competitorSh
         const dataCell = sheet.getCell(3 + r, c);
         dataCell.value = col.value(row);
         dataCell.border = BORDER;
-        if (i > 0 && col.header !== "Intent") dataCell.alignment = { horizontal: "right" };
+        if (i > 0 && col.header !== "Intent" && col.header !== "Competition") dataCell.alignment = { horizontal: "right" };
         if (isPosition) highlightFirstPage(dataCell, row.position);
       });
     });
@@ -125,7 +137,6 @@ export async function buildDomainReportExcel(blocks: ReportBlock[], competitorSh
   sheet.getRow(1).height = 20;
   sheet.getRow(2).height = 18;
 
-  if (competitorSheet && competitorSheet.competitors.length > 0) addCompetitorSheet(workbook, competitorSheet);
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -166,60 +177,4 @@ export function competitorSheetRows(data: CompetitorSheet) {
       }),
     };
   });
-}
-
-const GREEN = "FF70AD47";
-
-function addCompetitorSheet(workbook: ExcelJS.Workbook, data: CompetitorSheet) {
-  const sheet = workbook.addWorksheet("Competitors", { views: [{ state: "frozen", ySplit: 2, xSplit: 1 }] });
-  const sites = [data.client, ...data.competitors];
-  const header = (row: number, col: number, text: string, fill: string, fontColor = "FF000000") => {
-    const cell = sheet.getCell(row, col);
-    cell.value = text;
-    cell.font = { bold: true, color: { argb: fontColor } };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    cell.border = BORDER;
-  };
-
-  // Keyword facts (same for every site), then Position / URL / Traffic per site. No "Status" column
-  // (the user's call, 2026-10-23): the client's own keywords come first, then the gaps -- blank client
-  // columns already show a keyword the client doesn't rank for.
-  const facts = [
-    { header: "Keyword", width: 38 },
-    { header: "Search Volume", width: 13 },
-    { header: "Keyword Difficulty", width: 12 },
-    { header: "Intent", width: 15 },
-  ];
-  sheet.mergeCells(1, 1, 1, facts.length);
-  for (let c = 1; c <= facts.length; c++) header(1, c, "Keyword", YELLOW);
-  facts.forEach((f, i) => {
-    sheet.getColumn(i + 1).width = f.width;
-    header(2, i + 1, f.header, BLUE, "FFFFFFFF");
-  });
-  const siteCols = ["Position", "Landing page URL", "Traffic"];
-  sites.forEach((site, s) => {
-    const start = facts.length + 1 + s * siteCols.length;
-    sheet.mergeCells(1, start, 1, start + siteCols.length - 1);
-    for (let c = start; c < start + siteCols.length; c++) header(1, c, s === 0 ? `${site.domain} (client)` : site.domain, s === 0 ? GREEN : YELLOW);
-    siteCols.forEach((h, i) => {
-      sheet.getColumn(start + i).width = i === 1 ? 42 : 10;
-      header(2, start + i, h, BLUE, "FFFFFFFF");
-    });
-  });
-
-  competitorSheetRows(data).forEach((row, r) => {
-    const values: (string | number | null)[] = [row.keyword, row.volume, row.difficulty, row.intent];
-    for (const site of row.sites) values.push(site?.position ?? null, site?.url ?? null, site?.traffic ?? null);
-    values.forEach((v, c) => {
-      const cell = sheet.getCell(3 + r, 1 + c);
-      cell.value = v;
-      cell.border = BORDER;
-      if (typeof v === "number") cell.alignment = { horizontal: "right" };
-    });
-    // Each site's Position column (client's and competitors').
-    row.sites.forEach((site, s) => highlightFirstPage(sheet.getCell(3 + r, facts.length + 1 + s * siteCols.length), site?.position));
-  });
-  sheet.getRow(1).height = 20;
-  sheet.getRow(2).height = 30;
 }

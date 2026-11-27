@@ -22,6 +22,7 @@ import {
 } from "../../domainIntel/competitorJob.js";
 import type { AiAuditWriter } from "../../domainIntel/aiSeoAudit.js";
 import type { GapAdvisor } from "../../domainIntel/gapReport.js";
+import type { PlannerIdeasFn } from "../../domainIntel/plannerIdeas.js";
 import { AUDIT_KINDS, AuditJobError, auditFile, cancelAudit, getAudit, latestAudits, publicAudit, startAudit, type AuditKind } from "../../domainIntel/auditJob.js";
 import { BUNDLE_REPORTS, BundleJobError, cancelBundle, getBundle, latestBundle, myLatestBundle, postBundle, publicBundle, startBundle, syncBundle } from "../../domainIntel/bundleJob.js";
 import { ProspectClientError, findOrCreateProspectClient } from "../../domainIntel/prospectClient.js";
@@ -45,6 +46,8 @@ export interface DomainIntelRouterDeps {
   bundlePollMs?: number;
   /** Gemini's recommendations for the Gap & Competitor Analysis; omitted/null = gap data only. */
   gapAdvisor?: GapAdvisor | null;
+  /** Google Keyword Planner's ideas for the site (the keyword report's 4th section); null = Google Ads not set up. */
+  plannerIdeas?: PlannerIdeasFn | null;
   /** Semrush's "Main Organic Competitors" through the office Chrome agent (agent mode only). */
   competitorFetcher?: FetchExportFn;
   /** The AI SEO Audit (Gemini reading the finished report PDFs); null when no GEMINI_API_KEY. */
@@ -314,6 +317,7 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
           aiAuditWriter: deps.aiAuditWriter,
           classifyWithAi: deps.classifyWithAi,
           gapAdvisor: deps.gapAdvisor,
+          plannerIdeas: deps.plannerIdeas,
           postComment: deps.postComment,
           pollMs: deps.bundlePollMs,
         },
@@ -482,6 +486,7 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
           },
           deps.classifyWithAi,
           deps.gapAdvisor,
+          deps.plannerIdeas,
         );
         // Posting runs in the background (a real ClickUp post takes ~30-60s); the page polls the report's status.
         if (report.status === "GENERATED") void postDomainReport(report.id, deps.postComment);

@@ -84,7 +84,7 @@ test("competitorSheetRows: a competitor's own brand searches are not gaps (seen 
   );
 });
 
-test("Find competitors -> fetch them -> Combine: the report gets a side-by-side Competitors sheet", async () => {
+test("Find competitors -> fetch them -> Combine: the keyword report has no Competitors tab (2026-11-27), the competitor data is still read", async () => {
   clearFetchJobs();
   clearCompetitorSearches();
   const auth = await createAuthenticatedSession();
@@ -148,22 +148,7 @@ test("Find competitors -> fetch them -> Combine: the report gets a side-by-side 
     const saved = await prisma.domainReport.findUniqueOrThrow({ where: { id: res.body.id } });
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile((saved.files as { path: string }[])[0].path);
-    assert.deepEqual(wb.worksheets.map((w) => w.name), ["Domain Keywords", "Competitors"]);
-    const sheet = wb.getWorksheet("Competitors")!;
-    const rowValues = (r: number) => (sheet.getRow(r).values as unknown[]).slice(1);
-    assert.deepEqual(rowValues(1).filter((v, i, a) => v && a.indexOf(v) === i), ["Keyword", "yogapeace.com.au (client)", "c1.com.au", "c2.com.au", "c3.com.au"]);
-    assert.deepEqual(rowValues(2).slice(0, 7), ["Keyword", "Search Volume", "Keyword Difficulty", "Intent", "Position", "Landing page URL", "Traffic"], "no Status column");
-    // Client keyword (with c1 beside it), then gaps by competitor traffic -- blank client columns mark a gap.
-    assert.deepEqual(
-      [3, 4, 5].map((r) => [rowValues(r)[0], rowValues(r)[4], rowValues(r)[7]]),
-      [
-        ["yoga parramatta", 1, 4],
-        ["hot yoga sydney", undefined, 2],
-        ["yin yoga", undefined, undefined],
-      ],
-    );
-    assert.equal(rowValues(3)[5], "https://yogapeace.com.au/yoga-parramatta");
-    assert.equal(rowValues(3)[2], 20, "keyword difficulty");
+    assert.deepEqual(wb.worksheets.map((w) => w.name), ["Domain Keywords"]);
 
     // Competitors without the client's own Semrush data can't be compared.
     const noClient = await api.post("/api/domain-intel/reports").field("clientId", client.id).attach("ahrefs", Buffer.from("Keyword,Volume,Current position\nx,1,1"), "a.csv").field("competitor_fetches", fetchIds[1]);

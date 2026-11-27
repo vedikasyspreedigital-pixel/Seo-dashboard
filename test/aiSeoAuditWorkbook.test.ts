@@ -33,12 +33,12 @@ const content: AiAuditContent = {
   ],
 };
 
-test("AI SEO Audit workbook: the team's sheets, Dashboard counts worked out from the checks, Action Plan High first", async () => {
+test("AI SEO Audit workbook: the team's sheets (no Technical SEO / Off-Page & Local / Tech Stack, 2026-11-27), Dashboard counts, Action Plan High first", async () => {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load((await buildAiAuditWorkbook(content, { clientName: "Yoga Peace", websiteUrl: "https://www.yogapeaceaustralia.com", sources: ["WooRank Audit", "Semrush Site Audit"] })) as never);
   assert.deepEqual(
     wb.worksheets.map((w) => w.name),
-    ["Dashboard", "On-Page SEO", "Technical SEO", "Mobile & Structured Data", "Security & Performance", "Accessibility", "Off-Page & Local", "Tech Stack & Branding", "Site Audit (Semrush)", "Action Plan"],
+    ["Dashboard", "On-Page SEO", "Mobile & Structured Data", "Security & Performance", "Accessibility", "Site Audit (Semrush)", "Action Plan"],
   );
   const dash = wb.getWorksheet("Dashboard")!;
   assert.equal(dash.getCell(1, 1).value, "Yoga Peace — SEO Audit Dashboard");
@@ -47,13 +47,17 @@ test("AI SEO Audit workbook: the team's sheets, Dashboard counts worked out from
   const row = (r: number) => (dash.getRow(r).values as unknown[]).slice(1);
   assert.deepEqual(row(9), ["Category", "Pass", "Warning / To Improve", "Error", "Informational", "Total Checks"]);
   assert.deepEqual(row(10), ["On-Page (Content & Meta)", 1, 1, 0, 0, 2]);
-  assert.deepEqual(row(12), ["Mobile Usability", 0, 0, 1, 0, 1]);
-  assert.deepEqual(row(17), ["Off-Page & Social", 0, 0, 0, 1, 1]);
+  assert.deepEqual(row(11), ["Mobile Usability", 0, 0, 1, 0, 1]);
+  assert.deepEqual(
+    [10, 11, 12, 13, 14].map((r) => row(r)[0]),
+    ["On-Page (Content & Meta)", "Mobile Usability", "Structured Data & Social Markup", "Security & Performance", "Accessibility"],
+    "no Indexing / Tech Stack / Off-Page rows",
+  );
   // Key Metrics box (added to the sample), then Key Issues.
-  assert.equal(dash.getCell(20, 1).value, "Key Metrics");
-  assert.deepEqual(row(22), ["WooRank score", "68/100", "WooRank"]);
-  assert.equal(dash.getCell(26, 1).value, "Key Issues");
-  assert.equal(dash.getCell(27, 1).value, "• SSL expires in a month.");
+  assert.equal(dash.getCell(17, 1).value, "Key Metrics");
+  assert.deepEqual(row(19), ["WooRank score", "68/100", "WooRank"]);
+  assert.equal(dash.getCell(23, 1).value, "Key Issues");
+  assert.equal(dash.getCell(24, 1).value, "• SSL expires in a month.");
 
   // "Mobile & Structured Data" holds both of its categories; statuses are coloured, headers frozen with filters.
   const mobile = wb.getWorksheet("Mobile & Structured Data")!;
@@ -75,12 +79,12 @@ test("AI SEO Audit workbook: a section WooRank had no checks for gets no tab and
   await wb.xlsx.load((await buildAiAuditWorkbook({ ...content, checks: domainOnly, technologies: [] }, { clientName: "Fencing", websiteUrl: "x.com.au", sources: ["WooRank Audit", "Semrush Site Audit"] })) as never);
   assert.deepEqual(
     wb.worksheets.map((w) => w.name),
-    ["Dashboard", "Technical SEO", "Security & Performance", "Off-Page & Local", "Site Audit (Semrush)", "Action Plan"],
+    ["Dashboard", "Security & Performance", "Site Audit (Semrush)", "Action Plan"],
   );
   const dash = wb.getWorksheet("Dashboard")!;
   const row = (r: number) => (dash.getRow(r).values as unknown[]).slice(1);
-  assert.deepEqual([10, 11, 12].map((r) => row(r)[0]), ["Indexing & Crawlability", "Security & Performance", "Off-Page & Social"]);
-  assert.equal(dash.getCell(15, 1).value, "Key Metrics", "the boxes below move up");
+  assert.deepEqual(row(10)[0], "Security & Performance");
+  assert.equal(dash.getCell(13, 1).value, "Key Metrics", "the boxes below move up");
 });
 
 test("AI SEO Audit workbook: no Semrush sheet when only WooRank was read", async () => {

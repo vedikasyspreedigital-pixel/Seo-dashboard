@@ -37,6 +37,13 @@ export const CATEGORIES = [
 ] as const;
 type Category = (typeof CATEGORIES)[number];
 
+/**
+ * Areas the team took out of the audit workbook (2026-11-27): no "Technical SEO", "Off-Page & Local" or
+ * "Tech Stack & Branding" tab, no Dashboard row, and Gemini leaves them out of key issues/metrics and the plan.
+ * Gemini still sorts WooRank's checks into them, so nothing from these areas lands in another tab.
+ */
+export const LEFT_OUT: Category[] = ["Indexing & Crawlability", "Tech Stack & Branding", "Off-Page & Social"];
+
 const STATUSES = ["Pass", "Warning", "Error", "Info"] as const;
 const PRIORITIES = ["High", "Medium", "Low"] as const;
 const EFFORTS = ["Low", "Medium", "High"] as const;
@@ -131,10 +138,13 @@ From the WooRank report:
   recommendation: the concrete next step ("No action." when nothing is needed).
 - technologies: every detected technology with a short category (Server, CMS, Analytics, Frontend, Social, ...).
 - verdict: one line, e.g. "Good foundation. Key opportunities: ...".
-- keyMetrics: 6-10 headline numbers exactly as the reports show them, each with its source ("WooRank" / "Semrush"):
-  WooRank score, backlinks, referring domains, traffic estimation, Google reviews; Semrush Site Health, AI Search Health,
-  crawled pages, errors, warnings (only those present).
+- keyMetrics: 5-8 headline numbers exactly as the reports show them, each with its source ("WooRank" / "Semrush"):
+  WooRank score; Semrush Site Health, AI Search Health, crawled pages, errors, warnings (only those present).
 - keyIssues: 6-10 short bullets of the most important problems (no bullet symbol).
+
+This workbook does NOT cover indexing & crawlability, tech stack & branding, or off-page / social / local (backlinks,
+traffic, directories, reviews, social profiles). Still put those checks in their categories, but keep them out of
+verdict, keyMetrics, keyIssues and actionPlan.
 
 From the Semrush Site Audit (when attached): siteAudit = its site-wide issues (errors, then warnings, then notable notices) as
 check / status / finding (with page counts) / recommendation; otherwise an empty list.
@@ -222,7 +232,6 @@ export const hostOf = (url: string) => url.replace(/^[a-z]+:\/\//i, "").replace(
 const DARK = "FF1F2937";
 const BLUE = "FF2563EB";
 const SCORE_FILL = "FFFFF7E6";
-const GREEN_HEADER = "FF003300";
 export const PRIORITY_FILL: Record<string, string> = { High: "FFFEE2E2", Medium: "FFFEF3C7", Low: "FFDCFCE7" };
 const STATUS_FONT: Record<string, string> = { Pass: "FF15803D", Warning: "FFB45309", Error: "FFB91C1C", Info: "FF4B5563" };
 // Light status fills so problems stand out at a glance (an addition to the sample, the user's go-ahead 2026-10-23).
@@ -244,7 +253,6 @@ export function finishSheet(sheet: ExcelJS.Worksheet, headerRowNo: number, lastC
 /** Sheets of checks: name, title, first-column header, categories. */
 const CHECK_SHEETS: { name: string; title: string; first: string; categories: Category[]; widths: number[] }[] = [
   { name: "On-Page SEO", title: "On-Page SEO — Content & Meta Elements", first: "Element", categories: ["On-Page (Content & Meta)"], widths: [28, 20, 65, 65] },
-  { name: "Technical SEO", title: "Technical SEO — Indexing, Crawlability & Site Health", first: "Check", categories: ["Indexing & Crawlability"], widths: [28, 20, 65, 65] },
   {
     name: "Mobile & Structured Data",
     title: "Mobile Usability & Structured Data",
@@ -254,7 +262,6 @@ const CHECK_SHEETS: { name: string; title: string; first: string; categories: Ca
   },
   { name: "Security & Performance", title: "Security & Performance", first: "Check", categories: ["Security & Performance"], widths: [30, 20, 65, 65] },
   { name: "Accessibility", title: "Accessibility — UX & WCAG-related Checks", first: "Check", categories: ["Accessibility"], widths: [32, 20, 65, 65] },
-  { name: "Off-Page & Local", title: "Off-Page SEO — Backlinks, Traffic & Social", first: "Area", categories: ["Off-Page & Social"], widths: [30, 20, 65, 65] },
 ];
 
 export function titleRow(sheet: ExcelJS.Worksheet, text: string, lastCol: number) {
@@ -287,27 +294,6 @@ function checkRows(sheet: ExcelJS.Worksheet, startRow: number, rows: { check: st
   return startRow + rows.length - 1;
 }
 
-function addTechSheet(wb: ExcelJS.Workbook, technologies: AiAuditContent["technologies"], brandChecks: AiAuditContent["checks"]) {
-  const tech = wb.addWorksheet("Tech Stack & Branding");
-  [24, 57, 70].forEach((w, i) => (tech.getColumn(i + 1).width = w));
-  titleRow(tech, "Technology Stack & Branding Reference", 3);
-  tech.mergeCells(3, 1, 3, 2);
-  tech.getCell(3, 1).value = "Detected Technologies";
-  tech.getCell(3, 1).font = { bold: true };
-  headerRow(tech, 4, ["Technology", "Category"]);
-  technologies.forEach((t, i) => (tech.getRow(5 + i).values = [t.name, t.category]));
-  const brandRow = 5 + technologies.length + 3;
-  headerRow(tech, brandRow, ["Technology & Branding Checks", "Status", "Finding"], GREEN_HEADER);
-  brandChecks.forEach((c, i) => {
-    const row = tech.getRow(brandRow + 1 + i);
-    row.values = [c.check, c.status, c.finding];
-    row.alignment = { vertical: "top", wrapText: true };
-    styleStatus(row.getCell(2), c.status);
-  });
-  tech.views = [{ state: "frozen", ySplit: 1 }];
-  tech.pageSetup = { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
-}
-
 export async function buildAiAuditWorkbook(content: AiAuditContent, meta: { clientName: string; websiteUrl: string; sources: string[] }): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const score = content.overallScore ?? null;
@@ -333,7 +319,7 @@ export async function buildAiAuditWorkbook(content: AiAuditContent, meta: { clie
   headerRow(dash, 9, ["Category", "Pass", "Warning / To Improve", "Error", "Informational", "Total Checks"]);
   // Only categories the reports actually checked (the team's call, 2026-10-29): when WooRank couldn't read a
   // site's homepage it has no On-Page / Mobile / Accessibility checks, and empty rows and tabs looked broken.
-  const checked = CATEGORIES.filter((cat) => content.checks.some((c) => c.category === cat));
+  const checked = CATEGORIES.filter((cat) => !LEFT_OUT.includes(cat) && content.checks.some((c) => c.category === cat));
   checked.forEach((cat, i) => {
     const inCat = content.checks.filter((c) => c.category === cat);
     const n = (s: string) => inCat.filter((c) => c.status === s).length;
@@ -373,10 +359,6 @@ export async function buildAiAuditWorkbook(content: AiAuditContent, meta: { clie
     headerRow(sheet, 3, [s.first, "Status", "Finding", "Recommendation"]);
     finishSheet(sheet, 3, 4, checkRows(sheet, 4, rows));
   }
-
-  // Tech stack & branding -- also only when there's something in it.
-  const brandChecks = content.checks.filter((c) => c.category === "Tech Stack & Branding");
-  if (content.technologies.length > 0 || brandChecks.length > 0) addTechSheet(wb, content.technologies, brandChecks);
 
   // Semrush's site-wide crawl, when it was part of the audit
   if (content.siteAudit.length > 0) {
