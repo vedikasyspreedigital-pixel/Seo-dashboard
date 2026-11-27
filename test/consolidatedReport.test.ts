@@ -154,6 +154,36 @@ test("columnLabel follows the file's own date style", () => {
   assert.equal(columnLabel(new Date("2026-11-03T10:00:00Z"), "15th October 2026"), "3rd November 2026");
 });
 
+test("buildConsolidatedReport: the date under the title moves to the report date and the new column gets its 'Google.ae' (Maiz-style file, 2026-11-27)", async () => {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Ranking");
+  ws.getCell(1, 1).value = "Client Keyword Ranking Report";
+  ws.getCell(2, 1).value = "edumaiz.com";
+  ws.getCell(3, 1).value = "3rd November 2026"; // stale in the uploaded file -- still becomes the report date
+  ws.getRow(5).values = ["Current Ranking Status:", "Google.ae", "Google.ae", "Google.ae"];
+  ws.getRow(6).values = ["Keyword", "17th November 2026", "3rd November 2026", "15th October 2026"];
+  ws.getRow(7).values = ["germany education consultants in dubai", 5, 7, 9];
+  ws.getRow(8).values = ["study in uk", "Not in 100", "Not in 100", 40];
+  const history = Buffer.from(await wb.xlsx.writeBuffer());
+
+  const built = await buildConsolidatedReport(history, {
+    reportDate: new Date("2026-11-26T00:00:00Z"),
+    rows: [
+      { keyword: "germany education consultants in dubai", rankValue: 4, rankDisplay: "4" },
+      { keyword: "study in uk", rankValue: null, rankDisplay: "Not in 100" },
+    ],
+  });
+  const out = new ExcelJS.Workbook();
+  await out.xlsx.load(built.buffer as unknown as ArrayBuffer);
+  const sheet = out.worksheets[0];
+  assert.equal(sheet.getCell(3, 1).value, "26th November 2026", "date under the title is this report's date");
+  assert.deepEqual((sheet.getRow(5).values as unknown[]).slice(1), ["Current Ranking Status:", "Google.ae", "Google.ae", "Google.ae", "Google.ae"]);
+  assert.deepEqual((sheet.getRow(6).values as unknown[]).slice(1), ["Keyword", "26th November 2026", "17th November 2026", "3rd November 2026", "15th October 2026"]);
+  assert.equal(sheet.getCell(2, 1).value, "edumaiz.com");
+  assert.equal(sheet.getCell(1, 1).value, "Client Keyword Ranking Report");
+  assert.equal(sheet.getCell(7, 2).value, 4);
+});
+
 async function setup(opts: { consolidated: boolean }) {
   const sentCalls: { excelPdfFilename?: string; excelPdfBuffer?: Buffer }[] = [];
   const app = createApp(neverCalled, "mock", undefined, { sendEmail: createMockEmailSender((p) => sentCalls.push(p)) });

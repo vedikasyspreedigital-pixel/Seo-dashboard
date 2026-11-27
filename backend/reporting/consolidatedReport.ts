@@ -288,6 +288,38 @@ export async function buildConsolidatedReport(history: Buffer, input: { reportDa
   for (let r = 1; r <= layout.headerRow; r++) copyStyle(ws.getRow(r).getCell(insertAt + 1), ws.getRow(r).getCell(insertAt));
   ws.getRow(layout.headerRow).getCell(insertAt).value = label;
 
+  // Rows above the header (2026-11-27, found on a live test): a label repeated over every date column (the
+  // search engine, "Google.ae") gets one over the new column too, and the report date under the title
+  // ("17th November 2026" -- a cell holding just a date) becomes this report's date, even if the uploaded
+  // history already had a stale one there.
+  const oldDateCols = [...layout.dateColumns].sort((a, b) => a.col - b.col).map((d) => d.col + 1); // after the insert
+  for (let r = 1; r < layout.headerRow; r++) {
+    const row = ws.getRow(r);
+    // A per-column label: every filled cell over the date columns says the same thing, at least twice. It goes
+    // over the new column and fills any gap (a file saved before this fix has one over its newest date).
+    const filled = oldDateCols.map((c) => cellText(row.getCell(c))).filter(Boolean);
+    if (filled.length >= 2 && filled.every((t) => t === filled[0])) {
+      const source = row.getCell(oldDateCols.find((c) => cellText(row.getCell(c)) === filled[0])!);
+      for (const c of [insertAt, ...oldDateCols]) {
+        const cell = row.getCell(c);
+        if (!cellText(cell)) {
+          cell.value = source.value;
+          copyStyle(source, cell);
+        }
+      }
+    }
+    for (let c = 1; c <= ws.columnCount; c++) {
+      if (c === insertAt || oldDateCols.includes(c)) continue; // only a date standing on its own, not per-column cells
+      const cell = row.getCell(c);
+      if (cell.value instanceof Date) {
+        cell.value = new Date(input.reportDate);
+        continue;
+      }
+      const text = cellText(cell);
+      if (text && text.length <= 40 && parseDateLabel(text)) cell.value = columnLabel(input.reportDate, text);
+    }
+  }
+
   // Keyword rows rewritten in the new order; each position keeps its own style (banding, borders).
   const width = lastCol + 1;
   const lastStyles = styleRows[styleRows.length - 1];
