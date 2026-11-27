@@ -371,6 +371,11 @@ model BaselineJob {
   sentSubject      String?    @map("sent_subject")
   clickupTaskUrl   String?    @map("clickup_task_url")
   sendError        String?    @map("send_error")
+  // The team's edited client copy (2026-11-27), uploaded after checking -- the email sends it instead of the
+  // dashboard's own. The file is on disk (uploads/baseline-edited/<id>.xlsx); null = the dashboard's version.
+  editedFileName   String?    @map("edited_file_name")
+  editedBy         String?    @map("edited_by")
+  editedAt         DateTime?  @map("edited_at")
   createdAt        DateTime   @default(now()) @map("created_at")
 
   @@index([workspaceId, createdAt])

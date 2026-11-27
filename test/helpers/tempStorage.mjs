@@ -19,3 +19,7 @@ process.on("exit", () => {
 // Run queue (2026-11-23): tests share one database and run files in parallel, so a one-at-a-time queue would make
 // one file's runs wait on another's. No limit by default here; the run-queue tests set their own.
 process.env.RUN_QUEUE_CONCURRENCY ??= "0";
+
+// The "expensive action" limiter (20 a minute live) is shared by everything in one test file; files that press
+// many buttons (Run all 5 reports: start, then Post) would hit it. The login limiter isn't touched.
+process.env.EXPENSIVE_ACTION_RATE_LIMIT ??= "1000";

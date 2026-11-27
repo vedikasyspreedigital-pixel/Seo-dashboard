@@ -16,11 +16,11 @@ import { RunAllPanel } from '../components/domainIntel/RunAllPanel';
 import { bundleSelectionProblem } from '../utils/bundleSelection';
 import { AuditsSection } from '../components/domainIntel/AuditsSection';
 import { BaselineReportTab } from '../components/domainIntel/BaselineReportTab';
+import { ReportFilesList } from '../components/domainIntel/ReportFilesList';
 import { useSearchParams } from 'react-router-dom';
 import {
   createDomainReport,
   downloadDomainAuditFile,
-  downloadDomainReportFile,
   getDomainBundle,
   getDomainFetch,
   cancelDomainAudit,
@@ -81,6 +81,7 @@ const MODES: { value: DomainReportMode; label: string }[] = [
 
 const STATUS: Record<DomainReportStatus, { label: string; tone: string }> = {
   GENERATING: { label: 'Generating', tone: 'bg-overlay/[0.06] text-[var(--color-ink-muted)]' },
+  READY: { label: 'Ready to check', tone: 'bg-sky-500/15 text-sky-300' },
   GENERATED: { label: 'Waiting to post', tone: 'bg-overlay/[0.06] text-[var(--color-ink-muted)]' },
   POSTING: { label: 'Posting to ClickUp', tone: 'bg-brand-500/15 text-brand-300' },
   POSTED: { label: 'Posted to ClickUp', tone: 'bg-emerald-500/15 text-emerald-300' },
@@ -329,10 +330,6 @@ function CompetitorsSection({
   );
 }
 
-async function saveFile(reportId: string, index: number, name: string) {
-  saveBlob(await downloadDomainReportFile(reportId, index), name);
-}
-
 function saveBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -521,7 +518,7 @@ export function DomainIntelligencePage() {
   }, [bundleId, bundleRunning, auditsRunning, loadAudits, loadHistory]);
 
   // Posting runs in the background on the server; refresh while any report is still in flight.
-  const inFlight = history.some((r) => r.status === 'GENERATED' || r.status === 'POSTING' || r.status === 'GENERATING');
+  const inFlight = history.some((r) => r.status === 'POSTING' || r.status === 'GENERATING');
   useEffect(() => {
     if (!inFlight) return;
     const t = window.setInterval(() => void loadHistory(), 3000);
@@ -1156,12 +1153,22 @@ export function DomainIntelligencePage() {
                 {r.summary.filesExpired && (
                   <p className="mt-2 text-xs text-[var(--color-ink-faint)]">Files removed 10 days after posting to save space — they’re in the ClickUp comment.</p>
                 )}
+                {r.status === 'READY' && (
+                  <p className="mt-2 text-xs text-[var(--color-ink-muted)]">
+                    Not posted yet. Check the files — Preview them, or download one, fix it and upload the changed copy — then press Post to ClickUp.
+                  </p>
+                )}
+                <ReportFilesList
+                  report={r}
+                  onError={setError}
+                  onChanged={(updated) => setHistory((list) => list.map((x) => (x.id === updated.id ? { ...x, ...updated } : x)))}
+                />
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {r.files.map((f, i) => (
-                    <Button key={f.name} variant="secondary" className="!py-1.5 text-xs" onClick={() => void saveFile(r.id, i, f.name)}>
-                      {f.name}
+                  {(r.status === 'READY' || r.status === 'GENERATED') && r.clientTaskId && (
+                    <Button className="!py-1.5 text-xs" onClick={() => void handleRetry(r.id)}>
+                      Post to ClickUp
                     </Button>
-                  ))}
+                  )}
                   {(r.status === 'POST_FAILED' || (r.status === 'NOT_POSTED' && r.clientTaskId)) && (
                     <Button variant="ghost" className="!py-1.5 text-xs" onClick={() => void handleRetry(r.id)}>
                       Post to ClickUp again

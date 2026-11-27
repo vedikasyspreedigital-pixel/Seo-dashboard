@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import ExcelJS from "exceljs";
@@ -178,7 +178,7 @@ test("buildDomainReportExcel: positions 1-10 are highlighted green in every tool
   assert.deepEqual(workbook.worksheets.map((w) => w.name), ["Domain Keywords"]);
 });
 
-test("POST /api/domain-intel/reports: builds combined + individual files, posts them to the client's domain task, keeps history", async () => {
+test("POST /api/domain-intel/reports: builds combined + individual files, READY until Post, then posts to the client's domain task, keeps history", async () => {
   const auth = await createAuthenticatedSession();
   const posted: PostCommentParams[] = [];
   const app = createApp(neverCalled, "mock", undefined, undefined, {
@@ -207,6 +207,29 @@ test("POST /api/domain-intel/reports: builds combined + individual files, posts 
     assert.equal(res.body.files[0].path, undefined, "server paths never reach the browser");
     assert.deepEqual(res.body.summary.sources, { semrush: { keywords: 3, duplicatesRemoved: 1 }, ahrefs: { keywords: 2, duplicatesRemoved: 0 } });
 
+    // Not posted by itself (2026-11-27): READY until someone checks the files and presses Post to ClickUp.
+    assert.equal(res.body.status, "READY");
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(posted.length, 0, "nothing posted before the team presses Post");
+
+    // Check before posting: preview the Excel on screen, then upload a changed copy (2026-11-27).
+    const pv = await api.get(`/api/domain-intel/reports/${res.body.id}/files/0/preview`);
+    assert.equal(pv.status, 200, JSON.stringify(pv.body));
+    assert.equal(pv.body.sheets[0].name, "Domain Keywords");
+    assert.equal(pv.body.sheets[0].rows[0][0], "SEMrush");
+    const wrongType = await api.post(`/api/domain-intel/reports/${res.body.id}/files/0`).attach("file", Buffer.from("%PDF-1.4"), "report.pdf");
+    assert.equal(wrongType.status, 409);
+    assert.match(wrongType.body.error, /\.xlsx/);
+    const changed = new ExcelJS.Workbook();
+    changed.addWorksheet("Domain Keywords").addRow(["checked by the team"]);
+    const changedBuffer = Buffer.from(await changed.xlsx.writeBuffer());
+    const replaced = await api.post(`/api/domain-intel/reports/${res.body.id}/files/0`).attach("file", changedBuffer, "my edited copy.xlsx");
+    assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+    assert.equal(replaced.body.files[0].name, res.body.files[0].name, "keeps its name");
+    assert.ok(replaced.body.files[0].editedBy, "marked as changed by the team");
+    assert.equal(replaced.body.files[1].editedBy, null);
+
+    assert.equal((await api.post(`/api/domain-intel/reports/${res.body.id}/post`)).status, 202);
     // Posting happens in the background.
     let report = await prisma.domainReport.findUniqueOrThrow({ where: { id: res.body.id } });
     for (let i = 0; i < 50 && report.status !== "POSTED"; i++) {
@@ -217,6 +240,9 @@ test("POST /api/domain-intel/reports: builds combined + individual files, posts 
     assert.equal(posted.length, 1);
     assert.equal(posted[0].taskId, "86dtest123");
     assert.equal(posted[0].files.length, 3);
+    assert.ok((await readFile(posted[0].files[0].path)).equals(changedBuffer), "the comment carries the team's changed copy");
+    const lateChange = await api.post(`/api/domain-intel/reports/${res.body.id}/files/0`).attach("file", changedBuffer, "x.xlsx");
+    assert.equal(lateChange.status, 409, "no changes once it's posted");
     assert.ok(posted[0].lines.join("\n").includes(posted[0].marker));
 
     const file = await api.get(`/api/domain-intel/reports/${res.body.id}/files/0`).buffer(true);

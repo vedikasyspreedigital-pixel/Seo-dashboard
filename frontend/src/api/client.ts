@@ -543,6 +543,8 @@ export type BaselineJobState = 'checking' | 'volumes' | 'ready' | 'failed';
 
 export interface BaselineJob {
   id: string;
+  /** The team's edited client copy (2026-11-27) -- the email sends it instead of the dashboard's; null = none. */
+  editedFile: { name: string; by: string | null; at: string } | null;
   clientName: string;
   domain: string | null;
   country: string;
@@ -574,6 +576,22 @@ export interface BaselineJob {
 /** The client copy's contents, for "Preview client copy". */
 export async function getBaselineJobPreview(id: string): Promise<BaselineClientPreview> {
   return handle<BaselineClientPreview>(await apiFetch(`/baseline-jobs/${id}/preview`));
+}
+
+/** Upload the team's edited client copy (.xlsx): the email sends it instead of the dashboard's. */
+export async function uploadBaselineClientFile(id: string, file: File): Promise<BaselineJob> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return handle<BaselineJob>(await apiFetch(`/baseline-jobs/${id}/client-file`, { method: 'POST', body: formData }));
+}
+
+/** Back to the dashboard's own client copy. */
+export async function removeBaselineClientFile(id: string): Promise<BaselineJob> {
+  return handle<BaselineJob>(await apiFetch(`/baseline-jobs/${id}/client-file`, { method: 'DELETE' }));
+}
+
+export async function previewBaselineClientFile(id: string): Promise<WorkbookPreview> {
+  return handle<WorkbookPreview>(await apiFetch(`/baseline-jobs/${id}/client-file/preview`));
 }
 
 /** Emails the client copy to the new client through ClickUp (once). */
@@ -936,7 +954,8 @@ export async function compareReportsPdf(comparison: ReportComparison, clientName
 
 export type DomainSource = 'semrush' | 'ubersuggest' | 'ahrefs';
 export type DomainReportMode = 'combined' | 'individual' | 'both';
-export type DomainReportStatus = 'GENERATING' | 'GENERATED' | 'POSTING' | 'POSTED' | 'POST_FAILED' | 'NOT_POSTED' | 'FAILED';
+// READY (2026-11-27): made, waiting for the team to check the files and press Post to ClickUp.
+export type DomainReportStatus = 'GENERATING' | 'READY' | 'GENERATED' | 'POSTING' | 'POSTED' | 'POST_FAILED' | 'NOT_POSTED' | 'FAILED';
 
 /** "Fetch from Ahrefs" -- runs in the background; when done its file is used like an upload. */
 export interface DomainFetchJob {
@@ -991,7 +1010,8 @@ export interface DomainReport {
     /** A run where only audits were picked: no keyword data. */
     auditsOnly?: boolean;
   };
-  files: { name: string }[];
+  /** editedBy/editedAt: the team uploaded a changed copy of this file (2026-11-27). */
+  files: { name: string; editedBy?: string | null; editedAt?: string | null }[];
   createdBy: string | null;
   status: DomainReportStatus;
   clickupTaskId: string | null;
@@ -1089,6 +1109,29 @@ export async function downloadDomainReportFile(reportId: string, index: number):
   const res = await apiFetch(`/domain-intel/reports/${reportId}/files/${index}`);
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   return res.blob();
+}
+
+/** An Excel file's sheets as text tables, for the on-screen Preview (2026-11-27). */
+export interface WorkbookPreview {
+  sheets: { name: string; rows: string[][]; totalRows: number; truncated: boolean }[];
+}
+
+export async function previewDomainReportFile(reportId: string, index: number): Promise<WorkbookPreview> {
+  return handle<WorkbookPreview>(await apiFetch(`/domain-intel/reports/${reportId}/files/${index}/preview`));
+}
+
+/** A PDF report file, to open in a new browser tab. */
+export async function openDomainReportPdf(reportId: string, index: number): Promise<Blob> {
+  const res = await apiFetch(`/domain-intel/reports/${reportId}/files/${index}?inline=1`);
+  if (!res.ok) throw new Error(`Couldn't open the file (${res.status})`);
+  return new Blob([await res.blob()], { type: 'application/pdf' });
+}
+
+/** The team's changed copy of one of the report's files -- it replaces the file before it's posted. */
+export async function replaceDomainReportFile(reportId: string, index: number, file: File): Promise<DomainReport> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return handle<DomainReport>(await apiFetch(`/domain-intel/reports/${reportId}/files/${index}`, { method: 'POST', body: formData }));
 }
 
 /** Semrush Site Audit / WooRank (made by the office Chrome agent) and the AI SEO Audit (Gemini). */

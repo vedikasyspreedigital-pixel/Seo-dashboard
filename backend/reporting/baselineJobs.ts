@@ -184,6 +184,8 @@ export interface BaselineJobView {
   volumes: "fetched" | "fetching" | "failed" | "not_set_up" | "waiting";
   volumesError: string | null;
   runId: string;
+  /** The team's edited client copy (2026-11-27) -- what the email sends instead of the dashboard's; null = none. */
+  editedFile: { name: string; by: string | null; at: string } | null;
   /** The email to the client: sent once. */
   email: {
     state: "not_sent" | "sending" | "sent";
@@ -289,6 +291,7 @@ export async function viewBaselineJobs(where: { workspaceId: string; id?: string
       volumes,
       volumesError: j.volumesError,
       runId: j.runId,
+      editedFile: j.editedFileName && j.editedAt ? { name: j.editedFileName, by: j.editedBy, at: j.editedAt.toISOString() } : null,
       email: {
         state: j.sentAt ? "sent" : j.sendingAt ? "sending" : "not_sent",
         sentAt: j.sentAt?.toISOString() ?? null,
@@ -347,6 +350,8 @@ export interface SendBaselineJobInput {
   subject?: string;
   body?: string;
   sentBy: string;
+  /** The team's edited client copy, when there is one -- sent instead of the dashboard's. */
+  clientFile?: { buffer: Buffer; filename: string } | null;
 }
 
 /**
@@ -377,8 +382,9 @@ export async function sendBaselineJob(jobId: string, input: SendBaselineJobInput
   const subject = String(input.subject ?? "").trim() || baselineEmailSubject(job.client.name);
   const body = String(input.body ?? "").trim() || BASELINE_EMAIL_BODY;
 
-  // Built BEFORE claiming, so a build problem never leaves the job stuck in "sending".
-  const built = await buildBaselineForJob(jobId, "client");
+  // Built BEFORE claiming, so a build problem never leaves the job stuck in "sending". The team's edited copy,
+  // when they uploaded one (2026-11-27), goes instead of the dashboard's own.
+  const built = input.clientFile ?? (await buildBaselineForJob(jobId, "client"));
 
   const claimed = await prisma.baselineJob.updateMany({
     where: { id: jobId, sentAt: null, sendingAt: null },

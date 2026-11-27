@@ -74,11 +74,13 @@ export async function startRun(runId) {
  */
 export async function rerunFailedRows(runId) {
   return prisma.$transaction(async (tx) => {
+    // Back into the run queue (2026-11-27): a rerun used to start straight away, so it could check at the same time
+    // as another run (two Serper runs at once) and nothing woke the queue when it finished.
     const { count } = await tx.rankingRun.updateMany({
       where: { id: runId, status: 'COMPLETED_WITH_ERRORS' },
-      data: { status: 'PROCESSING', completedAt: null },
+      data: { status: 'QUEUED', queuedAt: new Date(), completedAt: null },
     });
-    if (count === 0) throw new InvalidRunTransitionError(runId, 'rerun failed rows (COMPLETED_WITH_ERRORS -> PROCESSING)');
+    if (count === 0) throw new InvalidRunTransitionError(runId, 'rerun failed rows (COMPLETED_WITH_ERRORS -> QUEUED)');
     const { count: resetCount } = await tx.rankingRow.updateMany({
       where: { runId, status: 'FAILED' },
       data: { status: 'PENDING', retryCount: 0, lastErrorMessage: null, rankValue: null, rankDisplay: null, rankingUrl: null },

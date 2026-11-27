@@ -90,12 +90,16 @@ test("buildDomainReportExcel: the Google Keyword Planner block comes 4th with it
   assert.deepEqual([6, 7, 8, 9, 10].map((c) => ws.getCell(3, c).value), ["wedding photographer melbourne", 2400, "High", null, "Commercial"]);
 });
 
-async function withReport(plannerIdeas: PlannerIdeasFn, check: (body: Record<string, any>, sheet: ExcelJS.Worksheet) => void) {
+async function withReport(
+  plannerIdeas: PlannerIdeasFn,
+  check: (body: Record<string, any>, sheet: ExcelJS.Worksheet) => void,
+  classifyWithAi: (keywords: string[]) => Promise<Map<string, "Commercial">> = async (keywords) => new Map(keywords.map((k) => [k.toLowerCase(), "Commercial" as const])),
+) {
   const auth = await createAuthenticatedSession();
   const app = createApp(neverCalled, "mock", undefined, undefined, {
     postComment: async () => {},
-    // Everything the rules leave open is a service keyword here.
-    classifyWithAi: async (keywords) => new Map(keywords.map((k) => [k.toLowerCase(), "Commercial" as const])),
+    // Everything the rules leave open is a service keyword here (unless a test says otherwise).
+    classifyWithAi,
     plannerIdeas,
   });
   const client = await prisma.client.create({ data: { name: "Meraki Photography", domain: "merakiphotography.com.au", workspaceId: auth.workspace.id } });
@@ -153,6 +157,23 @@ test("domain report: Keyword Planner failing doesn't stop the report -- the summ
       assert.match(body.summary.planner.error, /PERMISSION_DENIED/);
       assert.equal(sheet.getCell(1, 6).value, null, "no 4th section");
       assert.equal(sheet.getCell(1, 1).value, "SEMrush");
+    },
+  );
+});
+
+test("domain report: the AI intent check is down -- Keyword Planner ideas stay in as 'Unclear', not dropped as Informational", async () => {
+  await withReport(
+    async () => [
+      { keyword: "pilates reformer", avgMonthlySearches: 5400, competition: "LOW" },
+      { keyword: "how to do yoga at home", avgMonthlySearches: 900, competition: "LOW" },
+    ],
+    (body, sheet) => {
+      assert.deepEqual(body.summary.planner, { keywords: 1, ideas: 2 });
+      assert.deepEqual([6, 7, 10].map((c) => sheet.getCell(3, c).value), ["pilates reformer", 5400, "Unclear"]);
+      assert.equal(sheet.getCell(4, 6).value, null, "the 'how to' idea is still left out (the rules know it's informational)");
+    },
+    async () => {
+      throw new Error("Gemini 403: free tier not available");
     },
   );
 });

@@ -169,6 +169,35 @@ test("baseline job: start from pasted keywords, the run checks them, then the Ba
   assert.deepEqual(pv.body.rows[0].slice(0, 3).concat(pv.body.rows[0][4]), ["kitchen design", 5000, "High", 3]);
   assert.equal(pv.body.rows[1][4], "Not in 100");
 
+  // The team's edited client copy (2026-11-27): check it, change it in Excel, upload it back -- the email sends it.
+  assert.equal(job.editedFile, null);
+  const notExcel = await api.post(`/api/baseline-jobs/${job.id}/client-file`).attach("file", Buffer.from("hello"), "notes.txt");
+  assert.equal(notExcel.status, 422);
+  const editedWb = new ExcelJS.Workbook();
+  const editedWs = editedWb.addWorksheet("Baseline");
+  editedWs.addRow(["Keywords", "Avg. Monthly Searches", "Competition", "Intent", "Ranking"]);
+  editedWs.addRow(["kitchen design", 5000, "High", "Commercial", 2]); // the team corrected the rank
+  const editedBuffer = Buffer.from(await editedWb.xlsx.writeBuffer());
+  const binary = (res: NodeJS.ReadableStream & Record<string, unknown>, cb: (err: Error | null, body: Buffer) => void) => {
+    const chunks: Buffer[] = [];
+    res.on("data", (c: Buffer) => chunks.push(c));
+    res.on("end", () => cb(null, Buffer.concat(chunks)));
+  };
+  const uploaded = await api.post(`/api/baseline-jobs/${job.id}/client-file`).attach("file", editedBuffer, "Venezia Test - Baseline Report (checked).xlsx");
+  assert.equal(uploaded.status, 200, JSON.stringify(uploaded.body));
+  assert.equal(uploaded.body.editedFile.name, "Venezia Test - Baseline Report (checked).xlsx");
+  assert.ok(uploaded.body.editedFile.by);
+  const editedPreview = await api.get(`/api/baseline-jobs/${job.id}/client-file/preview`);
+  assert.equal(editedPreview.status, 200);
+  assert.deepEqual(editedPreview.body.sheets[0].rows[1], ["kitchen design", "5000", "High", "Commercial", "2"]);
+  const editedDl = await api.get(`/api/baseline-jobs/${job.id}/download?copy=client`).buffer(true).parse(binary as never);
+  assert.match(String(editedDl.headers["content-disposition"]), /\(checked\)\.xlsx/, "the client copy download = the edited one");
+  assert.ok((editedDl.body as Buffer).equals(editedBuffer));
+  const removed = await api.delete(`/api/baseline-jobs/${job.id}/client-file`);
+  assert.equal(removed.body.editedFile, null, "back to the dashboard's own copy");
+  assert.equal((await api.get(`/api/baseline-jobs/${job.id}/client-file/preview`)).status, 404);
+  assert.equal((await api.post(`/api/baseline-jobs/${job.id}/client-file`).attach("file", editedBuffer, "Venezia Test - Baseline Report (checked).xlsx")).status, 200);
+
   // Email to the new client: To / CC / ClickUp task, the client copy attached, ONCE.
   assert.equal(job.email.state, "not_sent");
   assert.equal(job.email.defaultSubject, "Venezia Test - Keyword Baseline Report");
@@ -193,12 +222,10 @@ test("baseline job: start from pasted keywords, the run checks them, then the Ba
   assert.equal(sent[0].clickupTaskUrl, "https://app.clickup.com/t/86c1abcde");
   assert.equal(sent[0].subject, "Venezia Test - Keyword Baseline Report");
   assert.match(sent[0].bodyText, /Greetings from SySpree/);
-  assert.equal(sent[0].excelPdfFilename, "Venezia Test - Baseline Report.xlsx");
-  const att = new ExcelJS.Workbook();
-  await att.xlsx.load(sent[0].excelPdfBuffer as unknown as ArrayBuffer);
-  const attHeader = (att.worksheets[0].getRow(3).values as unknown[]).slice(1);
-  assert.deepEqual(attHeader.slice(0, 4), ["Keywords", "Avg. Monthly Searches", "Competition", "Intent"], "the client copy: no Number of Result / SERP result");
-  assert.equal(attHeader.length, 5);
+  assert.equal(sent[0].excelPdfFilename, "Venezia Test - Baseline Report (checked).xlsx", "the team's edited copy is what's sent");
+  assert.ok((sent[0].excelPdfBuffer as Buffer).equals(editedBuffer));
+  const tooLate = await api.post(`/api/baseline-jobs/${job.id}/client-file`).attach("file", editedBuffer, "x.xlsx");
+  assert.equal(tooLate.status, 409, "no changes after it's sent");
 
   const again = await api.post(`/api/baseline-jobs/${job.id}/send`).send({ to: "owner@venezia.ae", clickupTask: "86c1abcde" });
   assert.equal(again.status, 409, "sent only once");

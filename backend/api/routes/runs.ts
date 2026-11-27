@@ -14,7 +14,6 @@ import { exportRunExcelBuffer } from '../../excel/exportRunExcel.js';
 import { deleteExtraAttachmentFiles } from '../../reporting/extraAttachments.js';
 import { processVerifiedExcelUpload, describeRegenerationBlock, describeReportGeneration } from '../../reporting/processVerifiedExcelUpload.js';
 import type { CallDataForSeoFn } from '../../worker/processRun.js';
-import { startRunProcessing } from '../../dataforseo/engine.js';
 import { diagnoseRun } from '../../dataforseo/runDiagnostics.js';
 import { callDataForSeoLive, hasDataForSeoCredentials, MISSING_CREDENTIALS_MESSAGE } from '../../dataforseo/client.js';
 import { unwrapCall } from '../../dataforseo/gotoConverter.js';
@@ -235,7 +234,7 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
   });
 
   // "Rerun failed": re-checks only this run's FAILED keywords, in place
-  // (rerunFailedRows), then processes them exactly like /start. The
+  // (rerunFailedRows), queued and processed exactly like /start. The
   // downloaded Excel is built from the rows on demand, so it picks up the
   // new results automatically. Refused once a report exists for the run --
   // its comparison and PDF were built from the current ranks.
@@ -248,9 +247,12 @@ export function createRunsRouter(callDataForSeo: CallDataForSeoFn) {
     }
     if (cantCheckRankings(res)) return;
     try {
+      // Waits its turn in the run queue like any start (2026-11-27) -- straight away when nothing else is checking.
       const { run, resetCount } = await rerunFailedRows(runId);
-      const engine = await startRunProcessing(run.id, callDataForSeo, ' (rerun failed)');
-      res.json({ ...run, engine, resetCount });
+      rememberRunCall(run.id, callDataForSeo);
+      await wakeRunQueue();
+      const now = await prisma.rankingRun.findUniqueOrThrow({ where: { id: run.id } });
+      res.json({ ...now, resetCount, queuePosition: await queuePositionOf(run.id) });
     } catch (err) {
       if (err instanceof InvalidRunTransitionError) {
         res.status(409).json({ error: 'Only a finished run with failed keywords can be rerun.' });

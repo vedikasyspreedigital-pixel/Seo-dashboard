@@ -81,6 +81,19 @@ async function setup(opts: { woorankFails?: boolean; woorankHangs?: boolean; woo
     }
     return body;
   };
+  /** Since 2026-11-27 nothing posts by itself: the run stops at "ready", the team checks the files and presses Post. */
+  const waitAndPost = async (id: string) => {
+    const ready = await waitBundle(id);
+    assert.equal(ready.state, "attention", `waits for the team: ${JSON.stringify(ready.parts)}`);
+    assert.equal(ready.parts.post.state, "waiting", JSON.stringify(ready.parts.post));
+    assert.match(ready.parts.post.step, /check the files/);
+    assert.equal(posted.length, 0, "nothing is posted before the team presses Post");
+    const report = await prisma.domainReport.findUniqueOrThrow({ where: { id: ready.reportId } });
+    assert.equal(report.status, "READY");
+    const res = await api.post(`/api/domain-intel/bundles/${id}/post`);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    return res.body;
+  };
   const cleanup = async () => {
     const reports = await prisma.domainReport.findMany({ where: { clientId: client.id } });
     for (const r of reports) {
@@ -95,10 +108,10 @@ async function setup(opts: { woorankFails?: boolean; woorankHangs?: boolean; woo
     clearAuditJobs();
     clearBundles();
   };
-  return { api, client, posted, calls, waitBundle, cleanup };
+  return { api, client, posted, calls, waitBundle, waitAndPost, cleanup };
 }
 
-test("Run all 5 reports: competitors found, every part done, ONE ClickUp comment with all 5 files", async () => {
+test("Run all 5 reports: competitors found, every part done, waits for the team, then ONE ClickUp comment with all 5 files", async () => {
   const t = await setup();
   try {
     const started = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, location: "au", sources: ["semrush"], competitors: "auto" });
@@ -106,7 +119,7 @@ test("Run all 5 reports: competitors found, every part done, ONE ClickUp comment
     const again = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, sources: ["semrush"], competitors: "auto" });
     assert.equal(again.body.id, started.body.id, "a double-click doesn't start a second run");
 
-    const done = await t.waitBundle(started.body.id);
+    const done = await t.waitAndPost(started.body.id);
     assert.equal(done.state, "done", JSON.stringify(done.parts));
     assert.deepEqual(Object.fromEntries(Object.entries(done.parts).map(([k, v]) => [k, (v as { state: string }).state])), {
       keywords: "done",
@@ -239,7 +252,7 @@ test("Run all 5 reports: posting again after it's posted is refused -- one comme
   const t = await setup();
   try {
     const started = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, sources: ["semrush"], competitors: [] });
-    const done = await t.waitBundle(started.body.id);
+    const done = await t.waitAndPost(started.body.id);
     assert.equal(done.parts.post.state, "done");
     const again = await t.api.post(`/api/domain-intel/bundles/${started.body.id}/post`);
     assert.equal(again.status, 409);
@@ -275,7 +288,7 @@ test("Run all 5 reports: a client name with '/' gives safe file names (the poste
   const t = await setup({ clientName: "Yoga/Peace\nStudio" });
   try {
     const started = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, sources: ["semrush"], competitors: [] });
-    const done = await t.waitBundle(started.body.id);
+    const done = await t.waitAndPost(started.body.id);
     assert.equal(done.parts.post.state, "done", JSON.stringify(done.parts));
     for (const f of t.posted[0].files) {
       assert.doesNotMatch(f.name, /[\\/\n]/, f.name);
@@ -294,7 +307,7 @@ test("Pick reports: Keyword Analysis only -- no audits run, one comment with jus
   try {
     const started = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, sources: ["semrush"], competitors: ["c1.com.au"], reports: ["keywords"] });
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    const done = await t.waitBundle(started.body.id);
+    const done = await t.waitAndPost(started.body.id);
     assert.equal(done.state, "done", JSON.stringify(done.parts));
     assert.deepEqual(done.selected, ["keywords"]);
     for (const p of ["gap", "siteaudit", "woorank", "aiaudit"]) assert.equal(done.parts[p].state, "skipped", p);
@@ -309,7 +322,7 @@ test("Pick reports: Gap only -- keyword data is fetched, but only the Gap file i
   const t = await setup();
   try {
     const started = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, sources: ["semrush"], competitors: ["c1.com.au", "c2.com.au"], reports: ["gap"] });
-    const done = await t.waitBundle(started.body.id);
+    const done = await t.waitAndPost(started.body.id);
     assert.equal(done.state, "done", JSON.stringify(done.parts));
     assert.equal(done.parts.keywords.state, "skipped");
     assert.match(done.parts.keywords.step, /used for the Gap report/);
@@ -326,7 +339,7 @@ test("Pick reports: the three audits only -- no keyword tool needed, posted with
   try {
     const started = await t.api.post("/api/domain-intel/bundles").send({ clientId: t.client.id, sources: [], reports: ["siteaudit", "woorank", "aiaudit"] });
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    const done = await t.waitBundle(started.body.id);
+    const done = await t.waitAndPost(started.body.id);
     assert.equal(done.state, "done", JSON.stringify(done.parts));
     assert.equal(t.calls.semrush, 0, "no keyword exports");
     assert.deepEqual(postedNames(t), ["Yoga Peace - Semrush Site Audit.pdf", "Yoga Peace - WooRank Audit.pdf", "Yoga Peace - AI SEO Audit.xlsx"]);

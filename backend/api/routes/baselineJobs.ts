@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import path from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { prisma } from "../../db/client.js";
 import { requireAuth } from "../../auth/requireAuth.js";
@@ -23,6 +24,7 @@ import {
   viewBaselineJobs,
 } from "../../reporting/baselineJobs.js";
 import type { SendEmailFn } from "../../reporting/emailSender.js";
+import { PreviewFileError, previewWorkbook } from "../../reporting/xlsxPreview.js";
 
 // "Baseline Report" tab on Domain Intelligence (2026-11-13) -- see backend/reporting/baselineJobs.ts.
 //   GET  /api/baseline-jobs?workspaceId=     this workspace's baseline jobs (newest first)
@@ -34,12 +36,25 @@ import type { SendEmailFn } from "../../reporting/emailSender.js";
 //   POST /api/baseline-jobs/:id/keyword-planner   or upload the Keyword Planner download instead
 //   POST /api/baseline-jobs/:id/send         email the client copy to the new client through ClickUp -- once
 //                                            (body: to, cc, clickupTask, subject?, body?)
+//   POST   /api/baseline-jobs/:id/client-file          the team's edited client copy (.xlsx) -- the email sends it
+//   DELETE /api/baseline-jobs/:id/client-file          back to the dashboard's own client copy
+//   GET    /api/baseline-jobs/:id/client-file/preview  the edited copy's contents, to show on screen
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // The same folder the runs page stores uploads in (backend/api/routes/runs.ts).
 const UPLOADS_DIR = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.resolve(__dirname, "../../../uploads");
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+/** Where a job's edited client copy is kept (2026-11-27). */
+const editedPath = (jobId: string) => path.join(UPLOADS_DIR, "baseline-edited", `${jobId}.xlsx`);
+
+/** The edited client copy, when the team uploaded one. */
+async function editedClientFile(job: { id: string; editedFileName: string | null }) {
+  if (!job.editedFileName) return null;
+  const buffer = await readFile(editedPath(job.id)).catch(() => null);
+  return buffer ? { buffer, filename: job.editedFileName } : null;
+}
 
 async function findOwnedJob(req: Request, res: Response) {
   const job = await prisma.baselineJob.findUnique({ where: { id: req.params.id as string } });
@@ -121,7 +136,9 @@ export function createBaselineJobsRouter(callDataForSeo: CallDataForSeoFn, sendE
       return;
     }
     try {
-      const built = await buildBaselineForJob(job.id, req.query.copy === "client" ? "client" : "internal");
+      // The client copy = the team's edited one when there is one (what the email sends).
+      const edited = req.query.copy === "client" ? await editedClientFile(job) : null;
+      const built = edited ?? (await buildBaselineForJob(job.id, req.query.copy === "client" ? "client" : "internal"));
       res.setHeader("Content-Type", XLSX);
       res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(built.filename)}`);
       res.send(built.buffer);
@@ -164,7 +181,7 @@ export function createBaselineJobsRouter(callDataForSeo: CallDataForSeoFn, sendE
     try {
       await sendBaselineJob(
         job.id,
-        { to, cc, clickupTask: typeof clickupTask === "string" ? clickupTask : "", subject, body, sentBy: req.authUser!.email },
+        { to, cc, clickupTask: typeof clickupTask === "string" ? clickupTask : "", subject, body, sentBy: req.authUser!.email, clientFile: await editedClientFile(job) },
         sendEmail,
       );
     } catch (err) {
@@ -180,6 +197,66 @@ export function createBaselineJobsRouter(callDataForSeo: CallDataForSeoFn, sendE
     }
     const [view] = await viewBaselineJobs({ workspaceId: job.workspaceId, id: job.id }, 1);
     res.json(view);
+  });
+
+  // The team's edited client copy (2026-11-27): check the dashboard's, change it in Excel if needed, upload it
+  // back -- like the verified rankings. Only before the email goes out.
+  router.post("/:id/client-file", upload.single("file"), async (req, res) => {
+    const job = await findOwnedJob(req, res);
+    if (!job) return;
+    if (job.sentAt || job.sendingAt) {
+      res.status(409).json({ error: "This Baseline Report is already sent -- it can't be changed now." });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: "Choose the edited Excel file to upload." });
+      return;
+    }
+    if (!req.file.originalname.toLowerCase().endsWith(".xlsx") || req.file.buffer.subarray(0, 2).toString() !== "PK") {
+      res.status(422).json({ error: "Upload the edited Excel (.xlsx) file." });
+      return;
+    }
+    try {
+      await previewWorkbook(req.file.buffer); // it must open
+    } catch (err) {
+      if (err instanceof PreviewFileError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+    await mkdir(path.dirname(editedPath(job.id)), { recursive: true });
+    await writeFile(editedPath(job.id), req.file.buffer);
+    await prisma.baselineJob.update({
+      where: { id: job.id },
+      data: { editedFileName: path.basename(req.file.originalname), editedBy: req.authUser!.email, editedAt: new Date() },
+    });
+    const [view] = await viewBaselineJobs({ workspaceId: job.workspaceId, id: job.id }, 1);
+    res.json(view);
+  });
+
+  router.delete("/:id/client-file", async (req, res) => {
+    const job = await findOwnedJob(req, res);
+    if (!job) return;
+    if (job.sentAt || job.sendingAt) {
+      res.status(409).json({ error: "This Baseline Report is already sent -- it can't be changed now." });
+      return;
+    }
+    await rm(editedPath(job.id), { force: true });
+    await prisma.baselineJob.update({ where: { id: job.id }, data: { editedFileName: null, editedBy: null, editedAt: null } });
+    const [view] = await viewBaselineJobs({ workspaceId: job.workspaceId, id: job.id }, 1);
+    res.json(view);
+  });
+
+  router.get("/:id/client-file/preview", async (req, res) => {
+    const job = await findOwnedJob(req, res);
+    if (!job) return;
+    const edited = await editedClientFile(job);
+    if (!edited) {
+      res.status(404).json({ error: "No edited copy is uploaded." });
+      return;
+    }
+    res.json(await previewWorkbook(edited.buffer));
   });
 
   router.post("/:id/volumes", expensiveActionRateLimit, async (req, res) => {

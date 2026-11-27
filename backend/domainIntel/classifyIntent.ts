@@ -26,6 +26,8 @@ export interface IntentResult {
   byToolLabels: number;
   /** Keywords neither patterns, AI nor tool labels could label -- given the fallback. */
   unresolved: number;
+  /** keywordKey()s of those unresolved keywords (e.g. Gemini was down). */
+  unresolvedKeys: Set<string>;
 }
 
 const FALLBACK: Intent = "Informational";
@@ -148,6 +150,7 @@ export async function classifyIntents(
 
   let byToolLabels = 0;
   let unresolved = 0;
+  const unresolvedKeys = new Set<string>();
   for (const keyword of ambiguous) {
     const key = keywordKey(keyword);
     if (intents.has(key)) continue;
@@ -158,9 +161,10 @@ export async function classifyIntents(
     } else {
       intents.set(key, FALLBACK);
       unresolved++;
+      unresolvedKeys.add(key);
     }
   }
-  return { intents, byPattern, byAi, byToolLabels, unresolved };
+  return { intents, byPattern, byAi, byToolLabels, unresolved, unresolvedKeys };
 }
 
 /**

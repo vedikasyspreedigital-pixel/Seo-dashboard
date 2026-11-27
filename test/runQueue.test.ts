@@ -141,3 +141,32 @@ test("only a waiting run can be made urgent; a queued run can be cancelled", asy
     await cleanup([client.id]);
   }
 });
+
+// Found on the local walkthrough (2026-11-27): "Rerun failed" started straight away, so it checked at the same
+// time as another run (two Serper runs at once). It now waits in the queue like any start.
+test("Rerun failed while another run is checking waits in the queue, then runs after it", async () => {
+  const app = createApp(slowCall, "mock");
+  const api = authedRequest(app, seo.cookieHeader);
+  const client = await makeClient(seo.workspace.id, "rerun");
+  try {
+    const busy = await makeRun(client.id, "busy");
+    const failed = await makeRun(client.id, "failed");
+    await prisma.rankingRun.update({ where: { id: failed.id }, data: { status: "COMPLETED_WITH_ERRORS", startedAt: new Date(Date.now() - 60_000), completedAt: new Date() } });
+    await prisma.rankingRow.updateMany({ where: { runId: failed.id, keyword: "kw one" }, data: { status: "COMPLETED", rankDisplay: "4", rankValue: 4 } });
+    await prisma.rankingRow.updateMany({ where: { runId: failed.id, keyword: "kw two" }, data: { status: "FAILED", retryCount: 3 } });
+
+    assert.equal((await api.post(`/api/runs/${busy.id}/start`)).body.status, "PROCESSING");
+    const rerun = await api.post(`/api/runs/${failed.id}/rerun-failed`);
+    assert.equal(rerun.status, 200, JSON.stringify(rerun.body));
+    assert.equal(rerun.body.status, "QUEUED", "waits for the run that's checking");
+    assert.equal(rerun.body.resetCount, 1);
+    assert.ok(rerun.body.queuePosition >= 1);
+
+    await waitDone([busy.id, failed.id]);
+    const [b, f] = await Promise.all([prisma.rankingRun.findUniqueOrThrow({ where: { id: busy.id } }), prisma.rankingRun.findUniqueOrThrow({ where: { id: failed.id } })]);
+    assert.ok(f.startedAt! >= b.completedAt!, "the rerun started only after the other run finished");
+    assert.equal(f.status, "COMPLETED");
+  } finally {
+    await cleanup([client.id]);
+  }
+});

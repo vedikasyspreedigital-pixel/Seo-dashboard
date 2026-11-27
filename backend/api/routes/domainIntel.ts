@@ -1,13 +1,14 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import path from "node:path";
-import { rm, unlink } from "node:fs/promises";
+import { readFile, rm, unlink } from "node:fs/promises";
 import { prisma } from "../../db/client.js";
 import { requireAuth } from "../../auth/requireAuth.js";
 import { findOwnedClientOrRespond } from "../../auth/ownership.js";
 import { expensiveActionRateLimit } from "../rateLimit.js";
 import { KeywordExportError, type KeywordSource } from "../../domainIntel/readKeywordExport.js";
-import { LOCATIONS, REPORT_MODES, SOURCES, createDomainReport, domainReportDir, isPostingNow, postDomainReport, type ReportFile, type ReportMode } from "../../domainIntel/createDomainReport.js";
+import { LOCATIONS, REPORT_MODES, SOURCES, ReplaceFileError, createDomainReport, domainReportDir, isPostingNow, postDomainReport, replaceReportFile, type ReportFile, type ReportMode } from "../../domainIntel/createDomainReport.js";
+import { PreviewFileError, previewWorkbook } from "../../reporting/xlsxPreview.js";
 import type { PostCommentFn } from "../../domainIntel/clickupCommentPoster.js";
 import type { ClassifyWithAiFn } from "../../domainIntel/classifyIntent.js";
 import { bareDomain, type FetchExportFn } from "../../domainIntel/fetchers/flikoverAhrefs.js";
@@ -63,6 +64,8 @@ export interface DomainIntelRouterDeps {
 }
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 3 } });
+/** One changed file at a time (a report file the team edited -- the Semrush PDF can be big). */
+const fileUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024, files: 1 } });
 
 const isSource = (s: unknown): s is KeywordSource => typeof s === "string" && (SOURCES as string[]).includes(s);
 
@@ -72,7 +75,10 @@ type DomainReportRow = Awaited<ReturnType<typeof prisma.domainReport.findFirstOr
 /** Never sends server file paths to the browser. */
 function toResponse(report: DomainReportRow) {
   const { files, ...rest } = report;
-  return { ...rest, files: (files as unknown as ReportFile[]).map((f) => ({ name: f.name })) };
+  return {
+    ...rest,
+    files: (files as unknown as (ReportFile & { editedBy?: string | null; editedAt?: string })[]).map((f) => ({ name: f.name, editedBy: f.editedBy ?? null, editedAt: f.editedAt ?? null })),
+  };
 }
 
 const HISTORY_LIMIT = 100;
@@ -488,8 +494,7 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
           deps.gapAdvisor,
           deps.plannerIdeas,
         );
-        // Posting runs in the background (a real ClickUp post takes ~30-60s); the page polls the report's status.
-        if (report.status === "GENERATED") void postDomainReport(report.id, deps.postComment);
+        // Not posted yet (2026-11-27): READY until the team has checked the files and presses Post to ClickUp.
         res.status(201).json(toResponse(report));
       } catch (err) {
         if (err instanceof KeywordExportError) {
@@ -566,7 +571,58 @@ export function createDomainIntelRouter(deps: DomainIntelRouterDeps) {
       res.status(404).json({ error: "File not found" });
       return;
     }
+    // ?inline=1: a PDF opens in the browser to look at (Preview) instead of downloading.
+    if (req.query.inline === "1" && file.name.toLowerCase().endsWith(".pdf")) {
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+      res.sendFile(path.resolve(file.path));
+      return;
+    }
     res.download(path.resolve(file.path), file.name);
+  });
+
+  // Preview (2026-11-27): an Excel file's sheets as tables, to check it on screen before it's posted.
+  router.get("/reports/:id/files/:index/preview", async (req, res) => {
+    const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
+    if (!report) return;
+    const file = (report.files as unknown as ReportFile[])[Number(req.params.index)];
+    if (!file) {
+      res.status(404).json({ error: "File not found" });
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+      res.status(415).json({ error: "Only Excel files are previewed here -- a PDF opens in the browser." });
+      return;
+    }
+    try {
+      res.json(await previewWorkbook(await readFile(path.resolve(file.path))));
+    } catch (err) {
+      if (err instanceof PreviewFileError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // The team's changed copy of a file (2026-11-27), before it's posted -- it replaces the file under the same name.
+  router.post("/reports/:id/files/:index", fileUpload.single("file"), async (req, res) => {
+    const report = await findOwnedReportOrRespond(req, res, req.params.id as string);
+    if (!report) return;
+    if (!req.file) {
+      res.status(400).json({ error: "Choose the file to upload." });
+      return;
+    }
+    try {
+      const updated = await replaceReportFile(report.id, Number(req.params.index), { buffer: req.file.buffer, originalName: req.file.originalname }, req.authUser!.email);
+      res.json(toResponse(updated));
+    } catch (err) {
+      if (err instanceof ReplaceFileError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   // Delete a report (2026-11-17, the history got full): its row and its files, for good. The page asks first.

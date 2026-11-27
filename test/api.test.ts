@@ -524,12 +524,12 @@ test("POST /api/runs/:id/rerun-failed re-checks ONLY the failed keywords, in the
     const rerun = await authedApp(app).post(`/api/runs/${runId}/rerun-failed`);
     assert.equal(rerun.status, 200);
     assert.equal(rerun.body.resetCount, 1);
-    assert.equal(rerun.body.status, "PROCESSING");
+    assert.ok(["QUEUED", "PROCESSING", "COMPLETED"].includes(rerun.body.status), `goes through the run queue (2026-11-27): ${rerun.body.status}`);
 
     let progress;
     for (let i = 0; i < 50; i++) {
       progress = (await authedApp(app).get(`/api/runs/${runId}/progress`)).body;
-      if (progress.runStatus !== "PROCESSING") break;
+      if (progress.runStatus !== "PROCESSING" && progress.runStatus !== "QUEUED") break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     assert.equal(progress.runStatus, "COMPLETED");

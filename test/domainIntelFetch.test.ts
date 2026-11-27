@@ -166,6 +166,9 @@ test("Fetch from Ahrefs, upload Semrush meanwhile, then Combine and post: the fe
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.deepEqual(res.body.sources, ["semrush", "ahrefs"]);
     assert.deepEqual(res.body.summary.sources, { semrush: { keywords: 2, duplicatesRemoved: 0 }, ahrefs: { keywords: 3, duplicatesRemoved: 0 } });
+    assert.equal(res.body.status, "READY", "made, not posted -- the team checks the files first (2026-11-27)");
+    assert.equal(t.posted.length, 0);
+    assert.equal((await t.api.post(`/api/domain-intel/reports/${res.body.id}/post`)).status, 202);
     assert.equal((await t.waitPosted(res.body.id)).status, "POSTED");
     assert.equal(t.posted.length, 1);
     assert.equal(t.posted[0].taskId, "86dfetch1");

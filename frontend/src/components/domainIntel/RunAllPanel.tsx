@@ -122,6 +122,11 @@ export function RunAllPanel({
 
       {bundle && bundle.competitors.length > 0 && <p className="mt-3 text-xs text-[var(--color-ink-faint)]">Competitors: {bundle.competitors.join(', ')}</p>}
       {bundle?.state === 'done' && <p className="mt-3 text-xs text-emerald-300">All reports are ready — the files are in the history below.</p>}
+      {canPostReady && allReady && bundle.parts.post.state === 'waiting' && (
+        <p className="mt-3 text-xs text-sky-300">
+          All reports are ready — nothing is posted yet. Check the files in the history below (Preview, or upload a changed copy), then post them.
+        </p>
+      )}
       {canPostReady && (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button variant={allReady ? 'primary' : 'secondary'} className="!py-1.5 text-xs" disabled={posting} onClick={onPostReady}>

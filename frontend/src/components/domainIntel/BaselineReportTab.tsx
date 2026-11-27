@@ -14,6 +14,9 @@ import {
   downloadBaselineJob,
   getBaselineJobPreview,
   getBaselineJobs,
+  previewBaselineClientFile,
+  removeBaselineClientFile,
+  uploadBaselineClientFile,
   retryBaselineVolumes,
   sendBaselineJobEmail,
   startBaselineJob,
@@ -22,6 +25,7 @@ import {
 } from '../../api/client';
 import type { BaselineClientPreview as PreviewData } from '../../api/types';
 import { BaselineClientPreview } from '../report/BaselineClientPreview';
+import { WorkbookPreviewModal } from '../ui/WorkbookPreviewModal';
 
 /**
  * "Baseline Report" tab on Domain Intelligence (2026-11-13): a new client's first report, made once. The team types
@@ -200,13 +204,21 @@ function stateBadge(job: BaselineJob) {
 }
 
 function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: BaselineJob) => void }) {
-  const [busy, setBusy] = useState<'download' | 'client' | 'retry' | 'planner' | null>(null);
+  const [busy, setBusy] = useState<'download' | 'client' | 'retry' | 'planner' | 'edited' | null>(null);
+  // The team's edited client copy (2026-11-27): checked, changed in Excel, uploaded back -- the email sends it.
+  const [editedPreviewOpen, setEditedPreviewOpen] = useState(false);
+  const editedInput = useRef<HTMLInputElement>(null);
+  const canEdit = job.email.state === 'not_sent';
   const [emailing, setEmailing] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   async function openPreview() {
+    if (job.editedFile) {
+      setEditedPreviewOpen(true);
+      return;
+    }
     setPreviewOpen(true);
     setPreview(null);
     setPreviewError(null);
@@ -221,7 +233,7 @@ function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: Baseline
   const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
   const finished = job.state === 'ready' || job.state === 'volumes';
 
-  async function act(kind: 'download' | 'client' | 'retry' | 'planner', fn: () => Promise<void>) {
+  async function act(kind: 'download' | 'client' | 'retry' | 'planner' | 'edited', fn: () => Promise<void>) {
     setBusy(kind);
     setError(null);
     try {
@@ -312,16 +324,39 @@ function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: Baseline
             disabled={busy !== null || job.state === 'volumes'}
             onClick={() =>
               void act('client', async () =>
-                saveBlob(await downloadBaselineJob(job.id, 'client'), `${job.clientName.replace(/[\\/:*?"<>|]/g, '').trim()} - Baseline Report.xlsx`),
+                saveBlob(
+                  await downloadBaselineJob(job.id, 'client'),
+                  job.editedFile?.name ?? `${job.clientName.replace(/[\\/:*?"<>|]/g, '').trim()} - Baseline Report.xlsx`,
+                ),
               )
             }
           >
             {busy === 'client' && <Spinner />}
-            Client copy
+            {job.editedFile ? 'Client copy (edited)' : 'Client copy'}
           </Button>
           <Button variant="secondary" className="!py-1.5 text-xs" disabled={busy !== null || job.state === 'volumes'} onClick={() => void openPreview()}>
             Preview client copy
           </Button>
+          {canEdit && job.state === 'ready' && (
+            <>
+              <input
+                ref={editedInput}
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                aria-label="Upload the edited client copy"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) void act('edited', async () => onChange(await uploadBaselineClientFile(job.id, file)));
+                }}
+              />
+              <Button variant="secondary" className="!py-1.5 text-xs" disabled={busy !== null} onClick={() => editedInput.current?.click()}>
+                {busy === 'edited' && <Spinner />}
+                {job.editedFile ? 'Upload another edited copy' : 'Upload edited copy'}
+              </Button>
+            </>
+          )}
           {job.state === 'ready' && job.email.state === 'not_sent' && !emailing && (
             <Button variant="secondary" className="!py-1.5 text-xs" disabled={busy !== null} onClick={() => setEmailing(true)}>
               Email to client
@@ -340,8 +375,32 @@ function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: Baseline
           )}
         </div>
       )}
+      {job.editedFile && (
+        <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-emerald-300">
+          <CheckCircleIcon className="h-4 w-4" />
+          {job.email.state === 'sent' ? 'Sent your edited copy:' : 'The email will send your edited copy:'}
+          <span className="font-medium text-[var(--color-ink)]">{job.editedFile.name}</span>
+          <span className="text-[var(--color-ink-faint)]">
+            ({job.editedFile.by ? `${job.editedFile.by.split('@')[0]}, ` : ''}
+            {new Date(job.editedFile.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })})
+          </span>
+          {canEdit && (
+            <button
+              type="button"
+              className="text-[var(--color-ink-muted)] underline hover:text-[var(--color-ink)]"
+              disabled={busy !== null}
+              onClick={() => void act('edited', async () => onChange(await removeBaselineClientFile(job.id)))}
+            >
+              Use the dashboard’s copy instead
+            </button>
+          )}
+        </p>
+      )}
       {job.state === 'ready' && job.email.state === 'not_sent' && !emailing && (
-        <p className="mt-2 text-[11px] text-[var(--color-ink-faint)]">Before sending: download it and look over the ranks, volumes and intent.</p>
+        <p className="mt-2 text-[11px] text-[var(--color-ink-faint)]">
+          Before sending: preview or download the client copy and check the ranks, volumes and intent. Changed something in Excel? Upload the edited copy —
+          that’s what the email sends.
+        </p>
       )}
       {emailing && job.email.state === 'not_sent' && (
         <EmailForm
@@ -371,6 +430,11 @@ function JobCard({ job, onChange }: { job: BaselineJob; onChange: (job: Baseline
         <p className="mt-2 text-xs text-amber-300">The email didn't go out last time: {job.email.error}</p>
       )}
       <InlineError message={error} className="mt-2" />
+      <WorkbookPreviewModal
+        title={editedPreviewOpen && job.editedFile ? `${job.editedFile.name} (your edited copy)` : null}
+        load={() => previewBaselineClientFile(job.id)}
+        onClose={() => setEditedPreviewOpen(false)}
+      />
       <BaselineClientPreview
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}

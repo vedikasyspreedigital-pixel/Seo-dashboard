@@ -21,7 +21,8 @@ export const loginRateLimit = rateLimit({
 // back to back) while still bounding a runaway script or malicious client.
 export const expensiveActionRateLimit = rateLimit({
   windowMs: 60 * 1000,
-  limit: 20,
+  // Tests raise it (test/helpers/tempStorage.mjs): one test file presses many buttons within a minute.
+  limit: Number(process.env.EXPENSIVE_ACTION_RATE_LIMIT) || 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please slow down and try again shortly." },

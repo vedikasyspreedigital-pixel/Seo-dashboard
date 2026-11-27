@@ -25,9 +25,9 @@ import type { PostCommentFn } from "./clickupCommentPoster.js";
 //   2. Keyword Analysis + Gap & Competitor files, while the agent goes on to
 //      3. the Semrush Site Audit and 4. the WooRank audit
 //   5. the AI SEO Audit (needs at least one of 3/4)
-//   then ONE ClickUp comment with every file. A part that fails doesn't stop
-// the others; posting is automatic only when all 5 are there -- otherwise the
-// report waits with whatever is ready, and the page offers to post it.
+//   then ONE ClickUp comment with every file -- posted only when the team presses Post, after checking (and if
+// needed replacing) the files (2026-11-27). A part that fails doesn't stop the others; the report waits with
+// whatever is ready, and the page offers to post it.
 // Runs are kept in memory and saved to disk on every change, so a finished one
 // survives a restart/deploy (a run cut off mid-way is shown as stopped).
 //
@@ -536,12 +536,12 @@ async function finish(job: BundleJob, input: BundleInput, deps: BundleDeps, repo
     // Not "waiting to post" in the history (the page would keep checking): it's held until someone posts it.
     await prisma.domainReport.update({ where: { id: reportId }, data: { status: "NOT_POSTED", error: "Held back: some of the picked reports failed -- retry them, then post from Run all 5 reports." } });
   } else {
-    setPart(job, "post", { state: "running", step: "Posting one comment with every file" });
-    await postDomainReport(reportId, deps.postComment);
-    const report = await prisma.domainReport.findUnique({ where: { id: reportId } });
-    setPart(job, "post", report?.status === "POSTED" ? { state: "done", step: "Posted to ClickUp" } : { state: "failed", error: report?.error ?? "Posting failed." });
+    // Not posted by itself any more (2026-11-27): the team checks the files first -- preview, or upload a changed
+    // one -- then presses "Post the files to ClickUp" (postBundle).
+    setPart(job, "post", { state: "waiting", step: "Ready -- check the files in the history below, then post them" });
   }
-  job.state = complete && job.parts.post.state !== "failed" ? "done" : "attention";
+  // Nothing to post (no ClickUp task) and everything made = done; otherwise it waits for the team.
+  job.state = !input.client.domainReportTaskId && complete ? "done" : "attention";
   touch(job);
 }
 

@@ -132,15 +132,20 @@ export async function createDomainReport(
         const k = keywordKey(r.keyword);
         if (!rankedAt.has(k) || r.position < rankedAt.get(k)!) rankedAt.set(k, r.position);
       }
+    // An idea the intent check couldn't decide (the AI was down) stays in, marked "Unclear" -- Google's ideas for
+    // a site are mostly its services, and an empty section looked like Keyword Planner had nothing.
     const rows = plannerCandidates
-      .map((i) => ({
-        keyword: i.keyword,
-        volume: i.avgMonthlySearches,
-        position: rankedAt.get(keywordKey(i.keyword)) ?? null,
-        competition: i.competition,
-        intent: intent.intents.get(keywordKey(i.keyword)) ?? "Informational",
-      }))
-      .filter((r) => SERVICE_INTENTS.includes(r.intent))
+      .map((i) => {
+        const key = keywordKey(i.keyword);
+        return {
+          keyword: i.keyword,
+          volume: i.avgMonthlySearches,
+          position: rankedAt.get(key) ?? null,
+          competition: i.competition,
+          intent: intent.unresolvedKeys.has(key) ? "Unclear" : (intent.intents.get(key) ?? "Informational"),
+        };
+      })
+      .filter((r) => r.intent === "Unclear" || SERVICE_INTENTS.includes(r.intent))
       .slice(0, PLANNER_MAX_ROWS);
     blocks.push({ source: "planner", rows });
   }
@@ -241,8 +246,9 @@ export async function createDomainReport(
         intentByAi: intent.byAi,
         intentUnresolved: intent.unresolved,
       },
-      // No domain task configured: kept, downloadable, just not posted.
-      status: input.domainReportTaskId ? "GENERATED" : "NOT_POSTED",
+      // READY (2026-11-27): nothing goes to ClickUp by itself any more -- the team previews the files, uploads a
+      // changed one if needed, then presses "Post to ClickUp". No domain task: kept, downloadable, just not posted.
+      status: input.domainReportTaskId ? "READY" : "NOT_POSTED",
       error: input.domainReportTaskId ? null : "No ClickUp task was given, so the files are for download only.",
     },
   });
@@ -278,12 +284,37 @@ export async function removeExpiredReportFiles(now = new Date(), onlyClientId?: 
 /** A client name or file name made safe as one file name: no path separators, reserved or control characters. */
 export const safeFileName = (name: string) => name.replace(/[\\/:*?"<>|\x00-\x1f]/g, "").replace(/\s+/g, " ").trim();
 
+export class ReplaceFileError extends Error {}
+
+/**
+ * The team's changed copy of one of a report's files (2026-11-27, like uploading the verified rankings): it
+ * replaces the file under the same name, so the ClickUp comment carries the checked version. Only before the
+ * report is posted, and only the same kind of file (.xlsx for .xlsx, .pdf for .pdf).
+ */
+export async function replaceReportFile(reportId: string, index: number, upload: { buffer: Buffer; originalName: string }, by: string | null) {
+  const report = await prisma.domainReport.findUniqueOrThrow({ where: { id: reportId } });
+  if (report.status === "POSTED" || report.status === "POSTING" || isPostingNow(reportId)) throw new ReplaceFileError("This report is already posted to ClickUp -- it can't be changed now.");
+  if (report.status === "GENERATING") throw new ReplaceFileError("This report is still being made -- wait for it to finish.");
+  const files = [...(report.files as unknown as (ReportFile & { editedBy?: string | null; editedAt?: string })[])];
+  const file = files[index];
+  if (!file) throw new ReplaceFileError("File not found.");
+  const ext = (n: string) => path.extname(n).toLowerCase();
+  if (ext(upload.originalName) !== ext(file.name)) {
+    throw new ReplaceFileError(`Upload a ${ext(file.name) || "file of the same type"} file -- it replaces "${file.name}".`);
+  }
+  if (ext(file.name) === ".xlsx" && upload.buffer.subarray(0, 2).toString() !== "PK") throw new ReplaceFileError("That doesn't look like an Excel (.xlsx) file.");
+  if (ext(file.name) === ".pdf" && upload.buffer.subarray(0, 4).toString() !== "%PDF") throw new ReplaceFileError("That doesn't look like a PDF file.");
+  await writeFile(file.path, upload.buffer);
+  files[index] = { ...file, editedBy: by, editedAt: new Date().toISOString() };
+  return prisma.domainReport.update({ where: { id: reportId }, data: { files: files as object[] } });
+}
+
 /** Adds more files (e.g. the audits of a "Run all 5 reports") to a report, so one comment carries them all. */
 export async function attachFilesToReport(reportId: string, extra: { name: string; buffer: Buffer }[]) {
   const report = await prisma.domainReport.findUniqueOrThrow({ where: { id: reportId } });
   const dir = domainReportDir(reportId);
   await mkdir(dir, { recursive: true });
-  const files = [...(report.files as unknown as ReportFile[])];
+  const files = [...(report.files as unknown as (ReportFile & Record<string, unknown>)[])];
   for (const f of extra) {
     // The stored name is cleaned too: the comment poster saves each file under it (a "/" in a client name broke every post).
     const name = safeFileName(f.name) || "file";
@@ -291,7 +322,7 @@ export async function attachFilesToReport(reportId: string, extra: { name: strin
     await writeFile(filePath, f.buffer);
     files.push({ name, path: filePath });
   }
-  return prisma.domainReport.update({ where: { id: reportId }, data: { files: files.map((f) => ({ name: f.name, path: f.path })) } });
+  return prisma.domainReport.update({ where: { id: reportId }, data: { files: files as object[] } });
 }
 
 /**
@@ -316,7 +347,7 @@ export async function createAuditsOnlyReport(input: { client: { id: string }; we
       summary: { auditsOnly: true },
       files: [],
       createdBy: input.createdBy,
-      status: input.domainReportTaskId ? "GENERATED" : "NOT_POSTED",
+      status: input.domainReportTaskId ? "READY" : "NOT_POSTED",
       error: input.domainReportTaskId ? null : "No ClickUp task was given, so the files are for download only.",
     },
   });
@@ -365,7 +396,7 @@ async function postDomainReportOnce(reportId: string, postComment: PostCommentFn
 
   // Claimed atomically: a report already POSTED (or still GENERATING) is never posted again.
   const claimed = await prisma.domainReport.updateMany({
-    where: { id: reportId, status: { in: ["GENERATED", "POST_FAILED", "NOT_POSTED", "POSTING"] } },
+    where: { id: reportId, status: { in: ["READY", "GENERATED", "POST_FAILED", "NOT_POSTED", "POSTING"] } },
     data: { status: "POSTING", clickupTaskId: taskId, error: null },
   });
   if (claimed.count === 0) return;

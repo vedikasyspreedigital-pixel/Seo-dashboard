@@ -469,7 +469,7 @@ test("cancelRun: UPLOADED or PROCESSING -> CANCELLED, terminal after that", asyn
   }
 });
 
-test("rerunFailedRows: reopens the run and resets only FAILED rows; COMPLETED rows untouched", async () => {
+test("rerunFailedRows: puts the run back in the run queue and resets only FAILED rows; COMPLETED rows untouched", async () => {
   const client = await makeClient("rerun-failed");
   try {
     const run = await makeRun(client.id, { status: "COMPLETED_WITH_ERRORS", totalRows: 3, completedAt: new Date() });
@@ -479,7 +479,8 @@ test("rerunFailedRows: reopens the run and resets only FAILED rows; COMPLETED ro
 
     const { run: reopened, resetCount } = await rerunFailedRows(run.id);
     assert.equal(resetCount, 1);
-    assert.equal(reopened.status, "PROCESSING");
+    assert.equal(reopened.status, "QUEUED", "waits its turn like any start (2026-11-27)");
+    assert.ok(reopened.queuedAt);
     assert.equal(reopened.completedAt, null);
 
     const after = await prisma.rankingRow.findUniqueOrThrow({ where: { id: failed.id } });
